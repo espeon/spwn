@@ -1,0 +1,22 @@
+[package]
+name = "vm-manager"
+version = "0.1.0"
+edition = "2024"
+
+[[bin]]
+name = "spwn-vm-manager"
+path = "src/main.rs"
+
+[dependencies]
+common = { path = "../common" }
+networking = { path = "../networking" }
+tokio = { version = "1", features = ["full"] }
+fctools = { version = "0.7.0-alpha.1", features = [
+    "tokio-runtime",
+    "nix-syscall-backend",
+    "direct-process-spawner",
+    "unrestricted-vmm-executor",
+    "vm",
+] }
+anyhow = "1"
+thiserror = "2"
