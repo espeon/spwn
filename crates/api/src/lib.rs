@@ -24,6 +24,8 @@ pub trait VmOps: Send + Sync {
 #[derive(Debug, Deserialize)]
 pub struct CreateVmRequest {
     pub name: String,
+    #[serde(default = "default_image")]
+    pub image: String,
     #[serde(default = "default_vcores")]
     pub vcores: i32,
     #[serde(default = "default_memory")]
@@ -32,6 +34,7 @@ pub struct CreateVmRequest {
     pub exposed_port: i32,
 }
 
+fn default_image() -> String { "ubuntu".into() }
 fn default_vcores() -> i32 { 2 }
 fn default_memory() -> i32 { 512 }
 fn default_port() -> i32 { 8080 }
@@ -46,6 +49,8 @@ struct VmResponse {
     memory_mb: i32,
     ip_address: String,
     exposed_port: i32,
+    rootfs_path: String,
+    overlay_path: Option<String>,
 }
 
 impl From<db::VmRow> for VmResponse {
@@ -59,6 +64,8 @@ impl From<db::VmRow> for VmResponse {
             memory_mb: v.memory_mb,
             ip_address: v.ip_address,
             exposed_port: v.exposed_port,
+            rootfs_path: v.rootfs_path,
+            overlay_path: v.overlay_path,
         }
     }
 }

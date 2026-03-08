@@ -1,0 +1,1 @@
+ALTER TABLE vms ADD COLUMN IF NOT EXISTS real_init TEXT NOT NULL DEFAULT '/sbin/init';

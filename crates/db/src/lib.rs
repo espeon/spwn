@@ -24,6 +24,8 @@ pub struct VmRow {
     pub memory_mb: i32,
     pub kernel_path: String,
     pub rootfs_path: String,
+    pub overlay_path: Option<String>,
+    pub real_init: String,
     pub ip_address: String,
     pub exposed_port: i32,
     pub tap_device: Option<String>,
@@ -42,6 +44,8 @@ pub struct NewVm {
     pub memory_mb: i32,
     pub kernel_path: String,
     pub rootfs_path: String,
+    pub overlay_path: String,
+    pub real_init: String,
     pub ip_address: String,
     pub exposed_port: i32,
 }
@@ -59,8 +63,8 @@ pub async fn create_vm(pool: &PgPool, vm: &NewVm) -> Result<()> {
     let now = unix_now();
     sqlx::query(
         "INSERT INTO vms (id, account_id, name, status, subdomain, vcores, memory_mb,
-         kernel_path, rootfs_path, ip_address, exposed_port, created_at)
-         VALUES ($1,$2,$3,'stopped',$4,$5,$6,$7,$8,$9,$10,$11)",
+         kernel_path, rootfs_path, overlay_path, real_init, ip_address, exposed_port, created_at)
+         VALUES ($1,$2,$3,'stopped',$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)",
     )
     .bind(&vm.id)
     .bind(&vm.account_id)
@@ -70,6 +74,8 @@ pub async fn create_vm(pool: &PgPool, vm: &NewVm) -> Result<()> {
     .bind(vm.memory_mb)
     .bind(&vm.kernel_path)
     .bind(&vm.rootfs_path)
+    .bind(&vm.overlay_path)
+    .bind(&vm.real_init)
     .bind(&vm.ip_address)
     .bind(vm.exposed_port)
     .bind(now)
@@ -81,7 +87,7 @@ pub async fn create_vm(pool: &PgPool, vm: &NewVm) -> Result<()> {
 pub async fn get_vm(pool: &PgPool, id: &str) -> Result<Option<VmRow>> {
     let row = sqlx::query(
         "SELECT id, account_id, name, status, subdomain, vcores, memory_mb,
-         kernel_path, rootfs_path, ip_address, exposed_port, tap_device, pid,
+         kernel_path, rootfs_path, overlay_path, real_init, ip_address, exposed_port, tap_device, pid,
          socket_path, created_at, last_started_at FROM vms WHERE id = $1",
     )
     .bind(id)
@@ -93,7 +99,7 @@ pub async fn get_vm(pool: &PgPool, id: &str) -> Result<Option<VmRow>> {
 pub async fn list_vms(pool: &PgPool, account_id: &str) -> Result<Vec<VmRow>> {
     let rows = sqlx::query(
         "SELECT id, account_id, name, status, subdomain, vcores, memory_mb,
-         kernel_path, rootfs_path, ip_address, exposed_port, tap_device, pid,
+         kernel_path, rootfs_path, overlay_path, real_init, ip_address, exposed_port, tap_device, pid,
          socket_path, created_at, last_started_at FROM vms WHERE account_id = $1
          ORDER BY created_at DESC",
     )
@@ -106,7 +112,7 @@ pub async fn list_vms(pool: &PgPool, account_id: &str) -> Result<Vec<VmRow>> {
 pub async fn get_vms_by_status(pool: &PgPool, status: &str) -> Result<Vec<VmRow>> {
     let rows = sqlx::query(
         "SELECT id, account_id, name, status, subdomain, vcores, memory_mb,
-         kernel_path, rootfs_path, ip_address, exposed_port, tap_device, pid,
+         kernel_path, rootfs_path, overlay_path, real_init, ip_address, exposed_port, tap_device, pid,
          socket_path, created_at, last_started_at FROM vms WHERE status = $1",
     )
     .bind(status)
@@ -118,7 +124,7 @@ pub async fn get_vms_by_status(pool: &PgPool, status: &str) -> Result<Vec<VmRow>
 pub async fn get_all_vms(pool: &PgPool) -> Result<Vec<VmRow>> {
     let rows = sqlx::query(
         "SELECT id, account_id, name, status, subdomain, vcores, memory_mb,
-         kernel_path, rootfs_path, ip_address, exposed_port, tap_device, pid,
+         kernel_path, rootfs_path, overlay_path, real_init, ip_address, exposed_port, tap_device, pid,
          socket_path, created_at, last_started_at FROM vms",
     )
     .fetch_all(pool)
@@ -200,6 +206,8 @@ fn row_to_vm(r: sqlx::postgres::PgRow) -> VmRow {
         memory_mb: r.get("memory_mb"),
         kernel_path: r.get("kernel_path"),
         rootfs_path: r.get("rootfs_path"),
+        overlay_path: r.get("overlay_path"),
+        real_init: r.get("real_init"),
         ip_address: r.get("ip_address"),
         exposed_port: r.get("exposed_port"),
         tap_device: r.get("tap_device"),

@@ -1,0 +1,195 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# spwn — dev tooling for the spwn VM platform
+#
+# usage: scripts/spwn <command> [args]
+#
+# commands:
+#   download        download kernel, ubuntu rootfs, and ssh key to /tmp
+#   build-rootfs    convert ext4 rootfs → squashfs with overlay-init baked in
+#   setup           download + build-rootfs (full dev setup)
+#   images          list available squashfs images in IMAGES_DIR
+#   help            show this message
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# firecracker CI artifact versions
+FC_VERSION="v1.9"
+FC_ARCH="x86_64"
+FC_BASE="https://s3.amazonaws.com/spec.ccfc.min/firecracker-ci/${FC_VERSION}/${FC_ARCH}"
+
+KERNEL_URL="${FC_BASE}/vmlinux-6.1.102"
+ROOTFS_URL="${FC_BASE}/ubuntu-22.04.ext4"
+SSH_KEY_URL="${FC_BASE}/ubuntu-22.04.id_rsa"
+
+KERNEL_PATH="${KERNEL_PATH:-/tmp/vmlinux}"
+ROOTFS_EXT4="${ROOTFS_EXT4:-/tmp/rootfs.ext4}"
+SSH_KEY_PATH="${SSH_KEY_PATH:-/tmp/ubuntu.id_rsa}"
+IMAGES_DIR="${IMAGES_DIR:-/var/lib/spwn/images}"
+
+# ── helpers ─────────────────────────────────────────────────────────────────
+
+info()  { echo "[spwn] $*"; }
+error() { echo "[spwn] error: $*" >&2; exit 1; }
+
+require_root() {
+    [[ $EUID -eq 0 ]] || error "command '$1' must be run as root (sudo scripts/spwn $1)"
+}
+
+require_cmd() {
+    command -v "$1" &>/dev/null || error "$1 not found. install with: $2"
+}
+
+download_file() {
+    local url="$1" dest="$2" label="$3"
+    if [[ -f "$dest" ]]; then
+        info "$label already exists at $dest, skipping"
+        return
+    fi
+    info "downloading $label..."
+    curl -fL --progress-bar -o "$dest" "$url"
+    info "$label → $dest"
+}
+
+# ── commands ─────────────────────────────────────────────────────────────────
+
+cmd_download() {
+    require_cmd curl "apt install curl"
+
+    download_file "$KERNEL_URL"  "$KERNEL_PATH"  "kernel"
+    download_file "$ROOTFS_URL"  "$ROOTFS_EXT4"  "rootfs (ext4)"
+    download_file "$SSH_KEY_URL" "$SSH_KEY_PATH" "ssh key"
+
+    chmod 600 "$SSH_KEY_PATH"
+    info "ssh key permissions set to 600"
+    info ""
+    info "done. connect to a running VM with:"
+    info "  ssh -i $SSH_KEY_PATH root@172.16.1.2"
+}
+
+cmd_build_rootfs() {
+    require_root "build-rootfs"
+    require_cmd mksquashfs "apt install squashfs-tools"
+
+    local name="${1:-ubuntu}"
+    local input="${2:-$ROOTFS_EXT4}"
+    local output="${IMAGES_DIR}/${name}.sqfs"
+    local mountpoint
+    mountpoint="$(mktemp -d)"
+
+    [[ -f "$input" ]] || error "input not found: $input (run: scripts/spwn download)"
+
+    mkdir -p "$IMAGES_DIR"
+
+    cleanup() {
+        umount "$mountpoint" 2>/dev/null || true
+        rmdir  "$mountpoint" 2>/dev/null || true
+    }
+    trap cleanup EXIT
+
+    info "mounting $input..."
+    mount "$input" "$mountpoint"
+
+    info "adding overlay-init..."
+    mkdir -p "$mountpoint"/{overlay,rom}
+
+    cat > "$mountpoint/sbin/overlay-init" << 'EOF'
+#!/bin/sh
+set -e
+
+REAL_INIT=/sbin/init
+
+for x in $(cat /proc/cmdline); do
+    case "$x" in
+    overlay_root=*)  OVERLAY_ROOT="${x#overlay_root=}" ;;
+    real_init=*)     REAL_INIT="${x#real_init=}" ;;
+    esac
+done
+
+if [ -z "$OVERLAY_ROOT" ]; then
+    exec "$REAL_INIT" "$@"
+fi
+
+mkdir -p /overlay
+mount -t ext4 "/dev/${OVERLAY_ROOT}" /overlay
+
+mkdir -p /overlay/upper /overlay/work
+
+mount -t overlay overlay \
+    -o "lowerdir=/,upperdir=/overlay/upper,workdir=/overlay/work" \
+    /rom
+
+for dir in dev proc sys; do
+    mkdir -p "/rom/${dir}"
+    mount --move "/${dir}" "/rom/${dir}" 2>/dev/null || true
+done
+
+cd /rom
+pivot_root . overlay
+exec chroot . "$REAL_INIT" "$@" <dev/console >dev/console 2>&1
+EOF
+
+    chmod +x "$mountpoint/sbin/overlay-init"
+
+    info "building squashfs (zstd) → $output..."
+    mksquashfs "$mountpoint" "$output" -noappend -comp zstd
+
+    info "unmounting..."
+    umount "$mountpoint"
+    trap - EXIT
+    rmdir "$mountpoint"
+
+    local size
+    size="$(du -h "$output" | cut -f1)"
+    info "done: $output ($size)"
+    info ""
+    info "available as image '$name' — create a VM with:"
+    info "  curl -X POST http://localhost:3000/api/vms -d '{\"name\":\"my-vm\",\"image\":\"$name\"}'"
+}
+
+cmd_images() {
+    if [[ ! -d "$IMAGES_DIR" ]]; then
+        info "no images dir at $IMAGES_DIR"
+        return
+    fi
+
+    local found=0
+    info "images in $IMAGES_DIR:"
+    for f in "$IMAGES_DIR"/*.sqfs; do
+        [[ -f "$f" ]] || continue
+        local name size
+        name="$(basename "$f" .sqfs)"
+        size="$(du -h "$f" | cut -f1)"
+        printf "  %-20s %s\n" "$name" "$size"
+        found=1
+    done
+
+    if [[ $found -eq 0 ]]; then
+        info "  (none — run: sudo scripts/spwn build-rootfs)"
+    fi
+}
+
+cmd_setup() {
+    cmd_download
+    info ""
+    info "building squashfs rootfs (requires sudo)..."
+    sudo -E KERNEL_PATH="$KERNEL_PATH" ROOTFS_EXT4="$ROOTFS_EXT4" \
+         IMAGES_DIR="$IMAGES_DIR" SSH_KEY_PATH="$SSH_KEY_PATH" \
+         "${BASH_SOURCE[0]}" build-rootfs
+}
+
+cmd_help() {
+    grep '^#' "${BASH_SOURCE[0]}" | grep -v '#!/' | sed 's/^# \?//'
+}
+
+# ── dispatch ─────────────────────────────────────────────────────────────────
+
+case "${1:-help}" in
+    download)     cmd_download ;;
+    build-rootfs) cmd_build_rootfs "${@:2}" ;;
+    setup)        cmd_setup ;;
+    images)       cmd_images ;;
+    help|--help)  cmd_help ;;
+    *)            error "unknown command: $1. run 'scripts/spwn help'" ;;
+esac

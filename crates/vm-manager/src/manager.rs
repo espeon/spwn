@@ -27,7 +27,7 @@ use router_sync::CaddyClient;
 use tokio::sync::Mutex;
 use tracing::{error, info};
 
-use crate::subdomain;
+use crate::{overlay, subdomain};
 
 pub type RunningVm = Vm<UnrestrictedVmmExecutor, DirectProcessSpawner, TokioRuntime>;
 
@@ -37,8 +37,8 @@ pub struct VmManager {
     pub caddy: CaddyClient,
     pub installation: VmmInstallation,
     pub kernel_path: PathBuf,
-    pub rootfs_path: PathBuf,
-    // in-memory handles for graceful shutdown
+    pub images_dir: PathBuf,
+    pub overlay_dir: PathBuf,
     running: Mutex<HashMap<String, RunningVm>>,
 }
 
@@ -49,7 +49,8 @@ impl VmManager {
         caddy: CaddyClient,
         installation: VmmInstallation,
         kernel_path: PathBuf,
-        rootfs_path: PathBuf,
+        images_dir: PathBuf,
+        overlay_dir: PathBuf,
     ) -> Self {
         Self {
             pool,
@@ -57,7 +58,8 @@ impl VmManager {
             caddy,
             installation,
             kernel_path,
-            rootfs_path,
+            images_dir,
+            overlay_dir,
             running: Mutex::new(HashMap::new()),
         }
     }
@@ -83,6 +85,9 @@ impl VmManager {
     async fn start_vm_inner(&self, vm_id: &str) -> anyhow::Result<()> {
         let vm = db::get_vm(&self.pool, vm_id).await?.unwrap();
 
+        let overlay_path = vm.overlay_path.as_deref()
+            .ok_or_else(|| anyhow!("vm {vm_id} has no overlay_path — was it created before overlayfs support?"))?;
+
         // derive tap slot from guest IP: 172.16.N.2 → N
         let slot = ip_to_slot(&vm.ip_address)?;
         let tap = self.networking.allocate_tap(slot)
@@ -99,14 +104,23 @@ impl VmManager {
         let kernel_res = resource_system
             .create_resource(&self.kernel_path, ResourceType::Moved(MovedResourceType::HardLinkedOrCopied))
             .context("register kernel resource")?;
+
         let rootfs_res = resource_system
             .create_resource(PathBuf::from(&vm.rootfs_path), ResourceType::Moved(MovedResourceType::HardLinkedOrCopied))
             .context("register rootfs resource")?;
 
-        let boot_args = format!(
-            "console=ttyS0 reboot=k panic=1 pci=off {}",
+        // overlay is the per-VM writable ext4 layer
+        let overlay_res = resource_system
+            .create_resource(PathBuf::from(overlay_path), ResourceType::Moved(MovedResourceType::HardLinkedOrCopied))
+            .context("register overlay resource")?;
+
+        let mut boot_args = format!(
+            "console=ttyS0 reboot=k panic=1 pci=off {} init=/sbin/overlay-init overlay_root=vdb",
             networking::ip::kernel_boot_args(slot)
         );
+        if vm.real_init != "/sbin/init" {
+            boot_args.push_str(&format!(" real_init={}", vm.real_init));
+        }
 
         let config = VmConfiguration::New {
             init_method: InitMethod::ViaApiCalls,
@@ -116,17 +130,30 @@ impl VmManager {
                     boot_args: Some(boot_args),
                     initrd: None,
                 },
-                drives: vec![Drive {
-                    drive_id: "rootfs".into(),
-                    is_root_device: true,
-                    is_read_only: Some(false),
-                    block: Some(rootfs_res),
-                    cache_type: None,
-                    partuuid: None,
-                    rate_limiter: None,
-                    io_engine: None,
-                    socket: None,
-                }],
+                drives: vec![
+                    Drive {
+                        drive_id: "rootfs".into(),
+                        is_root_device: true,
+                        is_read_only: Some(true),
+                        block: Some(rootfs_res),
+                        cache_type: None,
+                        partuuid: None,
+                        rate_limiter: None,
+                        io_engine: None,
+                        socket: None,
+                    },
+                    Drive {
+                        drive_id: "overlayfs".into(),
+                        is_root_device: false,
+                        is_read_only: Some(false),
+                        block: Some(overlay_res),
+                        cache_type: None,
+                        partuuid: None,
+                        rate_limiter: None,
+                        io_engine: None,
+                        socket: None,
+                    },
+                ],
                 pmem_devices: vec![],
                 machine_configuration: MachineConfiguration {
                     vcpu_count: vm.vcores as u8,
@@ -173,6 +200,17 @@ impl VmManager {
         self.running.lock().await.insert(vm_id.to_string(), fc_vm);
         info!("vm {vm_id} started (pid={pid}, tap={}, guest={})", tap.name, tap.guest_ip);
         Ok(())
+    }
+
+    pub async fn shutdown(&self) {
+        let vm_ids: Vec<String> = self.running.lock().await.keys().cloned().collect();
+        info!("shutting down {} running vm(s)...", vm_ids.len());
+        for vm_id in vm_ids {
+            if let Err(e) = self.stop_vm(&vm_id).await {
+                error!("failed to stop vm {vm_id} during shutdown: {e}");
+            }
+        }
+        info!("shutdown complete");
     }
 
     pub async fn stop_vm(&self, vm_id: &str) -> anyhow::Result<()> {
@@ -260,6 +298,21 @@ impl api::VmOps for VmManager {
         let ip = format!("172.16.{slot}.2");
         let sub = subdomain::generate(&self.pool).await?;
 
+        let rootfs_path = self.images_dir.join(format!("{}.sqfs", req.image));
+        if !rootfs_path.exists() {
+            return Err(anyhow!(
+                "image '{}' not found (expected {})",
+                req.image,
+                rootfs_path.display()
+            ));
+        }
+
+        let real_init = read_image_init(&self.images_dir, &req.image);
+
+        let overlay_path = self.overlay_dir.join(format!("{id}.ext4"));
+        overlay::provision_overlay(&overlay_path, overlay::DEFAULT_OVERLAY_SIZE_MB)
+            .with_context(|| format!("provision overlay for vm {id}"))?;
+
         db::create_vm(&self.pool, &db::NewVm {
             id: id.clone(),
             account_id: "dev".into(),
@@ -268,7 +321,9 @@ impl api::VmOps for VmManager {
             vcores: req.vcores,
             memory_mb: req.memory_mb,
             kernel_path: self.kernel_path.to_string_lossy().into(),
-            rootfs_path: self.rootfs_path.to_string_lossy().into(),
+            rootfs_path: rootfs_path.to_string_lossy().into(),
+            overlay_path: overlay_path.to_string_lossy().into(),
+            real_init,
             ip_address: ip,
             exposed_port: req.exposed_port,
         }).await?;
@@ -295,6 +350,9 @@ impl api::VmOps for VmManager {
             return Err(anyhow!("vm must be stopped before deletion"));
         }
         db::delete_vm(&self.pool, id).await?;
+        if let Some(ref path) = vm.overlay_path {
+            overlay::remove_overlay(std::path::Path::new(path));
+        }
         Ok(())
     }
 
@@ -305,6 +363,14 @@ impl api::VmOps for VmManager {
     async fn list_vms(&self, account_id: &str) -> anyhow::Result<Vec<db::VmRow>> {
         Ok(db::list_vms(&self.pool, account_id).await?)
     }
+}
+
+/// Reads `{images_dir}/{name}.init` for a custom init path, falling back to `/sbin/init`.
+fn read_image_init(images_dir: &std::path::Path, name: &str) -> String {
+    let sidecar = images_dir.join(format!("{name}.init"));
+    std::fs::read_to_string(&sidecar)
+        .map(|s| s.trim().to_string())
+        .unwrap_or_else(|_| "/sbin/init".into())
 }
 
 fn next_free_slot(used_ips: &[String]) -> u32 {

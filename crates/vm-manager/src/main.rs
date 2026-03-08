@@ -1,5 +1,6 @@
 use std::{path::PathBuf, str::FromStr, sync::Arc};
 
+use anyhow::Context;
 use fctools::vmm::installation::VmmInstallation;
 use networking::NetworkManager;
 use router_sync::CaddyClient;
@@ -7,6 +8,7 @@ use tracing::info;
 
 mod health;
 mod manager;
+mod overlay;
 mod reconcile;
 mod subdomain;
 
@@ -44,8 +46,11 @@ async fn main() -> anyhow::Result<()> {
     let kernel_path: PathBuf = std::env::var("KERNEL_PATH")
         .expect("KERNEL_PATH must be set")
         .into();
-    let rootfs_path: PathBuf = std::env::var("ROOTFS_PATH")
-        .expect("ROOTFS_PATH must be set")
+    let images_dir: PathBuf = std::env::var("IMAGES_DIR")
+        .unwrap_or_else(|_| "/var/lib/spwn/images".into())
+        .into();
+    let overlay_dir: PathBuf = std::env::var("OVERLAY_DIR")
+        .unwrap_or_else(|_| "/var/lib/spwn/overlays".into())
         .into();
     let database_url = std::env::var("DATABASE_URL")
         .unwrap_or_else(|_| "postgres://postgres:spwn@localhost/spwn".into());
@@ -70,6 +75,10 @@ async fn main() -> anyhow::Result<()> {
     networking::iptables::enable_ip_forwarding()?;
     networking::iptables::setup(&external_iface)?;
 
+    std::fs::create_dir_all(&overlay_dir)
+        .with_context(|| format!("create overlay dir: {}", overlay_dir.display()))?;
+    info!("overlay dir: {}", overlay_dir.display());
+
     info!("connecting to database");
     let pool = db::connect(&database_url).await?;
     db::migrate(&pool).await?;
@@ -78,13 +87,18 @@ async fn main() -> anyhow::Result<()> {
     let caddy = CaddyClient::new(&caddy_url, static_files_path);
     caddy.write_static_files()?;
 
+    std::fs::create_dir_all(&images_dir)
+        .with_context(|| format!("create images dir: {}", images_dir.display()))?;
+    info!("images dir: {}", images_dir.display());
+
     let manager = Arc::new(VmManager::new(
         pool,
         NetworkManager::new(),
         caddy,
         VmmInstallation::new(firecracker_path(), jailer_path(), snapshot_editor_path()),
         kernel_path,
-        rootfs_path,
+        images_dir,
+        overlay_dir,
     ));
 
     reconcile::reconcile_once(&manager).await?;
@@ -95,7 +109,14 @@ async fn main() -> anyhow::Result<()> {
     let app = api::router(manager.clone() as Arc<dyn api::VmOps>);
     let listener = tokio::net::TcpListener::bind(&listen_addr).await?;
     info!("listening on {listen_addr}");
-    axum::serve(listener, app).await?;
 
+    tokio::select! {
+        result = axum::serve(listener, app) => { result?; }
+        _ = tokio::signal::ctrl_c() => {
+            info!("received ctrl-c, shutting down");
+        }
+    }
+
+    manager.shutdown().await;
     Ok(())
 }
