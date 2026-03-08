@@ -2,6 +2,27 @@ use std::process::Command;
 
 use crate::{NetworkError, Result};
 
+/// Returns the interface name of the default IPv4 route by parsing `ip route show default`.
+pub fn default_route_iface() -> Result<String> {
+    let output = Command::new("ip").args(["route", "show", "default"]).output()?;
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    // format: "default via <gw> dev <iface> ..."
+    for line in stdout.lines() {
+        let mut parts = line.split_whitespace();
+        while let Some(token) = parts.next() {
+            if token == "dev" {
+                if let Some(iface) = parts.next() {
+                    return Ok(iface.to_string());
+                }
+            }
+        }
+    }
+    Err(NetworkError::CommandFailed {
+        cmd: "ip route show default".into(),
+        stderr: "no default route found".into(),
+    })
+}
+
 /// Set up iptables rules for VM networking:
 /// - NAT masquerade for outbound internet
 /// - FORWARD rules for TAP ↔ external interface
@@ -25,10 +46,12 @@ pub fn setup(external_iface: &str) -> Result<()> {
 }
 
 /// Enable IPv4 forwarding (required for NAT to work).
+/// Probably a good idea to check with the user before doing this, since it affects the whole system and may have security implications.
 pub fn enable_ip_forwarding() -> Result<()> {
     std::fs::write("/proc/sys/net/ipv4/ip_forward", "1").map_err(NetworkError::Io)
 }
 
+/// Helper function to run iptables commands and check for errors.
 fn ipt(args: &[&str]) -> Result<()> {
     let output = Command::new("iptables").args(args).output()?;
     if !output.status.success() {

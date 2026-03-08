@@ -1,8 +1,6 @@
 use std::net::Ipv4Addr;
 use std::process::Command;
 
-use common::VmId;
-
 use crate::{NetworkError, Result, ip};
 
 #[derive(Debug, Clone)]
@@ -21,8 +19,8 @@ impl NetworkManager {
     }
 
     /// Create a TAP device for a VM at `slot` in the 172.16.0.0/16 space.
-    pub fn allocate_tap(&self, vm_id: &VmId, slot: u32) -> Result<TapDevice> {
-        let name = tap_name(vm_id);
+    pub fn allocate_tap(&self, slot: u32) -> Result<TapDevice> {
+        let name = tap_name(slot);
         let host_ip = ip::host_ip(slot);
         let guest_ip = ip::guest_ip(slot);
 
@@ -34,8 +32,8 @@ impl NetworkManager {
     }
 
     /// Tear down the TAP device for a VM.
-    pub fn release_tap(&self, vm_id: &VmId) -> Result<()> {
-        let name = tap_name(vm_id);
+    pub fn release_tap(&self, slot: u32) -> Result<()> {
+        let name = tap_name(slot);
         run("ip", &["tuntap", "del", "dev", &name, "mode", "tap"])
     }
 
@@ -70,8 +68,8 @@ impl Default for NetworkManager {
     }
 }
 
-pub fn tap_name(vm_id: &VmId) -> String {
-    format!("fc-tap-{}", vm_id.as_str())
+pub fn tap_name(slot: u32) -> String {
+    format!("fc-tap-{slot}")
 }
 
 fn run(cmd: &str, args: &[&str]) -> Result<()> {

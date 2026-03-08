@@ -22,11 +22,8 @@ pub fn kernel_boot_args(slot: u32) -> String {
 }
 
 fn slot_octets(slot: u32) -> [u8; 2] {
-    // slot N → 172.16.N.1/30 (host), 172.16.N.2/30 (guest)
-    // fits 65535 VMs within 172.16.0.0/16
-    let third = ((slot >> 8) & 0xff) as u8;
-    let fourth_base = ((slot & 0xff) * 4) as u8;
-    [third, fourth_base + 1]
+    // slot N → 172.16.N.1 (host), 172.16.N.2 (guest), supports slots 1-254
+    [slot as u8, 1]
 }
 
 #[cfg(test)]
@@ -41,8 +38,8 @@ mod tests {
 
     #[test]
     fn slot_1_ips() {
-        assert_eq!(host_ip(1), Ipv4Addr::new(172, 16, 0, 5));
-        assert_eq!(guest_ip(1), Ipv4Addr::new(172, 16, 0, 6));
+        assert_eq!(host_ip(1), Ipv4Addr::new(172, 16, 1, 1));
+        assert_eq!(guest_ip(1), Ipv4Addr::new(172, 16, 1, 2));
     }
 
     #[test]

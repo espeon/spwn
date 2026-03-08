@@ -1,0 +1,290 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>VM stopped</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg: #ffffff;
+      --fg: #111111;
+      --muted: #666666;
+      --accent: #ff0000; /* True Swiss Red */
+      --grid-color: rgba(0, 0, 0, 0.08);
+      --line-color: rgba(0, 0, 0, 0.15);
+    }
+
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #0a0a0a;
+        --fg: #f0f0f0;
+        --muted: #888888;
+        --accent: #ff3333;
+        --grid-color: rgba(255, 255, 255, 0.05);
+        --line-color: rgba(255, 255, 255, 0.15);
+      }
+    }
+
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: 'Instrument Sans', sans-serif;
+      background-color: var(--bg);
+      color: var(--fg);
+      height: 100vh;
+      width: 100%;
+      display: flex;
+      position: relative;
+      overflow: hidden;
+    }
+
+    /* --- The Grid Overlay (The Structure) --- */
+    .grid-overlay {
+      position: absolute;
+      inset: 0;
+      display: grid;
+      grid-template-columns: repeat(6, 1fr);
+      pointer-events: none;
+      z-index: 1;
+    }
+
+    .grid-line {
+      border-right: 1px solid var(--grid-color);
+      height: 100%;
+    }
+
+    /* --- Layout --- */
+    .container {
+      position: relative;
+      z-index: 2;
+      width: 100%;
+      display: grid;
+      grid-template-columns: repeat(6, 1fr);
+      padding: 0;
+    }
+
+    /* --- Left Column: The Geometric Shape --- */
+    .shape-container {
+      grid-column: 1 / 4; /* Span first 3 cols */
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      position: relative;
+      height: 100%;
+    }
+
+    .circle {
+      width: 55vmin;
+      height: 55vmin;
+      background-color: var(--accent);
+      border-radius: 50%;
+      position: relative;
+      /* Shift slightly for optical balance */
+      transform: translateX(10%);
+      animation: scaleIn 0.8s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+      box-shadow: 0 20px 40px rgba(0,0,0,0.1);
+    }
+
+    @keyframes scaleIn {
+      from { transform: translateX(10%) scale(0.8); opacity: 0; }
+      to { transform: translateX(10%) scale(1); opacity: 1; }
+    }
+
+    /* The "Stop" Icon inside the circle */
+    .icon-stop {
+      position: absolute;
+      top: 50%; left: 50%;
+      transform: translate(-50%, -50%);
+      color: white;
+      width: 20%;
+      height: 20%;
+      background: white;
+      border-radius: 50%;
+      mix-blend-mode: difference; /* Inverts colors for effect */
+    }
+
+    /* --- Right Column: The Typography --- */
+    .content-container {
+      grid-column: 4 / 7; /* Span last 3 cols */
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      padding: 4rem;
+      border-left: 1px solid var(--line-color);
+      animation: slideLeft 0.6s ease-out forwards;
+      animation-delay: 0.2s;
+      opacity: 0;
+    }
+
+    @keyframes slideLeft {
+      from { opacity: 0; transform: translateX(20px); }
+      to { opacity: 1; transform: translateX(0); }
+    }
+
+    /* --- Typographic Details --- */
+    .eyebrow {
+      font-size: 12px;
+      font-weight: 600;
+      letter-spacing: 0.15em;
+      text-transform: uppercase;
+      color: var(--muted);
+      margin-bottom: 2rem;
+      display: block;
+    }
+
+    h1 {
+      font-size: clamp(32px, 5vw, 48px);
+      font-weight: 700;
+      line-height: 1.1;
+      margin-bottom: 2rem;
+      letter-spacing: -0.02em;
+    }
+
+    .meta-block {
+      margin-bottom: 3rem;
+      padding-top: 1rem;
+      border-top: 1px solid var(--line-color);
+    }
+
+    .meta-row {
+      display: flex;
+      justify-content: space-between;
+      margin-bottom: 0.75rem;
+      font-size: 14px;
+    }
+
+    .meta-label {
+      color: var(--muted);
+      text-transform: uppercase;
+      font-size: 11px;
+      letter-spacing: 0.1em;
+    }
+
+    .meta-value {
+      font-weight: 500;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .action-btn {
+      display: block;
+      width: 100%;
+      padding: 1rem 0;
+      text-align: center;
+      text-decoration: none;
+      color: var(--fg);
+      font-weight: 600;
+      font-size: 14px;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      border: 1px solid var(--fg);
+      background: transparent;
+      transition: all 0.3s ease;
+      margin-top: auto; /* Push to bottom of column */
+    }
+
+    .action-btn:hover {
+      background: var(--fg);
+      color: var(--bg);
+    }
+
+    .action-btn:focus-visible {
+      outline: 2px solid var(--accent);
+      outline-offset: 4px;
+    }
+
+    /* Responsive */
+    @media (max-width: 900px) {
+      .container {
+        grid-template-columns: 1fr;
+        grid-template-rows: 40vh 1fr;
+      }
+
+      .shape-container {
+        grid-column: 1;
+        grid-row: 1;
+      }
+
+      .circle {
+        width: 180px;
+        height: 180px;
+        transform: none;
+      }
+
+      .content-container {
+        grid-column: 1;
+        grid-row: 2;
+        border-left: none;
+        border-top: 1px solid var(--line-color);
+        padding: 2rem;
+      }
+
+      .grid-overlay { display: none; }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      .circle, .content-container { animation: none; opacity: 1; }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Visual Grid Structure -->
+  <div class="grid-overlay" aria-hidden="true">
+    <div class="grid-line"></div>
+    <div class="grid-line"></div>
+    <div class="grid-line"></div>
+    <div class="grid-line"></div>
+    <div class="grid-line"></div>
+    <div class="grid-line"></div>
+  </div>
+
+  <main class="container">
+    <!-- The Poster Art Element -->
+    <div class="shape-container">
+      <div class="circle" aria-hidden="true">
+        <div class="icon-stop"></div>
+      </div>
+    </div>
+
+    <!-- The Information Grid -->
+    <section class="content-container">
+      <div>
+        <span class="eyebrow" id="subdomain">{http.request.host}</span>
+        <h1>Machine<br> Halted</h1>
+      </div>
+
+      <div class="meta-block">
+        <div class="meta-row">
+          <span class="meta-label">Status</span>
+          <span class="meta-value">Stopped</span>
+        </div>
+        <div class="meta-row">
+          <span class="meta-label">Code</span>
+          <span class="meta-value">503</span>
+        </div>
+      </div>
+
+      <a href="/" class="action-btn">
+        Dashboard
+      </a>
+    </section>
+  </main>
+
+  <script>
+    // Subdomain logic
+    const subdomainEl = document.getElementById('subdomain');
+    if (subdomainEl) {
+      const hostname = window.location.hostname;
+      const parts = hostname.split('.');
+      subdomainEl.textContent = (parts.length > 2) ? parts[0] : hostname;
+    }
+  </script>
+</body>
+</html>
