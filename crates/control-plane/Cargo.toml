@@ -1,0 +1,26 @@
+[package]
+name = "control-plane"
+version = "0.1.0"
+edition = "2024"
+
+[[bin]]
+name = "spwn-control-plane"
+path = "src/main.rs"
+
+[dependencies]
+agent-proto = { path = "../agent-proto" }
+db = { path = "../db" }
+api = { path = "../api" }
+router-sync = { path = "../router-sync" }
+tokio = { version = "1", features = ["full"] }
+tonic = { version = "0.12", features = ["transport"] }
+axum = "0.8"
+anyhow = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+async-trait = "0.1"
+uuid = { version = "1", features = ["v4"] }
+rand = "0.8"
+dotenvy = "0.15"
+sqlx = { version = "0.8", features = ["postgres", "runtime-tokio-native-tls"] }
+tokio-stream = "0.1"

@@ -16,6 +16,7 @@ pub enum CaddyError {
 
 type Result<T> = std::result::Result<T, CaddyError>;
 
+#[derive(Clone)]
 pub struct CaddyClient {
     base: String,
     client: reqwest::Client,

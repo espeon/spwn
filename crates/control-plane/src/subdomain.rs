@@ -13,8 +13,6 @@ const NOUNS: &[&str] = &[
 ];
 
 pub async fn generate(pool: &db::PgPool) -> anyhow::Result<String> {
-    // generate all candidates before any await — thread_rng is not Send
-    // so it must be dropped before the first .await
     let candidates: Vec<String> = {
         let mut rng = rand::thread_rng();
         (0..20)

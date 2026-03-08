@@ -19,10 +19,21 @@ impl NetworkManager {
     }
 
     /// Create a TAP device for a VM at `slot` in the 172.16.0.0/16 space.
+    /// If a stale device from a previous run exists at this slot, it is removed first.
     pub fn allocate_tap(&self, slot: u32) -> Result<TapDevice> {
         let name = tap_name(slot);
         let host_ip = ip::host_ip(slot);
         let guest_ip = ip::guest_ip(slot);
+
+        let already_exists = Command::new("ip")
+            .args(["link", "show", &name])
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false);
+        if already_exists {
+            println!("TAP device {} already exists, removing stale device", name);
+            let _ = run("ip", &["tuntap", "del", "dev", &name, "mode", "tap"]);
+        }
 
         run("ip", &["tuntap", "add", "dev", &name, "mode", "tap"])?;
         run("ip", &["addr", "add", &format!("{}/30", host_ip), "dev", &name])?;

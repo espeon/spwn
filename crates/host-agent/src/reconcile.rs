@@ -17,9 +17,8 @@ pub async fn reconcile_once(manager: &VmManager) -> anyhow::Result<()> {
     info!("running reconciliation");
 
     let firecracker_pids = find_firecracker_pids();
-    let db_vms = db::get_all_vms(&manager.pool).await?;
+    let db_vms = db::get_vms_by_host(&manager.pool, &manager.host_id).await?;
 
-    // reset VMs stuck in transitional states (starting/stopping) from a previous crash
     for vm in db_vms.iter().filter(|v| v.status == "starting" || v.status == "stopping") {
         let is_alive = vm.pid.map_or(false, |pid| firecracker_pids.contains(&(pid as i32)));
         let new_status = if is_alive { "running" } else { "error" };
@@ -28,7 +27,6 @@ pub async fn reconcile_once(manager: &VmManager) -> anyhow::Result<()> {
         db::log_event(&manager.pool, &vm.id, "reconcile_stuck_reset", None).await.ok();
     }
 
-    // mark DB-running VMs whose process is gone as error
     for vm in db_vms.iter().filter(|v| v.status == "running") {
         if let Some(pid) = vm.pid {
             if !firecracker_pids.contains(&(pid as i32)) {
@@ -37,13 +35,11 @@ pub async fn reconcile_once(manager: &VmManager) -> anyhow::Result<()> {
                 db::log_event(&manager.pool, &vm.id, "reconcile_process_missing", None).await.ok();
             }
         } else {
-            // running but no PID recorded — mark error
             warn!("vm {} is running but has no pid, marking error", vm.id);
             db::set_vm_status(&manager.pool, &vm.id, "error").await.ok();
         }
     }
 
-    // clean up orphaned TAP devices
     if let Ok(tap_names) = manager.networking.list_tap_devices() {
         let tracked_taps: std::collections::HashSet<_> = db_vms.iter()
             .filter_map(|v| v.tap_device.as_deref())
@@ -52,7 +48,6 @@ pub async fn reconcile_once(manager: &VmManager) -> anyhow::Result<()> {
         for tap in &tap_names {
             if !tracked_taps.contains(tap.as_str()) {
                 warn!("removing orphaned TAP device: {tap}");
-                // name format: fc-tap-{slot}
                 if let Some(slot) = tap.strip_prefix("fc-tap-").and_then(|s| s.parse::<u32>().ok()) {
                     manager.networking.release_tap(slot).ok();
                 }
@@ -60,31 +55,8 @@ pub async fn reconcile_once(manager: &VmManager) -> anyhow::Result<()> {
         }
     }
 
-    // rebuild caddy routes from DB state
-    rebuild_caddy_routes(manager).await;
-
     info!("reconciliation complete");
     Ok(())
-}
-
-async fn rebuild_caddy_routes(manager: &VmManager) {
-    let vms = match db::get_all_vms(&manager.pool).await {
-        Ok(v) => v,
-        Err(e) => { error!("failed to load vms for route rebuild: {e}"); return; }
-    };
-
-    let routes: Vec<router_sync::RouteEntry> = vms.into_iter().map(|vm| {
-        let target = if vm.status == "running" {
-            router_sync::RouteTarget::Vm { ip: vm.ip_address.clone(), port: vm.exposed_port as u16 }
-        } else {
-            router_sync::RouteTarget::Stopped
-        };
-        router_sync::RouteEntry { subdomain: vm.subdomain, target }
-    }).collect();
-
-    if let Err(e) = manager.caddy.rebuild_all_routes(&routes).await {
-        error!("failed to rebuild caddy routes: {e}");
-    }
 }
 
 fn find_firecracker_pids() -> Vec<i32> {
