@@ -46,7 +46,7 @@ deps: bubbletea, lipgloss, bubbles, wish (ssh-gateway only), cobra (CLI), tablew
 
 ```
 1. POST /auth/cli/init
-   ← { code: "abc123", browser_url: "https://spwn.dev/cli-auth?code=abc123", expires_in: 300 }
+   ← { code: "abc123", browser_url: "https://spwn.run/cli-auth?code=abc123", expires_in: 300 }
 
 2. CLI opens browser_url via pkg/browser
 
@@ -102,6 +102,7 @@ POST /auth/cli/deny                    (session-protected) deny code
 ### bearer token auth
 
 all existing session-cookie-protected routes also accept `Authorization: Bearer <token>`:
+
 - add `BearerAuth` extractor that resolves to `AccountId` via `api_tokens` lookup
 - combine with existing `SessionAuth` via a union extractor (`AuthedUser`)
 
@@ -125,7 +126,7 @@ PATCH /api/vms/:id                    rename, update exposed_port
 
 - not logged in → redirect to `/login?next=/cli-auth?code=<code>`
 - logged in → minimal approval card (no sidebar, no layout chrome):
-  - "authorize CLI access as nat@spwn.dev?"
+  - "authorize CLI access as nat@spwn.run?"
   - [Authorize] → `POST /auth/cli/authorize { code }` → success screen
   - [Deny] → `POST /auth/cli/deny { code }` → denied screen
   - countdown timer to code expiry
@@ -147,13 +148,13 @@ TTY detection: if `!term.IsTerminal(int(os.Stdout.Fd()))`, always plain CLI rega
 ### VM list view (default)
 
 ```
- spwn                                              nat@spwn.dev
+ spwn                                              nat@spwn.run
  ─────────────────────────────────────────────────────────────
   VMs                                              [n] new
 
-  ▶  vivid-moon-be33   ● running    2c  2.0gb   vm.spwn.dev
-     quick-fox-a1b2    ○ stopped    1c  512mb   fox.spwn.dev
-     dark-star-ff01    ● running    4c  4.0gb   dark.spwn.dev
+  ▶  vivid-moon-be33   ● running    2c  2.0gb   vm.spwn.run
+     quick-fox-a1b2    ○ stopped    1c  512mb   fox.spwn.run
+     dark-star-ff01    ● running    4c  4.0gb   dark.spwn.run
 
  ─────────────────────────────────────────────────────────────
   quota: 7/8 vcores │ 6.5/12gb ram │ 3/5 vms
@@ -165,9 +166,9 @@ polls `GET /api/vms` every 5s. status color: green=running, yellow=starting/stop
 ### VM detail view
 
 ```
- spwn / vivid-moon-be33                            nat@spwn.dev
+ spwn / vivid-moon-be33                            nat@spwn.run
  ─────────────────────────────────────────────────────────────
-  ● running   2 vcores   2.0gb ram   vm.spwn.dev
+  ● running   2 vcores   2.0gb ram   vm.spwn.run
 
   Recent events                     Snapshots
   ─────────────────                 ──────────────────────────
@@ -184,7 +185,7 @@ snapshots are navigable — pressing enter on one goes to snapshot detail.
 ### snapshot detail view
 
 ```
- spwn / vivid-moon-be33 / snap-a1b2                nat@spwn.dev
+ spwn / vivid-moon-be33 / snap-a1b2                nat@spwn.run
  ─────────────────────────────────────────────────────────────
   snap-a1b2
 
@@ -201,9 +202,9 @@ honestly not a ton to show here — snapshot metadata is thin (label, timestamp,
 ### account view
 
 ```
- spwn / account                                    nat@spwn.dev
+ spwn / account                                    nat@spwn.run
  ─────────────────────────────────────────────────────────────
-  nat@spwn.dev
+  nat@spwn.run
 
   vcores  ████████░░  7/8
   ram     ███████░░░  6.5/12gb
@@ -225,20 +226,20 @@ honestly not a ton to show here — snapshot metadata is thin (label, timestamp,
 
 ### key bindings
 
-| key       | action                           |
-| --------- | -------------------------------- |
-| j / ↓     | move down                        |
-| k / ↑     | move up                          |
-| enter     | select / confirm                 |
-| esc       | back / cancel                    |
-| s         | start/stop selected VM           |
-| n         | new VM                           |
-| d         | delete (with confirmation)       |
-| r         | rename                           |
-| p         | take snapshot                    |
-| a         | account view                     |
-| ?         | toggle help overlay              |
-| q         | quit (from root view)            |
+| key   | action                     |
+| ----- | -------------------------- |
+| j / ↓ | move down                  |
+| k / ↑ | move up                    |
+| enter | select / confirm           |
+| esc   | back / cancel              |
+| s     | start/stop selected VM     |
+| n     | new VM                     |
+| d     | delete (with confirmation) |
+| r     | rename                     |
+| p     | take snapshot              |
+| a     | account view               |
+| ?     | toggle help overlay        |
+| q     | quit (from root view)      |
 
 ---
 
@@ -276,8 +277,9 @@ spwn config get <key>
 ```
 
 output flags on all commands:
-- `--json`    machine-readable JSON
-- `--quiet`   suppress non-essential output
+
+- `--json` machine-readable JSON
+- `--quiet` suppress non-essential output
 
 ---
 

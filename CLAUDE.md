@@ -53,7 +53,7 @@ just check      # cargo check across workspace
 | `LISTEN_ADDR`        | cp        | 0.0.0.0:3019                            |
 | `GRPC_LISTEN_ADDR`   | cp        | 0.0.0.0:5000                            |
 | `INVITE_CODE`        | cp        | _(required)_                            |
-| `PUBLIC_URL`         | cp        | https://spwn.dev                        |
+| `PUBLIC_URL`         | cp        | https://spwn.run                        |
 | `FRONTEND_PATH`      | cp        | frontend/dist                           |
 | `CADDY_URL`          | cp        | http://localhost:2019                   |
 | `STATIC_FILES_PATH`  | cp        | /var/lib/spwn/static                    |

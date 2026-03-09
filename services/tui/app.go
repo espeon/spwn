@@ -63,9 +63,9 @@ type App struct {
 
 	// New VM form state
 	newVMName   string
-	newVMVcores string
+	newVMVcpus  string
 	newVMMemMb  string
-	newVMField  int // 0=name, 1=vcores, 2=mem
+	newVMField  int // 0=name, 1=vcpus, 2=mem
 
 	// Confirm dialog state
 	confirmMsg    string
@@ -84,7 +84,7 @@ func Run(c *client.Client) error {
 	app := &App{
 		client:      c,
 		current:     viewVMList,
-		newVMVcores: "2",
+		newVMVcpus: "2",
 		newVMMemMb:  "512",
 	}
 	p := tea.NewProgram(app, tea.WithAltScreen())

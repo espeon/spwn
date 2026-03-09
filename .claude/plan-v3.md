@@ -186,7 +186,7 @@ minimal — the CLI is just a consumer of the existing API. a few additions:
 
 ## phase 8: SSH gateway (Go sidecar)
 
-**goal:** users can `ssh spwn.dev` and get an interactive TUI dashboard, or `ssh <vm-name>@spwn.dev` to drop directly into a VM shell. TCP port forwarding works over SSH. the gateway is a Go binary using the charm stack.
+**goal:** users can `ssh spwn.run` and get an interactive TUI dashboard, or `ssh <vm-name>@spwn.run` to drop directly into a VM shell. TCP port forwarding works over SSH. the gateway is a Go binary using the charm stack.
 
 ### why Go / charm
 
@@ -287,7 +287,7 @@ two methods:
 ### connection flow
 
 ```
-user: ssh spwn.dev
+user: ssh spwn.run
   → wish accepts connection
   → auth via gRPC (password or pubkey)
   → bubbletea dashboard TUI launches
@@ -296,7 +296,7 @@ user: ssh spwn.dev
   → gateway opens StreamConsole gRPC stream to host agent
   → bidirectional byte relay until disconnect
 
-user: ssh myvm@spwn.dev
+user: ssh myvm@spwn.run
   → wish accepts connection
   → auth via gRPC
   → gateway calls LookupVm("myvm")
@@ -310,7 +310,7 @@ the dashboard bubbletea model shows:
 
 ```
 ┌─────────────────────────────────────────────┐
-│  spwn                          nat@spwn.dev │
+│  spwn                          nat@spwn.run │
 │─────────────────────────────────────────────│
 │                                             │
 │  VMs                                        │
@@ -334,10 +334,10 @@ SSH's built-in `-L` and `-R` forwarding, handled by wish's channel request handl
 
 ```bash
 # forward local 8080 to VM's port 3000
-ssh -L 8080:localhost:3000 myvm@spwn.dev
+ssh -L 8080:localhost:3000 myvm@spwn.run
 
 # forward VM's port 9090 to your local machine
-ssh -R 9090:localhost:9090 myvm@spwn.dev
+ssh -R 9090:localhost:9090 myvm@spwn.run
 ```
 
 the gateway proxies TCP streams between the SSH channel and the VM's network (via the host agent). no caddy involvement.
@@ -347,13 +347,13 @@ the gateway proxies TCP streams between the SSH channel and the VM's network (vi
 `spwn ssh <vm>` invokes the system's `ssh` binary:
 
 ```bash
-ssh -o "HostKeyAlias=spwn" -p 2222 <vm-name>@spwn.dev
+ssh -o "HostKeyAlias=spwn" -p 2222 <vm-name>@spwn.run
 ```
 
 `spwn ssh` with no args opens the dashboard:
 
 ```bash
-ssh -o "HostKeyAlias=spwn" -p 2222 spwn.dev
+ssh -o "HostKeyAlias=spwn" -p 2222 spwn.run
 ```
 
 ### control-plane changes
@@ -402,7 +402,7 @@ future: replace VM-internal SSH with a vsock-based agent for lower overhead and 
 | `SSH_LISTEN_ADDR`    | `0.0.0.0:2222`               | SSH listen address            |
 | `CONTROL_PLANE_GRPC` | `localhost:5000`             | gRPC address of control plane |
 | `HOST_KEY_PATH`      | `/var/lib/spwn/ssh_host_key` | persistent ED25519 host key   |
-| `DOMAIN`             | `spwn.dev`                   | displayed in TUI header       |
+| `DOMAIN`             | `spwn.run`                   | displayed in TUI header       |
 
 ### build & run
 
@@ -964,7 +964,7 @@ phases 7 and 11 can run in parallel — CLI development and test infrastructure 
 
 - **Go proto generation:** generate Go code from the same `.proto` files in `crates/agent-proto/proto/`, or maintain a copy in `services/ssh-gateway/proto/`? symlink is cleanest but can be fragile. a `just proto` recipe that generates both rust and Go from the same source is probably the move.
 - **VM-internal SSH vs vsock:** baking SSH into the rootfs is simple but means every template needs sshd. vsock agent is cleaner but more work. start with SSH, evaluate vsock later.
-- **tunnel subdomain format:** `<vm>-<port>.spwn.dev` or `<random>.tunnels.spwn.dev`? the former is predictable, the latter avoids leaking VM names.
+- **tunnel subdomain format:** `<vm>-<port>.spwn.run` or `<random>.tunnels.spwn.run`? the former is predictable, the latter avoids leaking VM names.
 - **free tier limits:** 1 VM with 2 vcores and 2gb is generous enough to be useful but constrained enough to convert. need to test this assumption.
 - **host key persistence:** generate ED25519 key on first run, persist to `HOST_KEY_PATH`. for multi-instance gateway (load balanced), all instances need the same key — mount from a shared secret or store in postgres.
 - **bubbletea theme sync:** should the SSH TUI respect the user's theme preference from the web frontend? could fetch it via gRPC on connect.

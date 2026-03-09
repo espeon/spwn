@@ -141,23 +141,23 @@ func (c *Client) Me() (Account, error) {
 // ── VMs ───────────────────────────────────────────────────────────────────────
 
 type VM struct {
-	ID          string `json:"id"`
-	Name        string `json:"name"`
-	Status      string `json:"status"`
-	Subdomain   string `json:"subdomain"`
-	Vcores      int    `json:"vcores"`
-	MemoryMb    int    `json:"memory_mb"`
-	IPAddress   string `json:"ip_address"`
-	ExposedPort int    `json:"exposed_port"`
-	Image       string `json:"image"`
+	ID          string  `json:"id"`
+	Name        string  `json:"name"`
+	Status      string  `json:"status"`
+	Subdomain   string  `json:"subdomain"`
+	Vcpus       float64 `json:"vcpus"`
+	MemoryMb    int     `json:"memory_mb"`
+	IPAddress   string  `json:"ip_address"`
+	ExposedPort int     `json:"exposed_port"`
+	Image       string  `json:"image"`
 }
 
 type CreateVMRequest struct {
-	Name        string `json:"name"`
-	Image       string `json:"image,omitempty"`
-	Vcores      int    `json:"vcores,omitempty"`
-	MemoryMb    int    `json:"memory_mb,omitempty"`
-	ExposedPort int    `json:"exposed_port,omitempty"`
+	Name        string  `json:"name"`
+	Image       string  `json:"image,omitempty"`
+	Vcpus       float64 `json:"vcpus,omitempty"`
+	MemoryMb    int     `json:"memory_mb,omitempty"`
+	ExposedPort int     `json:"exposed_port,omitempty"`
 }
 
 type PatchVMRequest struct {

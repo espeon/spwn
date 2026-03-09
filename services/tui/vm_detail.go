@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -85,10 +86,10 @@ func (a *App) vmDetailView() string {
 	b.WriteString(styleDim.Render(strings.Repeat("─", a.width)) + "\n\n")
 
 	// Status line
-	b.WriteString(fmt.Sprintf("  %s %s   %dc   %dMB   %s\n\n",
+	b.WriteString(fmt.Sprintf("  %s %s   %gvc   %dMB   %s\n\n",
 		statusDot(vm.Status),
 		statusColor(vm.Status).Render(vm.Status),
-		vm.Vcores, vm.MemoryMb,
+		vm.Vcpus, vm.MemoryMb,
 		styleDim.Render(vm.Subdomain),
 	))
 
@@ -275,7 +276,7 @@ func (a *App) accountView() string {
 	} else {
 		acc := *a.account
 		b.WriteString("  " + styleTitle.Render(acc.Email) + "\n\n")
-		b.WriteString("  " + progressBar("vcores", 0, acc.VcpuLimit, a.width-4) + "\n")
+		b.WriteString("  " + progressBar("vcpus", 0, acc.VcpuLimit, a.width-4) + "\n")
 		b.WriteString("  " + progressBar("ram", 0, acc.MemLimitMb/1024, a.width-4) + "\n")
 		b.WriteString("  " + progressBar("vms", 0, acc.VmLimit, a.width-4) + "\n")
 	}
@@ -322,8 +323,8 @@ func (a *App) updateNewVM(msg tea.Msg) (tea.Model, tea.Cmd) {
 					a.newVMName = a.newVMName[:len(a.newVMName)-1]
 				}
 			case 1:
-				if len(a.newVMVcores) > 0 {
-					a.newVMVcores = a.newVMVcores[:len(a.newVMVcores)-1]
+				if len(a.newVMVcpus) > 0 {
+					a.newVMVcpus = a.newVMVcpus[:len(a.newVMVcpus)-1]
 				}
 			case 2:
 				if len(a.newVMMemMb) > 0 {
@@ -337,8 +338,9 @@ func (a *App) updateNewVM(msg tea.Msg) (tea.Model, tea.Cmd) {
 				case 0:
 					a.newVMName += ch
 				case 1:
-					if ch >= "0" && ch <= "9" {
-						a.newVMVcores += ch
+					// allow digits and one decimal point
+					if (ch >= "0" && ch <= "9") || (ch == "." && !strings.Contains(a.newVMVcpus, ".")) {
+						a.newVMVcpus += ch
 					}
 				case 2:
 					if ch >= "0" && ch <= "9" {
@@ -353,12 +355,12 @@ func (a *App) updateNewVM(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (a *App) submitNewVM() tea.Cmd {
 	name := a.newVMName
-	vcores := parseInt(a.newVMVcores, 2)
+	vcpus := parseFloat(a.newVMVcpus, 2)
 	memMb := parseInt(a.newVMMemMb, 512)
 	return func() tea.Msg {
 		vm, err := a.client.CreateVM(client.CreateVMRequest{
 			Name:     name,
-			Vcores:   vcores,
+			Vcpus:    vcpus,
 			MemoryMb: memMb,
 		})
 		if err != nil {
@@ -379,7 +381,7 @@ func (a *App) newVMView() string {
 		idx   int
 	}{
 		{"Name:   ", &a.newVMName, 0},
-		{"vCores: ", &a.newVMVcores, 1},
+		{"vCPUs:  ", &a.newVMVcpus, 1},
 		{"Memory: ", &a.newVMMemMb, 2},
 	}
 
@@ -482,4 +484,15 @@ func parseInt(s string, def int) int {
 		return def
 	}
 	return n
+}
+
+func parseFloat(s string, def float64) float64 {
+	if s == "" {
+		return def
+	}
+	f, err := strconv.ParseFloat(s, 64)
+	if err != nil || f <= 0 {
+		return def
+	}
+	return f
 }

@@ -8,7 +8,8 @@
 //!
 //! Required env vars (same as the agent itself):
 //!   FIRECRACKER_BIN, JAILER_BIN, KERNEL_PATH, IMAGES_DIR, DATABASE_URL
-//!   JAILER_UID, JAILER_GID, JAILER_CHROOT_BASE, EXTERNAL_IFACE
+//!   JAILER_CHROOT_BASE, EXTERNAL_IFACE
+//!   JAILER_UID, JAILER_GID (optional — falls back to spwn-vm user/group)
 
 use std::{path::PathBuf, sync::Arc};
 
@@ -29,6 +30,46 @@ fn env_or(key: &str, default: &str) -> String {
     std::env::var(key).unwrap_or_else(|_| default.to_string())
 }
 
+fn resolve_id_from_file(path: &str, name: &str) -> anyhow::Result<u32> {
+    let contents =
+        std::fs::read_to_string(path).map_err(|e| anyhow::anyhow!("read {path}: {e}"))?;
+    for line in contents.lines() {
+        let mut fields = line.splitn(4, ':');
+        let entry_name = match fields.next() {
+            Some(n) => n,
+            None => continue,
+        };
+        if entry_name != name {
+            continue;
+        }
+        let _password = fields.next();
+        let id_str = match fields.next() {
+            Some(s) => s,
+            None => continue,
+        };
+        if let Ok(id) = id_str.parse::<u32>() {
+            return Ok(id);
+        }
+    }
+    Err(anyhow::anyhow!("'{name}' not found in {path}"))
+}
+
+fn resolve_jailer_uid() -> u32 {
+    if let Ok(val) = std::env::var("JAILER_UID") {
+        return val.parse::<u32>().expect("JAILER_UID must be a valid u32");
+    }
+    resolve_id_from_file("/etc/passwd", "spwn-vm")
+        .expect("spwn-vm user not found in /etc/passwd — create it or set JAILER_UID")
+}
+
+fn resolve_jailer_gid() -> u32 {
+    if let Ok(val) = std::env::var("JAILER_GID") {
+        return val.parse::<u32>().expect("JAILER_GID must be a valid u32");
+    }
+    resolve_id_from_file("/etc/group", "spwn-vm")
+        .expect("spwn-vm group not found in /etc/group — create it or set JAILER_GID")
+}
+
 async fn setup() -> (db::PgPool, Arc<host_agent::manager::VmManager>) {
     dotenvy::dotenv().ok();
 
@@ -42,12 +83,8 @@ async fn setup() -> (db::PgPool, Arc<host_agent::manager::VmManager>) {
         env_or("SNAPSHOT_EDITOR_BIN", "/usr/local/bin/snapshot-editor").into(),
     );
 
-    let jailer_uid = env_or("JAILER_UID", "")
-        .parse::<u32>()
-        .unwrap_or_else(|_| panic!("JAILER_UID must be a valid u32"));
-    let jailer_gid = env_or("JAILER_GID", "")
-        .parse::<u32>()
-        .unwrap_or_else(|_| panic!("JAILER_GID must be a valid u32"));
+    let jailer_uid = resolve_jailer_uid();
+    let jailer_gid = resolve_jailer_gid();
     let chroot_base_dir = std::path::PathBuf::from(env_or("JAILER_CHROOT_BASE", "/srv/jailer"));
 
     let manager = Arc::new(host_agent::manager::VmManager::new(

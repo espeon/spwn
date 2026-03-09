@@ -49,7 +49,7 @@ func LoadConfig() (Config, error) {
 
 func defaultConfig() Config {
 	return Config{
-		APIURL:        "https://spwn.dev",
+		APIURL:        "https://spwn.run",
 		DefaultVcores: 2,
 		DefaultMemMb:  512,
 	}

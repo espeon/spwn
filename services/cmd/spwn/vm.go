@@ -62,10 +62,10 @@ func vmListCmd() *cobra.Command {
 				return json.NewEncoder(os.Stdout).Encode(vms)
 			}
 			w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-			fmt.Fprintln(w, "NAME\tSTATUS\tSUBDOMAIN\tVCORES\tMEM")
+			fmt.Fprintln(w, "NAME\tSTATUS\tSUBDOMAIN\tVCPUS\tMEM")
 			for _, vm := range vms {
-				fmt.Fprintf(w, "%s\t%s\t%s\t%d\t%dMB\n",
-					vm.Name, vm.Status, vm.Subdomain, vm.Vcores, vm.MemoryMb)
+				fmt.Fprintf(w, "%s\t%s\t%s\t%g\t%dMB\n",
+					vm.Name, vm.Status, vm.Subdomain, vm.Vcpus, vm.MemoryMb)
 			}
 			return w.Flush()
 		},
@@ -73,7 +73,7 @@ func vmListCmd() *cobra.Command {
 }
 
 func vmCreateCmd() *cobra.Command {
-	var vcores int
+	var vcpus float64
 	var memMb int
 	var image string
 	var port int
@@ -90,7 +90,7 @@ func vmCreateCmd() *cobra.Command {
 			vm, err := c.CreateVM(client.CreateVMRequest{
 				Name:        args[0],
 				Image:       image,
-				Vcores:      vcores,
+				Vcpus:       vcpus,
 				MemoryMb:    memMb,
 				ExposedPort: port,
 			})
@@ -105,7 +105,7 @@ func vmCreateCmd() *cobra.Command {
 			return nil
 		},
 	}
-	cmd.Flags().IntVar(&vcores, "vcores", 2, "number of vCPUs")
+	cmd.Flags().Float64Var(&vcpus, "vcpus", 2, "number of vCPUs (fractional allowed, e.g. 0.5)")
 	cmd.Flags().IntVar(&memMb, "memory", 512, "memory in MB")
 	cmd.Flags().StringVar(&image, "image", "ubuntu", "root filesystem image")
 	cmd.Flags().IntVar(&port, "port", 8080, "exposed port")
@@ -219,8 +219,8 @@ func vmStatusCmd() *cobra.Command {
 			}
 
 			fmt.Printf("%s  %s\n", vm.Name, vm.Status)
-			fmt.Printf("subdomain: %s   vcores: %d   mem: %dMB\n",
-				vm.Subdomain, vm.Vcores, vm.MemoryMb)
+			fmt.Printf("subdomain: %s   vcpus: %g   mem: %dMB\n",
+				vm.Subdomain, vm.Vcpus, vm.MemoryMb)
 			if len(events) > 0 {
 				fmt.Println("\nrecent events:")
 				for _, e := range events {

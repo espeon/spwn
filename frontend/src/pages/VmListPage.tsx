@@ -150,26 +150,30 @@ function CreateVmDialog({
           </div>
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1.5">
-              <Label htmlFor="vm-vcpus">vcpus</Label>
-              <Input
-                id="vm-vcpus"
-                type="number"
-                min={0.5}
-                max={8}
-                step={0.5}
-                value={vcpus}
-                onChange={(e) => {
-                  setVcpus(Number(e.target.value));
-                  if (fieldErrors.vcpus)
-                    setFieldErrors((p) => ({ ...p, vcpus: "" }));
-                }}
-                aria-invalid={!!fieldErrors.vcpus}
-                className={
-                  fieldErrors.vcpus
-                    ? "border-destructive focus-visible:ring-destructive"
-                    : ""
-                }
-              />
+              <Label>vcpus</Label>
+              <div
+                className={`flex rounded-md border ${fieldErrors.vcpus ? "border-destructive" : "border-input"}`}
+              >
+                {[0.125, 0.25, 0.5, 1, 1.5, 2, 3, 4, 5, 6, 7, 8].map(
+                  (v, i, arr) => (
+                    <button
+                      key={v}
+                      type="button"
+                      onClick={() => {
+                        setVcpus(v);
+                        if (fieldErrors.vcpus)
+                          setFieldErrors((p) => ({ ...p, vcpus: "" }));
+                      }}
+                      className={`flex-1 py-2 text-xs font-medium transition-colors
+                      ${i === 0 ? "rounded-l-md" : ""}
+                      ${i === arr.length - 1 ? "rounded-r-md" : "border-r border-input"}
+                      ${vcpus === v ? "bg-primary text-primary-foreground" : "bg-background text-foreground hover:bg-muted"}`}
+                    >
+                      {v}
+                    </button>
+                  ),
+                )}
+              </div>
               {fieldErrors.vcpus && (
                 <p className="text-xs text-destructive">{fieldErrors.vcpus}</p>
               )}

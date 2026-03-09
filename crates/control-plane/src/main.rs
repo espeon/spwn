@@ -1,12 +1,12 @@
 use std::{convert::Infallible, path::PathBuf, str::FromStr, sync::Arc};
 
-use anyhow::Context;
-use axum::{Extension, routing::get};
-use axum::response::sse::{Event, KeepAlive, Sse};
-use tower_http::services::{ServeDir, ServeFile};
 use agent_proto::agent::control_plane_server::ControlPlaneServer;
+use anyhow::Context;
+use axum::response::sse::{Event, KeepAlive, Sse};
+use axum::{Extension, routing::get};
 use router_sync::CaddyClient;
 use tokio_stream::{StreamExt, wrappers::BroadcastStream};
+use tower_http::services::{ServeDir, ServeFile};
 use tracing::info;
 
 mod events;
@@ -26,29 +26,23 @@ async fn main() -> anyhow::Result<()> {
         )
         .init();
 
-    let listen_addr = std::env::var("LISTEN_ADDR")
-        .unwrap_or_else(|_| "0.0.0.0:3000".into());
-    let grpc_listen_addr = std::env::var("GRPC_LISTEN_ADDR")
-        .unwrap_or_else(|_| "0.0.0.0:5000".into());
+    let listen_addr = std::env::var("LISTEN_ADDR").unwrap_or_else(|_| "0.0.0.0:3000".into());
+    let grpc_listen_addr =
+        std::env::var("GRPC_LISTEN_ADDR").unwrap_or_else(|_| "0.0.0.0:5000".into());
     let database_url = std::env::var("DATABASE_URL")
         .unwrap_or_else(|_| "postgres://postgres:spwn@localhost/spwn".into());
-    let caddy_url = std::env::var("CADDY_URL")
-        .unwrap_or_else(|_| "http://localhost:2019".into());
+    let caddy_url = std::env::var("CADDY_URL").unwrap_or_else(|_| "http://localhost:2019".into());
     let static_files_path = PathBuf::from_str(
-        &std::env::var("STATIC_FILES_PATH")
-            .unwrap_or_else(|_| "/var/lib/spwn/static".into()),
+        &std::env::var("STATIC_FILES_PATH").unwrap_or_else(|_| "/var/lib/spwn/static".into()),
     )
     .expect("STATIC_FILES_PATH must be a valid path");
-    let invite_code = std::env::var("INVITE_CODE")
-        .context("INVITE_CODE env var is required")?;
-    let frontend_path = std::env::var("FRONTEND_PATH")
-        .unwrap_or_else(|_| "frontend/dist".into());
+    let invite_code = std::env::var("INVITE_CODE").context("INVITE_CODE env var is required")?;
+    let frontend_path = std::env::var("FRONTEND_PATH").unwrap_or_else(|_| "frontend/dist".into());
     let session_ttl_secs: i64 = std::env::var("SESSION_TTL_SECS")
         .ok()
         .and_then(|s| s.parse().ok())
         .unwrap_or(604800);
-    let public_url = std::env::var("PUBLIC_URL")
-        .unwrap_or_else(|_| "https://spwn.dev".into());
+    let public_url = std::env::var("PUBLIC_URL").unwrap_or_else(|_| "https://spwn.run".into());
 
     info!("connecting to database");
     let pool = db::connect(&database_url).await?;
@@ -91,7 +85,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/events", get(vm_events_sse))
         .fallback_service(
             ServeDir::new(&frontend_path)
-                .not_found_service(ServeFile::new(format!("{frontend_path}/index.html")))
+                .not_found_service(ServeFile::new(format!("{frontend_path}/index.html"))),
         )
         .layer(Extension(pool.clone()))
         .layer(Extension(event_tx));
@@ -99,8 +93,8 @@ async fn main() -> anyhow::Result<()> {
     let http_listener = tokio::net::TcpListener::bind(&listen_addr).await?;
     info!("control-plane HTTP listening on {listen_addr}");
 
-    let grpc_listen: std::net::SocketAddr = grpc_listen_addr.parse()
-        .context("parse GRPC_LISTEN_ADDR")?;
+    let grpc_listen: std::net::SocketAddr =
+        grpc_listen_addr.parse().context("parse GRPC_LISTEN_ADDR")?;
     info!("control-plane gRPC listening on {grpc_listen_addr}");
 
     tokio::select! {
@@ -120,13 +114,11 @@ async fn vm_events_sse(
     _account_id: auth::AccountId,
     Extension(tx): Extension<events::EventBroadcast>,
 ) -> Sse<impl tokio_stream::Stream<Item = Result<Event, Infallible>>> {
-    let stream = BroadcastStream::new(tx.subscribe()).filter_map(|result| {
-        match result {
-            Ok(event) => serde_json::to_string(&event).ok().map(|data| {
-                Ok(Event::default().event("vm_status").data(data))
-            }),
-            Err(_) => None,
-        }
+    let stream = BroadcastStream::new(tx.subscribe()).filter_map(|result| match result {
+        Ok(event) => serde_json::to_string(&event)
+            .ok()
+            .map(|data| Ok(Event::default().event("vm_status").data(data))),
+        Err(_) => None,
     });
     Sse::new(stream).keep_alive(KeepAlive::default())
 }
@@ -134,17 +126,29 @@ async fn vm_events_sse(
 async fn rebuild_caddy_routes(pool: &db::PgPool, caddy: &CaddyClient) {
     let vms = match db::get_all_vms(pool).await {
         Ok(v) => v,
-        Err(e) => { tracing::error!("failed to load vms for caddy rebuild: {e}"); return; }
+        Err(e) => {
+            tracing::error!("failed to load vms for caddy rebuild: {e}");
+            return;
+        }
     };
 
-    let routes: Vec<router_sync::RouteEntry> = vms.into_iter().map(|vm| {
-        let target = if vm.status == "running" {
-            router_sync::RouteTarget::Vm { ip: vm.ip_address.clone(), port: vm.exposed_port as u16 }
-        } else {
-            router_sync::RouteTarget::Stopped
-        };
-        router_sync::RouteEntry { subdomain: vm.subdomain, target }
-    }).collect();
+    let routes: Vec<router_sync::RouteEntry> = vms
+        .into_iter()
+        .map(|vm| {
+            let target = if vm.status == "running" {
+                router_sync::RouteTarget::Vm {
+                    ip: vm.ip_address.clone(),
+                    port: vm.exposed_port as u16,
+                }
+            } else {
+                router_sync::RouteTarget::Stopped
+            };
+            router_sync::RouteEntry {
+                subdomain: vm.subdomain,
+                target,
+            }
+        })
+        .collect();
 
     if let Err(e) = caddy.rebuild_all_routes(&routes).await {
         tracing::error!("failed to rebuild caddy routes: {e}");

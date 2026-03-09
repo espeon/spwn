@@ -25,7 +25,7 @@ raw braindump. none of this is planned or promised. just things that would be co
 ## networking & connectivity
 
 - **custom domains** — `spwn domain add <vm> myapp.com` with automatic cert provisioning via caddy
-- **wildcard ports** — `<port>-<vm>.spwn.dev` routes to any port without explicit configuration
+- **wildcard ports** — `<port>-<vm>.spwn.run` routes to any port without explicit configuration
 - **TCP passthrough** — raw TCP forwarding for non-HTTP services (databases, game servers, etc.)
 - **UDP forwarding** — for DNS servers, game servers, wireguard endpoints inside VMs
 - **inter-VM networking** — private network between your VMs. `spwn net create mynet` + `spwn net join mynet <vm>`
@@ -43,7 +43,7 @@ raw braindump. none of this is planned or promised. just things that would be co
 - **git push deploy** — `git remote add spwn spwn://<vm>/app` → push triggers a build + restart inside the VM
 - **live sync** — `spwn sync <local-dir> <vm>:<remote-dir>` watches for changes and rsyncs in real-time
 - **VS Code remote SSH config** — `spwn vscode <vm>` generates/updates `~/.ssh/config` for one-click Remote-SSH
-- **GitHub Codespaces-style URLs** — open a web IDE (code-server) running inside the VM at `ide-<vm>.spwn.dev`
+- **GitHub Codespaces-style URLs** — open a web IDE (code-server) running inside the VM at `ide-<vm>.spwn.run`
 - **preview environments** — `spwn preview <branch>` spins up a VM from a git branch with a unique URL
 - **environment variables** — `spwn env set <vm> KEY=value` injects env vars accessible inside the VM
 - **secrets management** — encrypted at rest, injected at boot, never visible in API responses
@@ -143,7 +143,7 @@ raw braindump. none of this is planned or promised. just things that would be co
 - **achievement system** — "first snapshot!", "survived 30 days uptime", "used all 5 VM slots"
 - **seasonal themes** — holiday themes for the dashboard (halloween, winter, etc.)
 - **VM names generator** — themed name generators: space, fantasy, cyberpunk, cats
-- **status page** — personal public status page showing your VMs' health at `status.spwn.dev/<username>`
+- **status page** — personal public status page showing your VMs' health at `status.spwn.run/<username>`
 - **terminal recording** — record SSH sessions as asciinema casts, share with a link
 - **VM stickers** — assign emoji/icons to VMs, visible in dashboard and CLI
 - **sound effects** — optional terminal bell/sound on VM state changes (start → rocket sound, crash → explosion)
