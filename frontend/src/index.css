@@ -639,6 +639,41 @@
   --sidebar-ring: hsl(235 20.34% 29.41%);
 }
 
+/* ── tokyo night light ────────────────────────────────────────────────────── */
+/* bg: #e6e7ed  panel: #d6d8df  fg: #343b58  muted: #707280                 */
+/* blue: #2959aa  red: #8c4351  green: #33635c  border: #c1c2c7             */
+
+[data-theme="tokyo-night-light"] {
+  --background: hsl(228 14.29% 91.37%);
+  --foreground: hsl(234 29.03% 27.45%);
+  --card: hsl(228 11.11% 86.27%);
+  --card-foreground: hsl(234 29.03% 27.45%);
+  --popover: hsl(228 11.11% 86.27%);
+  --popover-foreground: hsl(234 29.03% 27.45%);
+  --primary: hsl(220 59.15% 40.98%);
+  --primary-foreground: hsl(0 0% 100%);
+  --secondary: hsl(228 10.53% 81.96%);
+  --secondary-foreground: hsl(234 29.03% 27.45%);
+  --muted: hsl(228 10.53% 81.96%);
+  --muted-foreground: hsl(234 5.41% 44.31%);
+  --accent: hsl(228 10.53% 81.96%);
+  --accent-foreground: hsl(234 29.03% 27.45%);
+  --destructive: hsl(349 33.87% 37.45%);
+  --destructive-foreground: hsl(349 33.87% 37.45%);
+  --border: hsl(228 9.52% 76.47%);
+  --input: hsl(228 9.52% 76.47%);
+  --ring: hsl(220 59.15% 40.98%);
+  --radius: 0.625rem;
+  --sidebar: hsl(228 11.11% 86.27%);
+  --sidebar-foreground: hsl(234 29.03% 27.45%);
+  --sidebar-primary: hsl(220 59.15% 40.98%);
+  --sidebar-primary-foreground: hsl(0 0% 100%);
+  --sidebar-accent: hsl(228 14.29% 91.37%);
+  --sidebar-accent-foreground: hsl(234 29.03% 27.45%);
+  --sidebar-border: hsl(228 9.52% 76.47%);
+  --sidebar-ring: hsl(228 9.52% 76.47%);
+}
+
 /* ── ayu dark ─────────────────────────────────────────────────────────────── */
 /* bg: #0D1017  panel: #131721  fg: #BFBDB6  accent: #E6B450                */
 /* keyword: #FF8F40  string: #AAD94C  func: #FFB454  tag: #39BAE6           */

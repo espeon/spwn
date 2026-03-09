@@ -115,7 +115,7 @@
     "id": "dracula",
     "name": "Dracula",
     "description": "The most famous dark theme",
-    "category": "Dracula",
+    "category": "Other",
     "baseText": "#f8f8f2",
     "preview": ["#282a36", "#ff5555", "#50fa7b", "#f1fa8c", "#bd93f9"]
   },
@@ -134,6 +134,14 @@
     "category": "Tokyo Night",
     "baseText": "#c0caf5",
     "preview": ["#24283b", "#f7768e", "#9ece6a", "#e0af68", "#bb9af7"]
+  },
+  {
+    "id": "tokyo-night-light",
+    "name": "Light",
+    "description": "Soft light variant",
+    "category": "Tokyo Night",
+    "baseText": "#343b58",
+    "preview": ["#e6e7ed", "#8c4351", "#33635c", "#8f5e15", "#2959aa"]
   },
   {
     "id": "ayu-dark",
