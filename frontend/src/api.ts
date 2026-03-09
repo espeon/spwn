@@ -12,6 +12,7 @@ export interface Account {
   username: string;
   display_name: string | null;
   has_avatar: boolean;
+  theme: string;
   vcpu_limit: number;
   mem_limit_mb: number;
   vm_limit: number;
@@ -93,6 +94,13 @@ export function updateProfile(req: UpdateProfileRequest): Promise<void> {
   return request("/auth/me", {
     method: "PATCH",
     body: JSON.stringify(req),
+  });
+}
+
+export function updateTheme(theme: string): Promise<void> {
+  return request("/auth/me/theme", {
+    method: "PATCH",
+    body: JSON.stringify({ theme }),
   });
 }
 

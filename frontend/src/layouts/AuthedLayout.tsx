@@ -1,5 +1,6 @@
 import { Outlet } from "@tanstack/react-router";
 import { useVmEvents } from "@/hooks/useVmEvents";
+import { useTheme } from "@/hooks/useTheme";
 import {
   SidebarInset,
   SidebarProvider,
@@ -9,6 +10,7 @@ import { AppSidebar } from "@/components/Sidebar";
 
 export function AuthedLayout() {
   useVmEvents();
+  useTheme();
 
   return (
     <SidebarProvider

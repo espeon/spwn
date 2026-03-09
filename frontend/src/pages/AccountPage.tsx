@@ -7,8 +7,10 @@ import {
   uploadAvatar,
   avatarUrl,
   changeUsername,
+  updateTheme,
   ApiError,
 } from "@/api";
+import themes from "@/themes.json";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
 import { Button } from "@/components/ui/button";
@@ -60,6 +62,7 @@ export function AccountPage() {
 
   const [profileError, setProfileError] = useState<string | null>(null);
   const [avatarError, setAvatarError] = useState<string | null>(null);
+  const [themeError, setThemeError] = useState<string | null>(null);
 
   const [displayNameDialogOpen, setDisplayNameDialogOpen] = useState(false);
   const [displayName, setDisplayName] = useState("");
@@ -102,6 +105,15 @@ export function AccountPage() {
         setUsernameError("something went wrong");
       }
     },
+  });
+
+  const themeMutation = useMutation({
+    mutationFn: (themeId: string) => updateTheme(themeId),
+    onSuccess: async () => {
+      await qc.invalidateQueries({ queryKey: ["me"] });
+      setThemeError(null);
+    },
+    onError: () => setThemeError("failed to update theme"),
   });
 
   const avatarMutation = useMutation({
@@ -374,6 +386,62 @@ export function AccountPage() {
               limit={me?.mem_limit_mb ?? 0}
               label="memory (mb)"
             />
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm font-medium">theme</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            {Array.from(new Set(themes.map((t) => t.category))).map(
+              (category) => (
+                <div key={category}>
+                  <p className="text-sm text-muted-foreground lowercase font-medium mb-2">
+                    {category}
+                  </p>
+                  <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+                    {themes
+                      .filter((t) => t.category === category)
+                      .map((t) => (
+                        <button
+                          key={t.id}
+                          onClick={() => themeMutation.mutate(t.id)}
+                          disabled={themeMutation.isPending}
+                          style={{
+                            backgroundColor: t.preview[0],
+                            color: t.preview[4],
+                            borderColor:
+                              me?.theme === t.id
+                                ? t.preview[2]
+                                : t.preview[3] + "44",
+                          }}
+                          className="text-left rounded-md border-2 px-3 py-2 text-xs transition-opacity hover:opacity-90"
+                        >
+                          <span
+                            className="block font-medium"
+                            style={{ color: t.baseText }}
+                          >
+                            {t.name}
+                          </span>
+                          <div className="flex justify-end gap-1 mt-1.5">
+                            {t.preview.slice(1).map((color) => (
+                              <span
+                                key={color}
+                                className="block w-3 h-3 rounded-full"
+                                style={{ backgroundColor: color }}
+                              />
+                            ))}
+                          </div>
+                        </button>
+                      ))}
+                  </div>
+                </div>
+              ),
+            )}
+            {themeError && (
+              <p className="text-xs text-destructive">{themeError}</p>
+            )}
           </CardContent>
         </Card>
       </div>

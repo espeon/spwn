@@ -467,6 +467,7 @@ pub struct AccountRow {
     pub username: String,
     pub display_name: Option<String>,
     pub avatar_bytes: Option<Vec<u8>>,
+    pub theme: String,
     pub vcpu_limit: i32,
     pub mem_limit_mb: i32,
     pub vm_limit: i32,
@@ -479,6 +480,10 @@ pub struct NewAccount {
     pub password_hash: String,
     pub username: String,
     pub created_at: i64,
+}
+
+pub struct UpdateTheme {
+    pub theme: String,
 }
 
 pub struct UpdateAccountProfile {
@@ -520,6 +525,7 @@ pub async fn create_account(pool: &PgPool, account: &NewAccount) -> Result<Accou
         username: account.username.clone(),
         display_name: None,
         avatar_bytes: None,
+        theme: "catppuccin-latte".into(),
         vcpu_limit: 8,
         mem_limit_mb: 12288,
         vm_limit: 5,
@@ -529,7 +535,7 @@ pub async fn create_account(pool: &PgPool, account: &NewAccount) -> Result<Accou
 
 pub async fn get_account_by_email(pool: &PgPool, email: &str) -> Result<Option<AccountRow>> {
     let row = sqlx::query(
-        "SELECT id, email, password_hash, username, display_name, avatar_bytes,
+        "SELECT id, email, password_hash, username, display_name, avatar_bytes, theme,
          vcpu_limit, mem_limit_mb, vm_limit, created_at
          FROM accounts WHERE email = $1",
     )
@@ -541,7 +547,7 @@ pub async fn get_account_by_email(pool: &PgPool, email: &str) -> Result<Option<A
 
 pub async fn get_account_by_username(pool: &PgPool, username: &str) -> Result<Option<AccountRow>> {
     let row = sqlx::query(
-        "SELECT id, email, password_hash, username, display_name, avatar_bytes,
+        "SELECT id, email, password_hash, username, display_name, avatar_bytes, theme,
          vcpu_limit, mem_limit_mb, vm_limit, created_at
          FROM accounts WHERE username = $1",
     )
@@ -553,7 +559,7 @@ pub async fn get_account_by_username(pool: &PgPool, username: &str) -> Result<Op
 
 pub async fn get_account(pool: &PgPool, id: &str) -> Result<Option<AccountRow>> {
     let row = sqlx::query(
-        "SELECT id, email, password_hash, username, display_name, avatar_bytes,
+        "SELECT id, email, password_hash, username, display_name, avatar_bytes, theme,
          vcpu_limit, mem_limit_mb, vm_limit, created_at
          FROM accounts WHERE id = $1",
     )
@@ -626,6 +632,15 @@ pub async fn update_username(
     Ok(renamed)
 }
 
+pub async fn update_theme(pool: &PgPool, id: &str, update: &UpdateTheme) -> Result<()> {
+    sqlx::query("UPDATE accounts SET theme = $1 WHERE id = $2")
+        .bind(&update.theme)
+        .bind(id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
 pub async fn update_account_profile(
     pool: &PgPool,
     id: &str,
@@ -648,6 +663,7 @@ fn row_to_account(r: sqlx::postgres::PgRow) -> AccountRow {
         username: r.get("username"),
         display_name: r.get("display_name"),
         avatar_bytes: r.get("avatar_bytes"),
+        theme: r.get("theme"),
         vcpu_limit: r.get("vcpu_limit"),
         mem_limit_mb: r.get("mem_limit_mb"),
         vm_limit: r.get("vm_limit"),

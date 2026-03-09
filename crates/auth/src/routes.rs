@@ -39,6 +39,11 @@ struct UpdateProfileRequest {
     display_name: Option<String>,
 }
 
+#[derive(Deserialize)]
+struct UpdateThemeRequest {
+    theme: String,
+}
+
 #[derive(Serialize)]
 struct MeResponse {
     id: String,
@@ -46,6 +51,7 @@ struct MeResponse {
     username: String,
     display_name: Option<String>,
     has_avatar: bool,
+    theme: String,
     vm_limit: i32,
     vcpu_limit: i32,
     mem_limit_mb: i32,
@@ -59,7 +65,8 @@ pub fn auth_router(state: AuthState) -> Router {
         .route("/auth/me", get(me))
         .route("/auth/me", patch(update_profile))
         .route("/auth/me/avatar", post(upload_avatar))
-        .route("/auth/avatar/:account_id", get(get_avatar))
+        .route("/auth/me/theme", patch(update_theme))
+        .route("/auth/avatar/{account_id}", get(get_avatar))
         .with_state(state)
 }
 
@@ -167,12 +174,25 @@ async fn me(State(state): State<AuthState>, account_id: AccountId) -> impl IntoR
             username: acc.username,
             display_name: acc.display_name,
             has_avatar: acc.avatar_bytes.is_some(),
+            theme: acc.theme,
             vm_limit: acc.vm_limit,
             vcpu_limit: acc.vcpu_limit,
             mem_limit_mb: acc.mem_limit_mb,
         })
         .into_response(),
         Ok(None) => StatusCode::UNAUTHORIZED.into_response(),
+        Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    }
+}
+
+async fn update_theme(
+    State(state): State<AuthState>,
+    account_id: AccountId,
+    Json(req): Json<UpdateThemeRequest>,
+) -> impl IntoResponse {
+    let update = db::UpdateTheme { theme: req.theme };
+    match db::update_theme(&state.pool, &account_id.0, &update).await {
+        Ok(_) => StatusCode::NO_CONTENT.into_response(),
         Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     }
 }

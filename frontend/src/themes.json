@@ -1,0 +1,114 @@
+[
+  {
+    "id": "catppuccin-latte",
+    "name": "Latte",
+    "description": "Warm light flavour",
+    "category": "Catppuccin",
+    "baseText": "#4c4f69",
+    "preview": ["#eff1f5", "#dc8a78", "#40a02b", "#d20f39", "#1e66f5"]
+  },
+  {
+    "id": "catppuccin-frappe",
+    "name": "Frappé",
+    "description": "Cool medium-dark flavour",
+    "category": "Catppuccin",
+    "baseText": "#c6d0f5",
+    "preview": ["#303446", "#e78284", "#a6d189", "#e78284", "#8caaee"]
+  },
+  {
+    "id": "catppuccin-macchiato",
+    "name": "Macchiato",
+    "description": "Warm medium-dark flavour",
+    "category": "Catppuccin",
+    "baseText": "#cad3f5",
+    "preview": ["#24273a", "#ed8796", "#a6da95", "#ed8796", "#8aadf4"]
+  },
+  {
+    "id": "catppuccin-mocha",
+    "name": "Mocha",
+    "description": "Darkest flavour",
+    "category": "Catppuccin",
+    "baseText": "#cdd6f4",
+    "preview": ["#1e1e2e", "#f38ba8", "#a6e3a1", "#f38ba8", "#89b4fa"]
+  },
+  {
+    "id": "evergarden-fall",
+    "name": "Fall",
+    "description": "Dark with warm amber tones",
+    "category": "Evergarden",
+    "baseText": "#f8f9e8",
+    "preview": ["#232a2e", "#f57f82", "#cbe3b3", "#f5d098", "#b2caed"]
+  },
+  {
+    "id": "evergarden-spring",
+    "name": "Spring",
+    "description": "Dark with cool green tones",
+    "category": "Evergarden",
+    "baseText": "#f8f9e8",
+    "preview": ["#2b3438", "#f57f82", "#cbe3b3", "#f5d098", "#b2caed"]
+  },
+  {
+    "id": "evergarden-summer",
+    "name": "Summer",
+    "description": "Light with muted natural tones",
+    "category": "Evergarden",
+    "baseText": "#171c1f",
+    "preview": ["#d7e1eb", "#c0696b", "#91ac75", "#bc9c6b", "#8ca0bb"]
+  },
+  {
+    "id": "evergarden-winter",
+    "name": "Winter",
+    "description": "Darkest, coldest flavour",
+    "category": "Evergarden",
+    "baseText": "#f8f9e8",
+    "preview": ["#1e2528", "#f57f82", "#cbe3b3", "#f5d098", "#b2caed"]
+  },
+  {
+    "id": "nord",
+    "name": "Nord",
+    "description": "Arctic, north-bluish palette",
+    "category": "Other",
+    "baseText": "#eceff4",
+    "preview": ["#2e3440", "#bf616a", "#a3be8c", "#ebcb8b", "#81a1c1"]
+  },
+  {
+    "id": "gruvbox-dark",
+    "name": "Gruvbox Dark",
+    "description": "Retro groove dark scheme",
+    "category": "Other",
+    "baseText": "#ebdbb2",
+    "preview": ["#282828", "#fb4934", "#b8bb26", "#fabd2f", "#83a598"]
+  },
+  {
+    "id": "github-dark",
+    "name": "GitHub Dark",
+    "description": "GitHub's dark theme",
+    "category": "Other",
+    "baseText": "#e6edf3",
+    "preview": ["#0d1117", "#f85149", "#3fb950", "#d29922", "#58a6ff"]
+  },
+  {
+    "id": "rose-pine",
+    "name": "Rosé Pine",
+    "description": "Soho vibes, dark",
+    "category": "Rosé Pine",
+    "baseText": "#e0def4",
+    "preview": ["#191724", "#eb6f92", "#31748f", "#f6c177", "#9ccfd8"]
+  },
+  {
+    "id": "rose-pine-moon",
+    "name": "Moon",
+    "description": "Softer dark variant",
+    "category": "Rosé Pine",
+    "baseText": "#e0def4",
+    "preview": ["#232136", "#eb6f92", "#3e8fb0", "#f6c177", "#9ccfd8"]
+  },
+  {
+    "id": "rose-pine-dawn",
+    "name": "Dawn",
+    "description": "Light variant",
+    "category": "Rosé Pine",
+    "baseText": "#575279",
+    "preview": ["#faf4ed", "#b4637a", "#286983", "#ea9d34", "#56949f"]
+  }
+]
