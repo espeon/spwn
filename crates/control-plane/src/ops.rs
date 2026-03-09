@@ -215,6 +215,62 @@ impl api::VmOps for ControlPlaneOps {
         Ok(())
     }
 
+    async fn update_vm(
+        &self,
+        vm_id: &str,
+        account_id: &str,
+        patch: api::VmPatch,
+    ) -> anyhow::Result<db::VmRow> {
+        if let Some(new_name) = &patch.name {
+            let account = db::get_account(&self.pool, account_id)
+                .await?
+                .ok_or_else(|| anyhow!("account not found: {account_id}"))?;
+            let new_subdomain =
+                subdomain::generate(&self.pool, new_name, &account.username).await?;
+
+            let current = db::get_vm(&self.pool, vm_id)
+                .await?
+                .ok_or_else(|| anyhow!("vm not found: {vm_id}"))?;
+            let old_subdomain = current.subdomain.clone();
+
+            db::rename_vm(&self.pool, vm_id, new_name, &new_subdomain).await?;
+
+            let set_result = if current.status == "running" {
+                self.caddy
+                    .set_vm_route(&new_subdomain, &current.ip_address, current.exposed_port as u16)
+                    .await
+            } else {
+                self.caddy.set_stopped_route(&new_subdomain).await
+            };
+            if let Err(e) = set_result {
+                error!("rename: failed to set caddy route {new_subdomain}: {e}");
+            }
+            if let Err(e) = self.caddy.delete_route(&old_subdomain).await {
+                error!("rename: failed to delete old caddy route {old_subdomain}: {e}");
+            }
+        }
+
+        if let Some(port) = patch.exposed_port {
+            let current = db::get_vm(&self.pool, vm_id)
+                .await?
+                .ok_or_else(|| anyhow!("vm not found: {vm_id}"))?;
+            db::update_vm_port(&self.pool, vm_id, port).await?;
+            if current.status == "running" {
+                if let Err(e) = self
+                    .caddy
+                    .set_vm_route(&current.subdomain, &current.ip_address, port as u16)
+                    .await
+                {
+                    error!("update_port: failed to update caddy route for {vm_id}: {e}");
+                }
+            }
+        }
+
+        db::get_vm(&self.pool, vm_id)
+            .await?
+            .ok_or_else(|| anyhow!("vm {vm_id} not found after update"))
+    }
+
     async fn change_username(&self, account_id: &str, new_username: &str) -> anyhow::Result<()> {
         let new_username = new_username.to_lowercase();
 

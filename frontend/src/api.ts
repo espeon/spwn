@@ -164,4 +164,20 @@ export function snapshotVm(id: string): Promise<void> {
   return request(`/api/vms/${id}/snapshot`, { method: "POST" });
 }
 
+export function cliAuthorize(code: string): Promise<void> {
+  return request("/auth/cli/authorize", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ code }),
+  });
+}
+
+export function cliDeny(code: string): Promise<void> {
+  return request("/auth/cli/deny", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ code }),
+  });
+}
+
 export { ApiError };

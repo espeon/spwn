@@ -830,6 +830,219 @@ pub async fn check_quota_and_reserve(
     Ok(())
 }
 
+// ── vm events ─────────────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone)]
+pub struct VmEventRow {
+    pub id: i64,
+    pub vm_id: String,
+    pub event: String,
+    pub metadata: Option<String>,
+    pub created_at: i64,
+}
+
+pub async fn get_vm_by_name(
+    pool: &PgPool,
+    account_id: &str,
+    name: &str,
+) -> Result<Option<VmRow>> {
+    let row = sqlx::query(
+        "SELECT id, account_id, name, status, subdomain, vcores, memory_mb,
+         kernel_path, rootfs_path, overlay_path, real_init, ip_address, exposed_port, tap_device, pid,
+         socket_path, host_id, created_at, last_started_at
+         FROM vms WHERE account_id = $1 AND name = $2",
+    )
+    .bind(account_id)
+    .bind(name)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row.map(row_to_vm))
+}
+
+pub async fn list_vm_events(
+    pool: &PgPool,
+    vm_id: &str,
+    limit: i64,
+    before: Option<i64>,
+) -> Result<Vec<VmEventRow>> {
+    let rows = if let Some(cursor) = before {
+        sqlx::query(
+            "SELECT id, vm_id, event, metadata, created_at FROM vm_events
+             WHERE vm_id = $1 AND id < $2 ORDER BY id DESC LIMIT $3",
+        )
+        .bind(vm_id)
+        .bind(cursor)
+        .bind(limit)
+        .fetch_all(pool)
+        .await?
+    } else {
+        sqlx::query(
+            "SELECT id, vm_id, event, metadata, created_at FROM vm_events
+             WHERE vm_id = $1 ORDER BY id DESC LIMIT $2",
+        )
+        .bind(vm_id)
+        .bind(limit)
+        .fetch_all(pool)
+        .await?
+    };
+    Ok(rows
+        .into_iter()
+        .map(|r| VmEventRow {
+            id: r.get("id"),
+            vm_id: r.get("vm_id"),
+            event: r.get("event"),
+            metadata: r.get("metadata"),
+            created_at: r.get("created_at"),
+        })
+        .collect())
+}
+
+pub async fn rename_vm(
+    pool: &PgPool,
+    vm_id: &str,
+    new_name: &str,
+    new_subdomain: &str,
+) -> Result<()> {
+    sqlx::query("UPDATE vms SET name = $1, subdomain = $2 WHERE id = $3")
+        .bind(new_name)
+        .bind(new_subdomain)
+        .bind(vm_id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+pub async fn update_vm_port(pool: &PgPool, vm_id: &str, exposed_port: i32) -> Result<()> {
+    sqlx::query("UPDATE vms SET exposed_port = $1 WHERE id = $2")
+        .bind(exposed_port)
+        .bind(vm_id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+// ── CLI auth codes ─────────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone)]
+pub struct CliAuthCode {
+    pub code: String,
+    pub account_id: Option<String>,
+    pub status: String,
+    pub expires_at: i64,
+}
+
+pub async fn create_cli_auth_code(pool: &PgPool, code: &str, expires_at: i64) -> Result<()> {
+    sqlx::query(
+        "INSERT INTO cli_auth_codes (code, status, expires_at) VALUES ($1, 'pending', $2)",
+    )
+    .bind(code)
+    .bind(expires_at)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+pub async fn get_cli_auth_code(pool: &PgPool, code: &str) -> Result<Option<CliAuthCode>> {
+    let row = sqlx::query(
+        "SELECT code, account_id, status, expires_at FROM cli_auth_codes WHERE code = $1",
+    )
+    .bind(code)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row.map(|r| CliAuthCode {
+        code: r.get("code"),
+        account_id: r.get("account_id"),
+        status: r.get("status"),
+        expires_at: r.get("expires_at"),
+    }))
+}
+
+pub async fn authorize_cli_auth_code(
+    pool: &PgPool,
+    code: &str,
+    account_id: &str,
+) -> Result<()> {
+    sqlx::query(
+        "UPDATE cli_auth_codes SET status = 'authorized', account_id = $1 WHERE code = $2",
+    )
+    .bind(account_id)
+    .bind(code)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+pub async fn deny_cli_auth_code(pool: &PgPool, code: &str) -> Result<()> {
+    sqlx::query("UPDATE cli_auth_codes SET status = 'denied' WHERE code = $1")
+        .bind(code)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+// ── API tokens ─────────────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone)]
+pub struct ApiTokenRow {
+    pub id: String,
+    pub account_id: String,
+    pub token_hash: String,
+    pub name: String,
+    pub created_at: i64,
+    pub last_used_at: Option<i64>,
+}
+
+pub struct NewApiToken {
+    pub id: String,
+    pub account_id: String,
+    pub token_hash: String,
+    pub name: String,
+}
+
+pub async fn create_api_token(pool: &PgPool, token: &NewApiToken) -> Result<ApiTokenRow> {
+    let now = unix_now();
+    sqlx::query(
+        "INSERT INTO api_tokens (id, account_id, token_hash, name, created_at)
+         VALUES ($1, $2, $3, $4, $5)",
+    )
+    .bind(&token.id)
+    .bind(&token.account_id)
+    .bind(&token.token_hash)
+    .bind(&token.name)
+    .bind(now)
+    .execute(pool)
+    .await?;
+    Ok(ApiTokenRow {
+        id: token.id.clone(),
+        account_id: token.account_id.clone(),
+        token_hash: token.token_hash.clone(),
+        name: token.name.clone(),
+        created_at: now,
+        last_used_at: None,
+    })
+}
+
+pub async fn get_account_id_by_token_hash(
+    pool: &PgPool,
+    token_hash: &str,
+) -> Result<Option<String>> {
+    let row =
+        sqlx::query("SELECT account_id FROM api_tokens WHERE token_hash = $1")
+            .bind(token_hash)
+            .fetch_optional(pool)
+            .await?;
+    Ok(row.map(|r| r.get("account_id")))
+}
+
+pub async fn touch_api_token(pool: &PgPool, token_hash: &str, now: i64) -> Result<()> {
+    sqlx::query("UPDATE api_tokens SET last_used_at = $1 WHERE token_hash = $2")
+        .bind(now)
+        .bind(token_hash)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
 fn unix_now() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

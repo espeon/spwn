@@ -2,8 +2,8 @@
 
 firecracker-based hobbyist VM platform. users get a fixed resource pool (8 vcores, 12gb ram, 5 vms), persistent microVMs, and wildcard subdomain routing via caddy.
 
-full architecture plan: `.claude/plan-v2.md`
-phase plans: `.claude/phase-{1..8}.md`
+full architecture plan: `.claude/plan-v3.md` (previous: `.claude/plan-v2.md`)
+phase plans: `.claude/phase-{1..5}.md` (completed), new phases in plan-v3
 
 ---
 
@@ -19,6 +19,7 @@ crates/router-sync   caddy admin API client
 crates/agent-proto   .proto + tonic generated code (shared by agent + control-plane)
 crates/host-agent    firecracker process management + gRPC server (needs root)
 crates/control-plane external HTTP API + scheduler + gRPC client to agents
+services/ssh-gateway Go sidecar (wish/bubbletea/lipgloss), SSH TUI + shell relay via gRPC
 frontend/            react + tanstack router/query (vite, pnpm)
 ```
 
@@ -46,21 +47,22 @@ just check      # cargo check across workspace
 
 ## key env vars
 
-| var | used by | default |
-|---|---|---|
-| `DATABASE_URL` | cp, agent | postgres://postgres:spwn@localhost/spwn |
-| `LISTEN_ADDR` | cp | 0.0.0.0:3019 |
-| `GRPC_LISTEN_ADDR` | cp | 0.0.0.0:5000 |
-| `INVITE_CODE` | cp | *(required)* |
-| `FRONTEND_PATH` | cp | frontend/dist |
-| `CADDY_URL` | cp | http://localhost:2019 |
-| `STATIC_FILES_PATH` | cp | /var/lib/spwn/static |
-| `AGENT_LISTEN_ADDR` | agent | 0.0.0.0:4000 |
-| `AGENT_PUBLIC_ADDR` | agent | http://localhost:4000 |
-| `CONTROL_PLANE_URL` | agent | http://localhost:5000 |
-| `KERNEL_PATH` | agent | /tmp/vmlinux |
-| `ROOTFS_PATH` | agent | /tmp/rootfs.sqfs |
-| `FIRECRACKER_BIN` | agent | ~/.local/bin/firecracker |
+| var                 | used by   | default                                 |
+| ------------------- | --------- | --------------------------------------- |
+| `DATABASE_URL`      | cp, agent | postgres://postgres:spwn@localhost/spwn |
+| `LISTEN_ADDR`       | cp        | 0.0.0.0:3019                            |
+| `GRPC_LISTEN_ADDR`  | cp        | 0.0.0.0:5000                            |
+| `INVITE_CODE`       | cp        | _(required)_                            |
+| `PUBLIC_URL`        | cp        | https://spwn.dev                        |
+| `FRONTEND_PATH`     | cp        | frontend/dist                           |
+| `CADDY_URL`         | cp        | http://localhost:2019                   |
+| `STATIC_FILES_PATH` | cp        | /var/lib/spwn/static                    |
+| `AGENT_LISTEN_ADDR` | agent     | 0.0.0.0:4000                            |
+| `AGENT_PUBLIC_ADDR` | agent     | http://localhost:4000                   |
+| `CONTROL_PLANE_URL` | agent     | http://localhost:5000                   |
+| `KERNEL_PATH`       | agent     | /tmp/vmlinux                            |
+| `ROOTFS_PATH`       | agent     | /tmp/rootfs.sqfs                        |
+| `FIRECRACKER_BIN`   | agent     | ~/.local/bin/firecracker                |
 
 ---
 
@@ -74,6 +76,7 @@ just test
 ```
 
 tests live in:
+
 - `crates/db/tests/integration.rs` — account/session CRUD, quota enforcement
 - `crates/auth/tests/integration.rs` — signup/login/logout/me routes
 
@@ -113,8 +116,14 @@ tests live in:
 - phase 4b (control plane + host agent split): **done**
 - phase 5 (auth + accounts): **done**
 - phase 6 (frontend): **done**
-- phase 7 (billing — lemonsqueezy): not started
-- phase 8 (hardening): not started
+- phase 7 (CLI): not started
+- phase 8 (SSH gateway — Go/charm): not started
+- phase 9 (VM cloning): not started
+- phase 10 (proper multi-node): not started
+- phase 11 (proper testing + cargo-nextest): not started
+- phase 12 (playful features — templates, dotfiles, sharing): not started
+- phase 13 (billing — lemonsqueezy): not started
+- phase 14 (hardening): not started
 
 ---
 
@@ -123,7 +132,7 @@ tests live in:
 use feature branches:
 
 ```bash
-git checkout -b feature/descriptive-name
+git checkout -b natb/feature-descriptive-name
 # branch prefixes: feature/, fix/, docs/, refactor/, test/
 ```
 

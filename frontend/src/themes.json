@@ -88,38 +88,6 @@
     "preview": ["#faf4ed", "#b4637a", "#286983", "#ea9d34", "#56949f"]
   },
   {
-    "id": "nord",
-    "name": "Nord",
-    "description": "Arctic, north-bluish palette",
-    "category": "Other",
-    "baseText": "#eceff4",
-    "preview": ["#2e3440", "#bf616a", "#a3be8c", "#ebcb8b", "#81a1c1"]
-  },
-  {
-    "id": "gruvbox-dark",
-    "name": "Gruvbox Dark",
-    "description": "Retro groove dark scheme",
-    "category": "Other",
-    "baseText": "#ebdbb2",
-    "preview": ["#282828", "#fb4934", "#b8bb26", "#fabd2f", "#83a598"]
-  },
-  {
-    "id": "github-dark",
-    "name": "GitHub Dark",
-    "description": "GitHub's dark theme",
-    "category": "Other",
-    "baseText": "#e6edf3",
-    "preview": ["#0d1117", "#f85149", "#3fb950", "#d29922", "#58a6ff"]
-  },
-  {
-    "id": "dracula",
-    "name": "Dracula",
-    "description": "The most famous dark theme",
-    "category": "Other",
-    "baseText": "#f8f8f2",
-    "preview": ["#282a36", "#ff5555", "#50fa7b", "#f1fa8c", "#bd93f9"]
-  },
-  {
     "id": "tokyo-night",
     "name": "Night",
     "description": "Downtown Tokyo at night",
@@ -166,5 +134,37 @@
     "category": "Ayu",
     "baseText": "#5c6166",
     "preview": ["#fcfcfc", "#f07178", "#86b300", "#f29718", "#36a3d9"]
+  },
+  {
+    "id": "nord",
+    "name": "Nord",
+    "description": "Arctic, north-bluish palette",
+    "category": "Other",
+    "baseText": "#eceff4",
+    "preview": ["#2e3440", "#bf616a", "#a3be8c", "#ebcb8b", "#81a1c1"]
+  },
+  {
+    "id": "gruvbox-dark",
+    "name": "Gruvbox Dark",
+    "description": "Retro groove dark scheme",
+    "category": "Other",
+    "baseText": "#ebdbb2",
+    "preview": ["#282828", "#fb4934", "#b8bb26", "#fabd2f", "#83a598"]
+  },
+  {
+    "id": "github-dark",
+    "name": "GitHub Dark",
+    "description": "GitHub's dark theme",
+    "category": "Other",
+    "baseText": "#e6edf3",
+    "preview": ["#0d1117", "#f85149", "#3fb950", "#d29922", "#58a6ff"]
+  },
+  {
+    "id": "dracula",
+    "name": "Dracula",
+    "description": "The most famous dark theme",
+    "category": "Other",
+    "baseText": "#f8f8f2",
+    "preview": ["#282a36", "#ff5555", "#50fa7b", "#f1fa8c", "#bd93f9"]
   }
 ]

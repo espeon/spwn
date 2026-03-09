@@ -4,7 +4,6 @@ import {
   createRoute,
   redirect,
   isRedirect,
-  Outlet,
 } from "@tanstack/react-router";
 import { queryClient } from "./queryClient";
 import { getMe } from "./api";
@@ -14,7 +13,11 @@ import { LoginPage } from "./pages/LoginPage";
 import { SignupPage } from "./pages/SignupPage";
 import { VmListPage } from "./pages/VmListPage";
 import { VmDetailPage } from "./pages/VmDetailPage";
-import { AccountPage } from "./pages/AccountPage";
+import { AccountLayout } from "./pages/AccountPage";
+import { IdentityPage } from "./pages/IdentityPage";
+import { ThemesPage } from "./pages/ThemesPage";
+import { CliAuthPage } from "./pages/CliAuthPage";
+import HomePage from "./pages/HomePage";
 
 const rootRoute = createRootRoute({
   component: RootLayout,
@@ -30,13 +33,15 @@ const indexRoute = createRoute({
         queryFn: getMe,
         staleTime: 30_000,
       });
+      // authenticated — send to vms dashboard
       throw redirect({ to: "/vms" });
     } catch (e: unknown) {
       if (isRedirect(e)) throw e;
-      throw redirect({ to: "/login" });
+      // not authenticated — render the public home/landing page
+      return;
     }
   },
-  component: () => <Outlet />,
+  component: HomePage,
 });
 
 const loginRoute = createRoute({
@@ -49,6 +54,15 @@ const signupRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/signup",
   component: SignupPage,
+});
+
+const cliAuthRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/cli-auth",
+  validateSearch: (search: Record<string, unknown>) => ({
+    code: (search.code as string) ?? "",
+  }),
+  component: CliAuthPage,
 });
 
 // auth-guarded layout
@@ -84,14 +98,44 @@ const vmDetailRoute = createRoute({
 const accountRoute = createRoute({
   getParentRoute: () => authedRoute,
   path: "/account",
-  component: AccountPage,
+  component: AccountLayout,
+});
+
+const accountIndexRoute = createRoute({
+  getParentRoute: () => accountRoute,
+  path: "/",
+  beforeLoad: () => {
+    throw redirect({ to: "/account/identity" });
+  },
+  component: () => null,
+});
+
+const accountIdentityRoute = createRoute({
+  getParentRoute: () => accountRoute,
+  path: "/identity",
+  component: IdentityPage,
+});
+
+const accountThemesRoute = createRoute({
+  getParentRoute: () => accountRoute,
+  path: "/themes",
+  component: ThemesPage,
 });
 
 const routeTree = rootRoute.addChildren([
   indexRoute,
   loginRoute,
   signupRoute,
-  authedRoute.addChildren([vmListRoute, vmDetailRoute, accountRoute]),
+  cliAuthRoute,
+  authedRoute.addChildren([
+    vmListRoute,
+    vmDetailRoute,
+    accountRoute.addChildren([
+      accountIndexRoute,
+      accountIdentityRoute,
+      accountThemesRoute,
+    ]),
+  ]),
 ]);
 
 export const router = createRouter({ routeTree });

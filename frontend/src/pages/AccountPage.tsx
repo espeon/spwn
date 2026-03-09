@@ -1,445 +1,48 @@
-import { useRef, useState, type ChangeEvent } from "react";
-import { toast } from "sonner";
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import {
-  getMe,
-  listVms,
-  updateProfile,
-  uploadAvatar,
-  avatarUrl,
-  changeUsername,
-  updateTheme,
-  ApiError,
-} from "@/api";
-import themes from "@/themes.json";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Separator } from "@/components/ui/separator";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogFooter,
-  DialogTitle,
-  DialogDescription,
-} from "@/components/ui/dialog";
+import { Outlet } from "@tanstack/react-router";
+import { Link } from "@tanstack/react-router";
+import { cn } from "@/lib/utils";
+import { IconPalette, IconUserCircle } from "@tabler/icons-react";
 
-function QuotaBar({
-  used,
-  limit,
-  label,
-}: {
-  used: number;
-  limit: number;
-  label: string;
-}) {
-  const pct = Math.min((used / limit) * 100, 100);
-  const color =
-    pct >= 90 ? "bg-destructive" : pct >= 70 ? "bg-yellow-500" : "bg-primary";
+const NAV_ITEMS = [
+  { to: "/account/identity", label: "identity", icon: IconUserCircle },
+  { to: "/account/themes", label: "themes", icon: IconPalette },
+] as const;
+
+export function AccountLayout() {
   return (
-    <div>
-      <div className="flex justify-between text-xs text-muted-foreground mb-1.5">
-        <span>{label}</span>
-        <span>
-          {used} / {limit}
-        </span>
-      </div>
-      <div className="h-1.5 bg-secondary rounded-full overflow-hidden">
-        <div
-          className={`h-full rounded-full transition-all ${color}`}
-          style={{ width: `${pct}%` }}
-        />
+    <div className="flex flex-col md:flex-row gap-6 md:gap-8">
+      <h2 className="text-2xl md:hidden font-semibold tracking-tight ml-2">
+        settings
+      </h2>
+      <nav className="flex flex-row md:flex-col gap-0.5 shrink-0 md:w-36 md:sticky md:top-6 md:self-start md:pt-0.5">
+        <p className="hidden md:block text-2xl font-semibold px-2 pb-2">
+          settings
+        </p>
+        {NAV_ITEMS.map(({ to, label, icon: Icon }) => (
+          <Link
+            key={to}
+            to={to}
+            className={cn(
+              "flex items-center",
+              "text-sm px-3 py-1.5 md:rounded-md transition-colors -mr-0.5 md:mr-0",
+              "text-muted-foreground hover:text-foreground hover:bg-accent/50",
+              "md:text-left",
+              "[&.active]:text-foreground [&.active]:font-medium",
+              "md:[&.active]:bg-accent md:[&.active]:text-accent-foreground",
+              "border-b [&.active]:border-b-accent-foreground ",
+              "md:border-b-0 md:[&.active]:border-0",
+            )}
+          >
+            <Icon className="mr-2 size-5 hidden md:block" />
+            {label}
+          </Link>
+        ))}
+        <div className="md:hidden flex-1 border-b border-border self-end" />
+      </nav>
+
+      <div className="flex-1 min-w-0">
+        <Outlet />
       </div>
     </div>
-  );
-}
-
-export function AccountPage() {
-  const qc = useQueryClient();
-  const { data: me } = useQuery({ queryKey: ["me"], queryFn: getMe });
-  const { data: vms } = useQuery({ queryKey: ["vms"], queryFn: listVms });
-
-  const [displayNameDialogOpen, setDisplayNameDialogOpen] = useState(false);
-  const [displayName, setDisplayName] = useState("");
-  const fileInputRef = useRef<HTMLInputElement>(null);
-
-  const [usernameDialogOpen, setUsernameDialogOpen] = useState(false);
-  const [newUsername, setNewUsername] = useState("");
-  const [usernameConfirm, setUsernameConfirm] = useState("");
-  const [usernameError, setUsernameError] = useState<string | null>(null);
-
-  const activeVms =
-    vms?.filter((v) => v.status === "running" || v.status === "starting") ?? [];
-  const usedVcores = activeVms.reduce((s, v) => s + v.vcores, 0);
-  const usedMem = activeVms.reduce((s, v) => s + v.memory_mb, 0);
-
-  const profileMutation = useMutation({
-    mutationFn: () => updateProfile({ display_name: displayName || null }),
-    onSuccess: async () => {
-      await qc.invalidateQueries({ queryKey: ["me"] });
-      setDisplayNameDialogOpen(false);
-    },
-  });
-
-  const usernameMutation = useMutation({
-    mutationFn: () => changeUsername(newUsername),
-    onSuccess: async () => {
-      await qc.invalidateQueries({ queryKey: ["me"] });
-      setUsernameDialogOpen(false);
-      setNewUsername("");
-      setUsernameConfirm("");
-      setUsernameError(null);
-    },
-  });
-
-  const themeMutation = useMutation({
-    mutationFn: (themeId: string) => updateTheme(themeId),
-    onSuccess: async () => {
-      await qc.invalidateQueries({ queryKey: ["me"] });
-    },
-    onError: () => toast.error("failed to update theme"),
-  });
-
-  const avatarMutation = useMutation({
-    mutationFn: (file: File) => uploadAvatar(file),
-    onSuccess: async () => {
-      await qc.invalidateQueries({ queryKey: ["me"] });
-    },
-  });
-
-  function openDisplayNameDialog() {
-    setDisplayName(me?.display_name ?? "");
-    setDisplayNameDialogOpen(true);
-  }
-
-  function openUsernameDialog() {
-    setNewUsername("");
-    setUsernameConfirm("");
-    setUsernameError(null);
-    setUsernameDialogOpen(true);
-  }
-
-  function onAvatarChange(e: ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    setAvatarError(null);
-    toast.promise(avatarMutation.mutateAsync(file), {
-      loading: "uploading avatar...",
-      success: "avatar updated",
-      error: (err) =>
-        err instanceof ApiError ? err.message : "failed to upload avatar",
-    });
-    e.target.value = "";
-  }
-
-  const usernameConfirmValid =
-    usernameConfirm === newUsername && newUsername.length >= 3;
-
-  return (
-    <>
-      <h1 className="text-base font-semibold mb-3">account</h1>
-
-      <Dialog
-        open={displayNameDialogOpen}
-        onOpenChange={setDisplayNameDialogOpen}
-      >
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>change display name</DialogTitle>
-            <DialogDescription>
-              this is shown instead of your username where supported.
-            </DialogDescription>
-          </DialogHeader>
-          <div className="space-y-4 py-2">
-            <div className="space-y-1.5">
-              <Label htmlFor="display-name-input">display name</Label>
-              <Input
-                id="display-name-input"
-                value={displayName}
-                onChange={(e) => setDisplayName(e.target.value)}
-                placeholder={me?.username}
-                autoFocus
-              />
-            </div>
-          </div>
-          <DialogFooter>
-            <Button
-              variant="ghost"
-              onClick={() => setDisplayNameDialogOpen(false)}
-              disabled={profileMutation.isPending}
-            >
-              cancel
-            </Button>
-            <Button
-              onClick={() =>
-                toast.promise(profileMutation.mutateAsync(), {
-                  loading: "saving...",
-                  success: "display name updated",
-                  error: "failed to update display name",
-                })
-              }
-              disabled={profileMutation.isPending}
-            >
-              {profileMutation.isPending ? "saving..." : "save"}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      <Dialog open={usernameDialogOpen} onOpenChange={setUsernameDialogOpen}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>change username</DialogTitle>
-            <DialogDescription asChild>
-              <div className="space-y-2 text-sm text-muted-foreground">
-                <p>
-                  this will rewrite all of your VM subdomains. any services
-                  pointed at{" "}
-                  <span className="font-mono text-foreground">
-                    *.{me?.username}.spwn.pub
-                  </span>{" "}
-                  will break immediately.
-                </p>
-                <p className="font-medium text-destructive">
-                  there is no grace period. old subdomains stop working the
-                  moment you confirm.
-                </p>
-              </div>
-            </DialogDescription>
-          </DialogHeader>
-
-          <div className="space-y-4 py-2">
-            <div className="space-y-1.5">
-              <Label htmlFor="new-username">new username</Label>
-              <Input
-                id="new-username"
-                value={newUsername}
-                onChange={(e) => setNewUsername(e.target.value.toLowerCase())}
-                placeholder="letters, numbers, hyphens"
-                autoComplete="off"
-              />
-            </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="username-confirm">
-                type your new username again to confirm
-              </Label>
-              <Input
-                id="username-confirm"
-                value={usernameConfirm}
-                onChange={(e) =>
-                  setUsernameConfirm(e.target.value.toLowerCase())
-                }
-                placeholder={newUsername || "confirm new username"}
-                autoComplete="off"
-              />
-            </div>
-            {usernameError && (
-              <p className="text-sm text-destructive">{usernameError}</p>
-            )}
-          </div>
-
-          <DialogFooter>
-            <Button
-              variant="ghost"
-              onClick={() => setUsernameDialogOpen(false)}
-              disabled={usernameMutation.isPending}
-            >
-              cancel
-            </Button>
-            <Button
-              variant="destructive"
-              onClick={() => {
-                const toastId = toast.loading("changing username...");
-                usernameMutation
-                  .mutateAsync()
-                  .then(() =>
-                    toast.success("username changed", { id: toastId }),
-                  )
-                  .catch((err: unknown) => {
-                    toast.dismiss(toastId);
-                    if (err instanceof ApiError) {
-                      if (err.status === 409)
-                        setUsernameError("username already taken");
-                      else setUsernameError(err.message);
-                    } else {
-                      setUsernameError("something went wrong");
-                    }
-                  });
-              }}
-              disabled={!usernameConfirmValid || usernameMutation.isPending}
-            >
-              {usernameMutation.isPending ? "changing..." : "change username"}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      <div className="space-y-4">
-        <Card>
-          <CardContent className="p-0">
-            {/* view */}
-            <div className="flex items-center gap-4 p-4">
-              <div className="relative group shrink-0">
-                <div className="w-12 h-12 rounded-full overflow-hidden bg-secondary flex items-center justify-center">
-                  {me?.has_avatar ? (
-                    <img
-                      src={avatarUrl(me.id)}
-                      alt="avatar"
-                      className="w-full h-full object-cover"
-                    />
-                  ) : (
-                    <span className="text-lg text-muted-foreground font-mono select-none">
-                      {me?.username?.[0]?.toUpperCase() ?? "?"}
-                    </span>
-                  )}
-                </div>
-                <button
-                  onClick={() => fileInputRef.current?.click()}
-                  disabled={avatarMutation.isPending}
-                  className="absolute inset-0 rounded-full bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center text-white text-[10px] cursor-pointer"
-                >
-                  {avatarMutation.isPending ? "..." : "change"}
-                </button>
-                <input
-                  ref={fileInputRef}
-                  type="file"
-                  accept="image/png,image/jpeg,image/webp"
-                  className="hidden"
-                  onChange={onAvatarChange}
-                />
-              </div>
-
-              <div className="min-w-0">
-                <p className="text-sm font-medium leading-tight">
-                  {me?.display_name || me?.username}
-                </p>
-                <p className="text-xs text-muted-foreground font-mono">
-                  @{me?.username}
-                </p>
-                <p className="text-xs text-muted-foreground mt-0.5">
-                  {me?.email}
-                </p>
-              </div>
-            </div>
-
-            <Separator />
-
-            {/* edit */}
-            <div className="p-4 space-y-2">
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="text-xs font-medium">display name</p>
-                  <p className="text-xs text-muted-foreground">
-                    {me?.display_name || (
-                      <span className="italic">not set</span>
-                    )}
-                  </p>
-                </div>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className="h-7 text-xs px-2"
-                  onClick={openDisplayNameDialog}
-                >
-                  change
-                </Button>
-              </div>
-
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="text-xs font-medium">username</p>
-                  <p className="text-xs text-muted-foreground font-mono">
-                    @{me?.username}
-                  </p>
-                </div>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className="h-7 text-xs px-2"
-                  onClick={openUsernameDialog}
-                >
-                  change
-                </Button>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium">quota</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <QuotaBar
-              used={activeVms.length}
-              limit={me?.vm_limit ?? 0}
-              label="vms"
-            />
-            <QuotaBar
-              used={usedVcores}
-              limit={me?.vcpu_limit ?? 0}
-              label="vcores"
-            />
-            <QuotaBar
-              used={usedMem}
-              limit={me?.mem_limit_mb ?? 0}
-              label="memory (mb)"
-            />
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium">theme</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            {Array.from(new Set(themes.map((t) => t.category))).map(
-              (category) => (
-                <div key={category}>
-                  <p className="text-sm text-muted-foreground lowercase font-medium mb-2">
-                    {category}
-                  </p>
-                  <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-                    {themes
-                      .filter((t) => t.category === category)
-                      .map((t) => (
-                        <button
-                          key={t.id}
-                          onClick={() => themeMutation.mutate(t.id)}
-                          disabled={themeMutation.isPending}
-                          style={{
-                            backgroundColor: t.preview[0],
-                            color: t.preview[4],
-                            borderColor:
-                              me?.theme === t.id
-                                ? t.preview[2]
-                                : t.preview[3] + "44",
-                          }}
-                          className="text-left rounded-md border-2 px-3 py-2 text-sm transition-opacity hover:opacity-90 flex flex-row items-center justify-between"
-                        >
-                          <span className="block" style={{ color: t.baseText }}>
-                            {t.name}
-                          </span>
-                          <div className="flex justify-end gap-1">
-                            {t.preview.slice(1).map((color) => (
-                              <span
-                                key={color}
-                                className="block w-3 h-3 rounded-full"
-                                style={{ backgroundColor: color }}
-                              />
-                            ))}
-                          </div>
-                        </button>
-                      ))}
-                  </div>
-                </div>
-              ),
-            )}
-          </CardContent>
-        </Card>
-      </div>
-    </>
   );
 }

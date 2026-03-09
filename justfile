@@ -36,6 +36,11 @@ build: check-protoc
 
 # ── infrastructure ────────────────────────────────────────────────────────────
 
+# run cloudflare tunnel (requires CLOUDFLARE_TUNNEL_TOKEN in .env)
+tunnel:
+    podman run --rm --network=host docker.io/cloudflare/cloudflared:latest \
+        tunnel --no-autoupdate run --token "$CLOUDFLARE_TUNNEL_TOKEN"
+
 # start postgres via podman compose in the background
 pg:
     podman compose up -d postgres
@@ -98,3 +103,24 @@ test:
 # check cargo workspace compiles cleanly
 check: check-protoc
     cargo check
+
+# ── spwn CLI / TUI ────────────────────────────────────────────────────────────
+
+# build spwn CLI binary (output: target/spwn)
+spwn-build:
+    cd services && go build -o ../target/spwn ./cmd/spwn
+
+# build ssh-gateway binary (output: target/spwn-ssh-gateway)
+ssh-gateway-build:
+    cd services && go build -o ../target/spwn-ssh-gateway ./cmd/ssh-gateway
+
+# build both Go binaries
+go-build: spwn-build ssh-gateway-build
+
+# run spwn TUI (builds first)
+spwn: spwn-build
+    ./target/spwn
+
+# tidy Go deps
+go-tidy:
+    cd services && go mod tidy

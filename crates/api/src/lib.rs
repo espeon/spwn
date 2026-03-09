@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
 use axum::{
-    Json, Router,
-    extract::{Path, State},
+    Extension, Json, Router,
+    extract::{Path, Query, State},
     http::StatusCode,
     response::IntoResponse,
     routing::{delete, get, post},
@@ -32,6 +32,17 @@ pub trait VmOps: Send + Sync {
     async fn delete_snapshot(&self, vm_id: &str, snap_id: &str) -> anyhow::Result<()>;
     async fn restore_snapshot(&self, vm_id: &str, snap_id: &str) -> anyhow::Result<()>;
     async fn change_username(&self, account_id: &str, new_username: &str) -> anyhow::Result<()>;
+    async fn update_vm(
+        &self,
+        vm_id: &str,
+        account_id: &str,
+        patch: VmPatch,
+    ) -> anyhow::Result<db::VmRow>;
+}
+
+pub struct VmPatch {
+    pub name: Option<String>,
+    pub exposed_port: Option<i32>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -68,6 +79,17 @@ fn default_port() -> i32 {
 #[derive(Debug, Deserialize)]
 pub struct SnapshotRequest {
     pub label: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct VmPatchRequest {
+    pub name: Option<String>,
+    pub exposed_port: Option<i32>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct VmListQuery {
+    pub name: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -127,18 +149,40 @@ impl From<db::SnapshotRow> for SnapshotResponse {
     }
 }
 
+#[derive(Serialize)]
+struct VmEventResponse {
+    id: i64,
+    vm_id: String,
+    event: String,
+    metadata: Option<String>,
+    created_at: i64,
+}
+
+impl From<db::VmEventRow> for VmEventResponse {
+    fn from(e: db::VmEventRow) -> Self {
+        Self {
+            id: e.id,
+            vm_id: e.vm_id,
+            event: e.event,
+            metadata: e.metadata,
+            created_at: e.created_at,
+        }
+    }
+}
+
 type AppState = Arc<dyn VmOps>;
 
 pub fn router(ops: Arc<dyn VmOps>) -> Router {
     Router::new()
         .route("/api/vms", get(list_vms).post(create_vm))
-        .route("/api/vms/{id}", get(get_vm).delete(delete_vm))
+        .route("/api/vms/{id}", get(get_vm).delete(delete_vm).patch(patch_vm))
         .route("/api/vms/{id}/start", post(start_vm))
         .route("/api/vms/{id}/stop", post(stop_vm))
         .route("/api/vms/{id}/snapshot", post(take_snapshot))
         .route("/api/vms/{id}/snapshots", get(list_snapshots))
         .route("/api/vms/{id}/snapshots/{snap_id}", delete(delete_snapshot))
         .route("/api/vms/{id}/restore/{snap_id}", post(restore_snapshot))
+        .route("/api/vms/{id}/events", get(list_vm_events))
         .route("/api/account/username", post(change_username))
         .route("/healthz", get(|| async { "ok" }))
         .with_state(ops)
@@ -165,7 +209,19 @@ async fn change_username(
     }
 }
 
-async fn list_vms(State(ops): State<AppState>, account_id: AccountId) -> impl IntoResponse {
+async fn list_vms(
+    State(ops): State<AppState>,
+    Extension(pool): Extension<db::PgPool>,
+    account_id: AccountId,
+    Query(query): Query<VmListQuery>,
+) -> impl IntoResponse {
+    if let Some(name) = query.name {
+        return match db::get_vm_by_name(&pool, &account_id.0, &name).await {
+            Ok(Some(vm)) => Json(vec![VmResponse::from(vm)]).into_response(),
+            Ok(None) => Json(Vec::<VmResponse>::new()).into_response(),
+            Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        };
+    }
     match ops.list_vms(&account_id.0).await {
         Ok(vms) => Json(vms.into_iter().map(VmResponse::from).collect::<Vec<_>>()).into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
@@ -284,4 +340,67 @@ async fn restore_snapshot(
         }
     });
     StatusCode::ACCEPTED
+}
+
+#[derive(Debug, Deserialize)]
+struct EventsQuery {
+    #[serde(default = "default_event_limit")]
+    limit: i64,
+    before: Option<i64>,
+}
+
+fn default_event_limit() -> i64 {
+    50
+}
+
+async fn list_vm_events(
+    State(ops): State<AppState>,
+    Extension(pool): Extension<db::PgPool>,
+    account_id: AccountId,
+    Path(id): Path<String>,
+    Query(query): Query<EventsQuery>,
+) -> impl IntoResponse {
+    let vm = match ops.get_vm(&id).await {
+        Ok(Some(v)) => v,
+        Ok(None) => return StatusCode::NOT_FOUND.into_response(),
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    };
+    if vm.account_id != account_id.0 {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    let limit = query.limit.clamp(1, 100);
+    match db::list_vm_events(&pool, &id, limit, query.before).await {
+        Ok(events) => Json(
+            events
+                .into_iter()
+                .map(VmEventResponse::from)
+                .collect::<Vec<_>>(),
+        )
+        .into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+async fn patch_vm(
+    State(ops): State<AppState>,
+    account_id: AccountId,
+    Path(id): Path<String>,
+    Json(body): Json<VmPatchRequest>,
+) -> impl IntoResponse {
+    let vm = match ops.get_vm(&id).await {
+        Ok(Some(v)) => v,
+        Ok(None) => return StatusCode::NOT_FOUND.into_response(),
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    };
+    if vm.account_id != account_id.0 {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    let p = VmPatch {
+        name: body.name,
+        exposed_port: body.exposed_port,
+    };
+    match ops.update_vm(&id, &account_id.0, p).await {
+        Ok(updated) => Json(VmResponse::from(updated)).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
 }

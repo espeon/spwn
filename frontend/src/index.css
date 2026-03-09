@@ -2,16 +2,18 @@
 @plugin "tailwindcss-animate";
 @import "@fontsource-variable/instrument-sans";
 @import "@fontsource-variable/cormorant";
-
-@custom-variant dark (&:is(.dark *));
+@import "@fontsource/maple-mono";
 
 * {
-  @apply transition-colors duration-150 ease-in-out;
+  @apply duration-150 ease-in-out;
 }
 
 @theme inline {
   --font-sans: "Instrument Sans Variable", ui-sans-serif, system-ui, sans-serif;
   --font-serif: "Cormorant Variable", ui-serif, Georgia, serif;
+  --font-mono:
+    "Maple Mono", ui-monospace, SF Mono, SF Mono Regular, Consolas,
+    "Liberation Mono", Menlo, Courier, monospace;
 
   --color-background: var(--background);
   --color-foreground: var(--foreground);
@@ -786,4 +788,17 @@ body {
   background-color: var(--background);
   color: var(--foreground);
   font-family: var(--font-sans);
+}
+
+@keyframes spinner-blade {
+  0% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0.15;
+  }
+}
+
+.animate-spinner-blade {
+  animation: spinner-blade 1s linear infinite;
 }

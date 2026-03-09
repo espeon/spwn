@@ -1,4 +1,8 @@
-import { IconDotsVertical, IconLogout, IconUserCircle } from "@tabler/icons-react";
+import {
+  IconDotsVertical,
+  IconLogout,
+  IconUserCircle,
+} from "@tabler/icons-react";
 import { useNavigate } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { getMe, logout, avatarUrl } from "@/api";
@@ -48,7 +52,9 @@ export function NavUser() {
             >
               <Avatar className="h-8 w-8 rounded-lg">
                 <AvatarImage src={avatar} alt={displayName} />
-                <AvatarFallback className="rounded-lg">{fallback}</AvatarFallback>
+                <AvatarFallback className="rounded-lg">
+                  {fallback}
+                </AvatarFallback>
               </Avatar>
               <div className="grid flex-1 text-left text-sm leading-tight">
                 <span className="truncate font-medium">{displayName}</span>
@@ -69,7 +75,9 @@ export function NavUser() {
               <div className="flex items-center gap-2 px-1 py-1.5 text-left text-sm">
                 <Avatar className="h-8 w-8 rounded-lg">
                   <AvatarImage src={avatar} alt={displayName} />
-                  <AvatarFallback className="rounded-lg">{fallback}</AvatarFallback>
+                  <AvatarFallback className="rounded-lg">
+                    {fallback}
+                  </AvatarFallback>
                 </Avatar>
                 <div className="grid flex-1 text-left text-sm leading-tight">
                   <span className="truncate font-medium">{displayName}</span>
@@ -81,7 +89,9 @@ export function NavUser() {
             </DropdownMenuLabel>
             <DropdownMenuSeparator />
             <DropdownMenuGroup>
-              <DropdownMenuItem onClick={() => navigate({ to: "/account" })}>
+              <DropdownMenuItem
+                onClick={() => navigate({ to: "/account/identity" })}
+              >
                 <IconUserCircle />
                 account
               </DropdownMenuItem>

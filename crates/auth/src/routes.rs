@@ -1,14 +1,17 @@
 use axum::{
     Json, Router,
     body::Bytes,
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::{HeaderMap, StatusCode, header},
     response::IntoResponse,
     routing::{get, patch, post},
 };
 use axum_extra::extract::cookie::{Cookie, CookieJar, SameSite};
+use hex;
 use image::{ImageFormat, imageops::FilterType};
+use rand::Rng;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 use crate::{password, session::AccountId};
@@ -18,6 +21,7 @@ pub struct AuthState {
     pub pool: db::PgPool,
     pub invite_code: String,
     pub session_ttl_secs: i64,
+    pub public_url: String,
 }
 
 #[derive(Deserialize)]
@@ -67,7 +71,187 @@ pub fn auth_router(state: AuthState) -> Router {
         .route("/auth/me/avatar", post(upload_avatar))
         .route("/auth/me/theme", patch(update_theme))
         .route("/auth/avatar/{account_id}", get(get_avatar))
+        .route("/auth/cli/init", post(cli_init))
+        .route("/auth/cli/poll", get(cli_poll))
+        .route("/auth/cli/authorize", post(cli_authorize))
+        .route("/auth/cli/deny", post(cli_deny))
         .with_state(state)
+}
+
+// ── CLI device auth ────────────────────────────────────────────────────────────
+
+const CLI_CODE_TTL_SECS: i64 = 300;
+
+#[derive(Deserialize)]
+struct CliInitQuery {
+    base_url: Option<String>,
+}
+
+#[derive(Serialize)]
+struct CliInitResponse {
+    code: String,
+    browser_url: String,
+    expires_in: i64,
+}
+
+#[derive(Deserialize)]
+struct CliPollQuery {
+    code: String,
+}
+
+#[derive(Serialize)]
+struct CliPollResponse {
+    status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    token: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct CliCodeBody {
+    code: String,
+}
+
+async fn cli_init(
+    State(state): State<AuthState>,
+    Query(query): Query<CliInitQuery>,
+) -> impl IntoResponse {
+    let code: String = rand::thread_rng()
+        .sample_iter(rand::distributions::Alphanumeric)
+        .take(12)
+        .map(char::from)
+        .collect();
+    let code = code.to_lowercase();
+
+    let now = unix_now();
+    let expires_at = now + CLI_CODE_TTL_SECS;
+
+    if let Err(e) = db::create_cli_auth_code(&state.pool, &code, expires_at).await {
+        tracing::error!("cli_init db error: {e}");
+        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+    }
+
+    let base_url = query.base_url.unwrap_or_else(|| state.public_url.clone());
+    let browser_url = format!("{base_url}/cli-auth?code={code}");
+
+    Json(CliInitResponse {
+        code,
+        browser_url,
+        expires_in: CLI_CODE_TTL_SECS,
+    })
+    .into_response()
+}
+
+async fn cli_poll(
+    State(state): State<AuthState>,
+    Query(query): Query<CliPollQuery>,
+) -> impl IntoResponse {
+    let now = unix_now();
+
+    let entry = match db::get_cli_auth_code(&state.pool, &query.code).await {
+        Ok(Some(e)) => e,
+        Ok(None) => {
+            return Json(CliPollResponse {
+                status: "expired".into(),
+                token: None,
+            })
+            .into_response();
+        }
+        Err(e) => {
+            tracing::error!("cli_poll db error: {e}");
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    };
+
+    if entry.expires_at < now {
+        return Json(CliPollResponse {
+            status: "expired".into(),
+            token: None,
+        })
+        .into_response();
+    }
+
+    match entry.status.as_str() {
+        "pending" => Json(CliPollResponse {
+            status: "pending".into(),
+            token: None,
+        })
+        .into_response(),
+        "denied" => Json(CliPollResponse {
+            status: "denied".into(),
+            token: None,
+        })
+        .into_response(),
+        "authorized" => {
+            let account_id = match entry.account_id {
+                Some(id) => id,
+                None => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+            };
+
+            let raw_token = format!("spwn_tok_{}", Uuid::new_v4().simple());
+            let token_hash = hex::encode(Sha256::digest(raw_token.as_bytes()));
+
+            let new_token = db::NewApiToken {
+                id: Uuid::new_v4().to_string(),
+                account_id,
+                token_hash,
+                name: format!("CLI ({})", &query.code),
+            };
+
+            match db::create_api_token(&state.pool, &new_token).await {
+                Ok(_) => {}
+                Err(e) => {
+                    tracing::error!("cli_poll create token error: {e}");
+                    return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+                }
+            }
+
+            Json(CliPollResponse {
+                status: "authorized".into(),
+                token: Some(raw_token),
+            })
+            .into_response()
+        }
+        _ => Json(CliPollResponse {
+            status: "expired".into(),
+            token: None,
+        })
+        .into_response(),
+    }
+}
+
+async fn cli_authorize(
+    State(state): State<AuthState>,
+    account_id: AccountId,
+    Json(body): Json<CliCodeBody>,
+) -> impl IntoResponse {
+    let now = unix_now();
+
+    let entry = match db::get_cli_auth_code(&state.pool, &body.code).await {
+        Ok(Some(e)) => e,
+        Ok(None) => return (StatusCode::NOT_FOUND, "code not found").into_response(),
+        Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    };
+
+    if entry.expires_at < now || entry.status != "pending" {
+        return (StatusCode::GONE, "code expired or already used").into_response();
+    }
+
+    match db::authorize_cli_auth_code(&state.pool, &body.code, &account_id.0).await {
+        Ok(_) => StatusCode::NO_CONTENT.into_response(),
+        Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    }
+}
+
+async fn cli_deny(
+    State(state): State<AuthState>,
+    account_id: AccountId,
+    Json(body): Json<CliCodeBody>,
+) -> impl IntoResponse {
+    let _ = account_id;
+    match db::deny_cli_auth_code(&state.pool, &body.code).await {
+        Ok(_) => StatusCode::NO_CONTENT.into_response(),
+        Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    }
 }
 
 fn resize_avatar(data: &[u8]) -> anyhow::Result<Vec<u8>> {

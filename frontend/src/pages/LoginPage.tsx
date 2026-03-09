@@ -1,78 +1,107 @@
-import { useState, type FormEvent } from 'react'
-import { useNavigate, Link } from '@tanstack/react-router'
-import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { login, getMe, ApiError } from '../api'
+import { useState, type FormEvent } from "react";
+import { useNavigate, Link } from "@tanstack/react-router";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { login, getMe, ApiError } from "@/api";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import {
+  Card,
+  CardContent,
+  CardFooter,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
+import { IconGalaxy } from "@tabler/icons-react";
 
 export function LoginPage() {
-  const qc = useQueryClient()
-  const navigate = useNavigate()
-  const [email, setEmail] = useState('')
-  const [password, setPassword] = useState('')
-  const [error, setError] = useState<string | null>(null)
+  const qc = useQueryClient();
+  const navigate = useNavigate();
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [error, setError] = useState<string | null>(null);
 
   const mutation = useMutation({
     mutationFn: async () => {
-      await login(email, password)
-      const me = await getMe()
-      qc.setQueryData(['me'], me)
+      await login(email, password);
+      const me = await getMe();
+      qc.setQueryData(["me"], me);
     },
-    onSuccess: () => navigate({ to: '/vms' }),
+    onSuccess: () => navigate({ to: "/vms" }),
     onError: (err) => {
       if (err instanceof ApiError && err.status === 401) {
-        setError('invalid email or password')
+        setError("invalid email or password");
       } else {
-        setError('something went wrong')
+        setError("something went wrong");
       }
     },
-  })
+  });
 
   function submit(e: FormEvent) {
-    e.preventDefault()
-    setError(null)
-    mutation.mutate()
+    e.preventDefault();
+    setError(null);
+    mutation.mutate();
   }
 
   return (
-    <div className="min-h-screen bg-zinc-950 flex items-center justify-center px-4">
-      <div className="w-full max-w-sm">
-        <h1 className="font-mono font-bold text-violet-400 text-2xl mb-8">spwn</h1>
-        <form onSubmit={submit} className="flex flex-col gap-4">
-          <div className="flex flex-col gap-1">
-            <label className="text-sm text-zinc-400">email</label>
-            <input
-              type="email"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              required
-              className="bg-zinc-900 border border-zinc-700 rounded px-3 py-2 text-sm text-zinc-100 focus:outline-none focus:border-violet-500"
-            />
-          </div>
-          <div className="flex flex-col gap-1">
-            <label className="text-sm text-zinc-400">password</label>
-            <input
-              type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              required
-              className="bg-zinc-900 border border-zinc-700 rounded px-3 py-2 text-sm text-zinc-100 focus:outline-none focus:border-violet-500"
-            />
-          </div>
-          {error && <p className="text-sm text-red-400">{error}</p>}
-          <button
-            type="submit"
-            disabled={mutation.isPending}
-            className="bg-violet-600 hover:bg-violet-500 disabled:opacity-50 text-white rounded px-4 py-2 text-sm font-medium transition-colors"
-          >
-            {mutation.isPending ? 'logging in...' : 'log in'}
-          </button>
-        </form>
-        <p className="mt-6 text-sm text-zinc-500">
-          no account?{' '}
-          <Link to="/signup" className="text-violet-400 hover:text-violet-300">
-            sign up
-          </Link>
-        </p>
+    <div className="min-h-screen flex items-center justify-center px-4">
+      <div className="w-full max-w-sm space-y-6">
+        <div className="flex flex-row items-center justify-center gap-1">
+          <IconGalaxy className="size-8!" />
+          <h1 className="text-4xl text-center mb-1.5">spwn</h1>
+        </div>
+        <Card>
+          <CardHeader>
+            <CardTitle className="">log in</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <form id="login-form" onSubmit={submit} className="space-y-4">
+              <div className="space-y-1.5">
+                <Label htmlFor="email">email</Label>
+                <Input
+                  id="email"
+                  type="email"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  required
+                  autoComplete="email"
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="password">password</Label>
+                <Input
+                  id="password"
+                  type="password"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  required
+                  autoComplete="current-password"
+                />
+              </div>
+              {error && <p className="text-sm text-destructive">{error}</p>}
+            </form>
+          </CardContent>
+          <CardFooter className="flex-col gap-3">
+            <Button
+              type="submit"
+              form="login-form"
+              disabled={mutation.isPending}
+              className="w-full"
+            >
+              {mutation.isPending ? "logging in..." : "log in"}
+            </Button>
+            <p className="text-sm text-muted-foreground">
+              no account?{" "}
+              <Link
+                to="/signup"
+                className="text-foreground underline underline-offset-4 hover:no-underline"
+              >
+                sign up
+              </Link>
+            </p>
+          </CardFooter>
+        </Card>
       </div>
     </div>
-  )
+  );
 }

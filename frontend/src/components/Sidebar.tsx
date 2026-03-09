@@ -9,7 +9,7 @@ import {
   SidebarGroup,
   SidebarGroupContent,
 } from "./ui/sidebar";
-import { IconInnerShadowTop } from "@tabler/icons-react";
+import { IconGalaxy } from "@tabler/icons-react";
 import { Link } from "@tanstack/react-router";
 import { NavUser } from "@/components/NavUser";
 
@@ -23,10 +23,13 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
     <Sidebar collapsible="offcanvas" {...props}>
       <SidebarHeader>
         <SidebarMenu>
-          <SidebarMenuItem>
-            <Link to="/" className={`${navLinkClass} -mt-1`}>
-              <IconInnerShadowTop className="size-5!" />
-              <span className="text-base font-semibold">spwn</span>
+          <SidebarMenuItem className="marker:invisible">
+            <Link
+              to="/"
+              className={`-mt-1 flex items-center gap-2 px-2 py-2 hover:text-sidebar-foreground hover:bg-sidebar-accent data-[status=active]:bg-sidebar-accent data-[status=active]:text-sidebar-foreground duration-200 rounded-md`}
+            >
+              <IconGalaxy className="size-5!" />
+              <span className="text-lg font-semibold -mt-1">spwn</span>
             </Link>
           </SidebarMenuItem>
         </SidebarMenu>
@@ -35,7 +38,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
         <SidebarGroup>
           <SidebarGroupContent className="flex flex-col gap-2">
             {navItems.map(({ to, icon: Icon, label }) => (
-              <SidebarMenuItem key={to}>
+              <SidebarMenuItem key={to} className="text-white/0">
                 <Link to={to} className={navLinkClass}>
                   <Icon className="size-5!" />
                   <span className="text-sm font-medium">{label}</span>

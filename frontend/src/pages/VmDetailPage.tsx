@@ -100,12 +100,6 @@ export function VmDetailPage() {
   const canStop = vm.status === "running";
   const canSnapshot = vm.status === "running";
 
-  const mutError =
-    startMutation.error?.message ||
-    stopMutation.error?.message ||
-    snapshotMutation.error?.message ||
-    deleteMutation.error?.message;
-
   return (
     <>
       <div className="flex items-start justify-between mb-6">

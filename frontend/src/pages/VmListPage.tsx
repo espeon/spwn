@@ -22,7 +22,10 @@ import {
   DialogTitle,
   DialogFooter,
 } from "@/components/ui/dialog";
-import { FileQuestion, Loader, Pause, Play } from "lucide-react";
+import { FileQuestion, MemoryStick, Pause, Play } from "lucide-react";
+import { Loader } from "@/components/ui/loader";
+import { IconAccessPoint, IconCpu } from "@tabler/icons-react";
+import { formatDataSize } from "@/lib/utils";
 
 function CreateVmDialog({
   open,
@@ -339,6 +342,7 @@ function VmRow({ vm }: { vm: Vm }) {
   // once the SSE-driven status reflects a transitioning state, the local
   // optimistic flag is no longer needed
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     if (isTransitioning) setLocalPending(false);
   }, [isTransitioning]);
 
@@ -368,9 +372,18 @@ function VmRow({ vm }: { vm: Vm }) {
         </div>
         <div className="mt-2 flex items-center justify-between">
           <div className="flex gap-4 text-xs text-muted-foreground">
-            <span>{vm.vcores}c</span>
-            <span>{vm.memory_mb}mb</span>
-            <span>:{vm.exposed_port}</span>
+            <span className="flex items-center gap-1">
+              <IconCpu size={16} />
+              {vm.vcores} vCore{vm.vcores > 1 && "s"}
+            </span>
+            <span className="flex items-center gap-1">
+              <MemoryStick size={16} />
+              {formatDataSize(vm.memory_mb * 1024 * 1024)}
+            </span>
+            <span className="flex items-center gap-1">
+              <IconAccessPoint size={16} />
+              Port {vm.exposed_port}
+            </span>
           </div>
         </div>
       </div>
@@ -378,7 +391,9 @@ function VmRow({ vm }: { vm: Vm }) {
         <Button
           variant="ghost"
           size="icon"
-          className="rounded-full"
+          className={`rounded-full group opacity-50 transition-all hover:opacity-100 data-[state=open]:bg-transparent ${
+            showSpinner ? "cursor-not-allowed" : ""
+          } ${vm.status === "error" ? "text-destructive-foreground" : ""} ${vm.status === "running" && "hover:text-destructive"}`}
           disabled={showSpinner}
           onClick={(e) => {
             e.preventDefault();
@@ -392,11 +407,13 @@ function VmRow({ vm }: { vm: Vm }) {
           }}
         >
           {showSpinner ? (
-            <Loader />
+            <Loader size={16} />
           ) : canStart ? (
-            <Play className="h-4 w-4" />
+            <Play className="h-4 w-4 fill-accent-foreground" />
           ) : canStop ? (
-            <Pause className="h-4 w-4" />
+            <Pause
+              className={`h-4 w-4 ${vm.status === "running" ? "group-hover:fill-destructive fill-accent-foreground" : "fill-accent-foreground"}`}
+            />
           ) : (
             <FileQuestion className="h-4 w-4" />
           )}
