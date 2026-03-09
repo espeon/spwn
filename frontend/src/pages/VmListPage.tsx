@@ -22,7 +22,6 @@ import {
   DialogTitle,
   DialogFooter,
 } from "@/components/ui/dialog";
-import { IconTruckLoading } from "@tabler/icons-react";
 import { FileQuestion, Loader, Pause, Play } from "lucide-react";
 
 function CreateVmDialog({
@@ -40,14 +39,18 @@ function CreateVmDialog({
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const [submitError, setSubmitError] = useState<string | null>(null);
 
+  function initAllDefault() {
+    setName("");
+    setVcores(2);
+    setMemoryMb(512);
+    setPort(8080);
+    setFieldErrors({});
+    setSubmitError(null);
+  }
   useEffect(() => {
     if (!open) {
-      setName("");
-      setVcores(2);
-      setMemoryMb(512);
-      setPort(8080);
-      setFieldErrors({});
-      setSubmitError(null);
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      initAllDefault();
     }
   }, [open]);
 
@@ -285,6 +288,7 @@ export function VmListPage() {
 
 function VmRow({ vm }: { vm: Vm }) {
   const qc = useQueryClient();
+  const [localPending, setLocalPending] = useState(false);
 
   const invalidate = () => qc.invalidateQueries({ queryKey: ["vms"] });
 
@@ -301,7 +305,10 @@ function VmRow({ vm }: { vm: Vm }) {
         `${vm.name} failed to start`,
       );
     },
-    onError: (err) => toast.error(`failed to start ${vm.name}: ${err.message}`),
+    onError: (err) => {
+      setLocalPending(false);
+      toast.error(`failed to start ${vm.name}: ${err.message}`);
+    },
   });
   const stopMutation = useMutation({
     mutationFn: () => stopVm(vm.id),
@@ -316,7 +323,10 @@ function VmRow({ vm }: { vm: Vm }) {
         `${vm.name} failed to stop`,
       );
     },
-    onError: (err) => toast.error(`failed to stop ${vm.name}: ${err.message}`),
+    onError: (err) => {
+      setLocalPending(false);
+      toast.error(`failed to stop ${vm.name}: ${err.message}`);
+    },
   });
 
   const isTransitioning =
@@ -325,6 +335,18 @@ function VmRow({ vm }: { vm: Vm }) {
     vm.status === "snapshotting";
   const canStart = vm.status === "stopped" || vm.status === "error";
   const canStop = vm.status === "running";
+
+  // once the SSE-driven status reflects a transitioning state, the local
+  // optimistic flag is no longer needed
+  useEffect(() => {
+    if (isTransitioning) setLocalPending(false);
+  }, [isTransitioning]);
+
+  const showSpinner =
+    localPending ||
+    isTransitioning ||
+    startMutation.isPending ||
+    stopMutation.isPending;
 
   return (
     <div className="border rounded-lg px-5 py-4 flex flex-row items-center justify-between w-full">
@@ -357,19 +379,20 @@ function VmRow({ vm }: { vm: Vm }) {
           variant="ghost"
           size="icon"
           className="rounded-full"
-          disabled={
-            isTransitioning || startMutation.isPending || stopMutation.isPending
-          }
+          disabled={showSpinner}
           onClick={(e) => {
             e.preventDefault();
-            if (canStart) startMutation.mutate();
-            else if (canStop) stopMutation.mutate();
+            if (canStart) {
+              setLocalPending(true);
+              startMutation.mutate();
+            } else if (canStop) {
+              setLocalPending(true);
+              stopMutation.mutate();
+            }
           }}
         >
-          {isTransitioning ||
-          startMutation.isPending ||
-          stopMutation.isPending ? (
-            <Loader className="animate-spin" />
+          {showSpinner ? (
+            <Loader />
           ) : canStart ? (
             <Play className="h-4 w-4" />
           ) : canStop ? (
