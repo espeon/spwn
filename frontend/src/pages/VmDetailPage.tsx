@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useParams, useNavigate } from "@tanstack/react-router";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { toast } from "sonner";
 import { getVm, startVm, stopVm, snapshotVm, deleteVm, ApiError } from "@/api";
 import { StatusBadge } from "@/components/StatusBadge";
 import { Button } from "@/components/ui/button";
@@ -36,15 +37,23 @@ export function VmDetailPage() {
 
   const startMutation = useMutation({
     mutationFn: () => startVm(vmId),
-    onSuccess: invalidate,
+    onSuccess: () => {
+      invalidate();
+      toast.success("vm starting");
+    },
+    onError: (err) => toast.error(`failed to start: ${err.message}`),
   });
   const stopMutation = useMutation({
     mutationFn: () => stopVm(vmId),
-    onSuccess: invalidate,
+    onSuccess: () => {
+      invalidate();
+      toast.success("vm stopping");
+    },
+    onError: (err) => toast.error(`failed to stop: ${err.message}`),
   });
   const snapshotMutation = useMutation({
     mutationFn: () => snapshotVm(vmId),
-    onSuccess: invalidate,
+    onSuccess: () => invalidate(),
   });
   const deleteMutation = useMutation({
     mutationFn: () => deleteVm(vmId),
@@ -56,11 +65,20 @@ export function VmDetailPage() {
 
   if (error) {
     const status = error instanceof ApiError ? error.status : null;
-    return (
-      <p className="text-destructive text-sm">
-        {status === 404 ? "vm not found" : "failed to load vm"}
-      </p>
-    );
+    if (status === 404) {
+      return (
+        <div className="text-center py-24 text-muted-foreground">
+          <p className="text-sm">this vm no longer exists.</p>
+          <button
+            onClick={() => navigate({ to: "/vms" })}
+            className="mt-2 text-sm underline underline-offset-4 hover:no-underline"
+          >
+            back to vms
+          </button>
+        </div>
+      );
+    }
+    return <p className="text-destructive text-sm">failed to load vm</p>;
   }
 
   if (!vm) return null;
@@ -138,7 +156,13 @@ export function VmDetailPage() {
             </Button>
             <Button
               variant="destructive"
-              onClick={() => deleteMutation.mutate()}
+              onClick={() =>
+                toast.promise(deleteMutation.mutateAsync(), {
+                  loading: "deleting vm...",
+                  success: "vm deleted",
+                  error: (err) => `failed to delete: ${err.message}`,
+                })
+              }
               disabled={deleteMutation.isPending}
             >
               {deleteMutation.isPending ? "deleting..." : "delete"}
@@ -146,8 +170,6 @@ export function VmDetailPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
-
-      {mutError && <p className="text-sm text-destructive mb-4">{mutError}</p>}
 
       <div className="flex gap-3">
         <Button
@@ -167,7 +189,13 @@ export function VmDetailPage() {
         </Button>
         <Button
           variant="outline"
-          onClick={() => snapshotMutation.mutate()}
+          onClick={() =>
+            toast.promise(snapshotMutation.mutateAsync(), {
+              loading: "taking snapshot...",
+              success: "snapshot taken",
+              error: (err) => `failed to snapshot: ${err.message}`,
+            })
+          }
           disabled={
             !canSnapshot || isTransitioning || snapshotMutation.isPending
           }

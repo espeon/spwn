@@ -76,17 +76,9 @@ function CreateVmDialog({
     mutationFn: (req: CreateVmRequest) => createVm(req),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["vms"] });
-      toast.success("vm created");
       onClose();
     },
-    onError: (err) => {
-      const msg = err.message.toLowerCase();
-      if (msg.includes("quota") || msg.includes("limit")) {
-        toast.error(err.message);
-      } else {
-        setSubmitError(err.message);
-      }
-    },
+    onError: () => {},
   });
 
   function submit(e: FormEvent) {
@@ -98,12 +90,27 @@ function CreateVmDialog({
       return;
     }
     setFieldErrors({});
-    mutation.mutate({
+    const req = {
       name: name.trim(),
       vcores,
       memory_mb: memoryMb,
       exposed_port: port,
-    });
+    };
+    const toastId = toast.loading("creating vm...");
+    mutation
+      .mutateAsync(req)
+      .then(() => {
+        toast.success("vm created", { id: toastId });
+      })
+      .catch((err: Error) => {
+        const msg = err.message.toLowerCase();
+        if (msg.includes("quota") || msg.includes("limit")) {
+          toast.error(err.message, { id: toastId });
+        } else {
+          toast.dismiss(toastId);
+          setSubmitError(err.message);
+        }
+      });
   }
 
   return (

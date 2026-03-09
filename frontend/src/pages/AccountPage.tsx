@@ -1,4 +1,5 @@
 import { useRef, useState, type ChangeEvent } from "react";
+import { toast } from "sonner";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   getMe,
@@ -60,10 +61,6 @@ export function AccountPage() {
   const { data: me } = useQuery({ queryKey: ["me"], queryFn: getMe });
   const { data: vms } = useQuery({ queryKey: ["vms"], queryFn: listVms });
 
-  const [profileError, setProfileError] = useState<string | null>(null);
-  const [avatarError, setAvatarError] = useState<string | null>(null);
-  const [themeError, setThemeError] = useState<string | null>(null);
-
   const [displayNameDialogOpen, setDisplayNameDialogOpen] = useState(false);
   const [displayName, setDisplayName] = useState("");
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -83,9 +80,7 @@ export function AccountPage() {
     onSuccess: async () => {
       await qc.invalidateQueries({ queryKey: ["me"] });
       setDisplayNameDialogOpen(false);
-      setProfileError(null);
     },
-    onError: () => setProfileError("failed to update profile"),
   });
 
   const usernameMutation = useMutation({
@@ -97,40 +92,25 @@ export function AccountPage() {
       setUsernameConfirm("");
       setUsernameError(null);
     },
-    onError: (err) => {
-      if (err instanceof ApiError) {
-        if (err.status === 409) setUsernameError("username already taken");
-        else setUsernameError(err.message);
-      } else {
-        setUsernameError("something went wrong");
-      }
-    },
   });
 
   const themeMutation = useMutation({
     mutationFn: (themeId: string) => updateTheme(themeId),
     onSuccess: async () => {
       await qc.invalidateQueries({ queryKey: ["me"] });
-      setThemeError(null);
     },
-    onError: () => setThemeError("failed to update theme"),
+    onError: () => toast.error("failed to update theme"),
   });
 
   const avatarMutation = useMutation({
     mutationFn: (file: File) => uploadAvatar(file),
     onSuccess: async () => {
       await qc.invalidateQueries({ queryKey: ["me"] });
-      setAvatarError(null);
-    },
-    onError: (err) => {
-      if (err instanceof ApiError) setAvatarError(err.message);
-      else setAvatarError("failed to upload avatar");
     },
   });
 
   function openDisplayNameDialog() {
     setDisplayName(me?.display_name ?? "");
-    setProfileError(null);
     setDisplayNameDialogOpen(true);
   }
 
@@ -145,7 +125,12 @@ export function AccountPage() {
     const file = e.target.files?.[0];
     if (!file) return;
     setAvatarError(null);
-    avatarMutation.mutate(file);
+    toast.promise(avatarMutation.mutateAsync(file), {
+      loading: "uploading avatar...",
+      success: "avatar updated",
+      error: (err) =>
+        err instanceof ApiError ? err.message : "failed to upload avatar",
+    });
     e.target.value = "";
   }
 
@@ -178,9 +163,6 @@ export function AccountPage() {
                 autoFocus
               />
             </div>
-            {profileError && (
-              <p className="text-sm text-destructive">{profileError}</p>
-            )}
           </div>
           <DialogFooter>
             <Button
@@ -191,7 +173,13 @@ export function AccountPage() {
               cancel
             </Button>
             <Button
-              onClick={() => profileMutation.mutate()}
+              onClick={() =>
+                toast.promise(profileMutation.mutateAsync(), {
+                  loading: "saving...",
+                  success: "display name updated",
+                  error: "failed to update display name",
+                })
+              }
               disabled={profileMutation.isPending}
             >
               {profileMutation.isPending ? "saving..." : "save"}
@@ -262,7 +250,24 @@ export function AccountPage() {
             </Button>
             <Button
               variant="destructive"
-              onClick={() => usernameMutation.mutate()}
+              onClick={() => {
+                const toastId = toast.loading("changing username...");
+                usernameMutation
+                  .mutateAsync()
+                  .then(() =>
+                    toast.success("username changed", { id: toastId }),
+                  )
+                  .catch((err: unknown) => {
+                    toast.dismiss(toastId);
+                    if (err instanceof ApiError) {
+                      if (err.status === 409)
+                        setUsernameError("username already taken");
+                      else setUsernameError(err.message);
+                    } else {
+                      setUsernameError("something went wrong");
+                    }
+                  });
+              }}
               disabled={!usernameConfirmValid || usernameMutation.isPending}
             >
               {usernameMutation.isPending ? "changing..." : "change username"}
@@ -358,10 +363,6 @@ export function AccountPage() {
                   change
                 </Button>
               </div>
-
-              {avatarError && (
-                <p className="text-xs text-destructive">{avatarError}</p>
-              )}
             </div>
           </CardContent>
         </Card>
@@ -400,7 +401,7 @@ export function AccountPage() {
                   <p className="text-sm text-muted-foreground lowercase font-medium mb-2">
                     {category}
                   </p>
-                  <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+                  <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
                     {themes
                       .filter((t) => t.category === category)
                       .map((t) => (
@@ -416,15 +417,12 @@ export function AccountPage() {
                                 ? t.preview[2]
                                 : t.preview[3] + "44",
                           }}
-                          className="text-left rounded-md border-2 px-3 py-2 text-xs transition-opacity hover:opacity-90"
+                          className="text-left rounded-md border-2 px-3 py-2 text-sm transition-opacity hover:opacity-90 flex flex-row items-center justify-between"
                         >
-                          <span
-                            className="block font-medium"
-                            style={{ color: t.baseText }}
-                          >
+                          <span className="block" style={{ color: t.baseText }}>
                             {t.name}
                           </span>
-                          <div className="flex justify-end gap-1 mt-1.5">
+                          <div className="flex justify-end gap-1">
                             {t.preview.slice(1).map((color) => (
                               <span
                                 key={color}
@@ -438,9 +436,6 @@ export function AccountPage() {
                   </div>
                 </div>
               ),
-            )}
-            {themeError && (
-              <p className="text-xs text-destructive">{themeError}</p>
             )}
           </CardContent>
         </Card>
