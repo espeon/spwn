@@ -31,8 +31,11 @@ impl NetworkManager {
             .map(|o| o.status.success())
             .unwrap_or(false);
         if already_exists {
-            println!("TAP device {} already exists, removing stale device", name);
-            let _ = run("ip", &["tuntap", "del", "dev", &name, "mode", "tap"]);
+            run("ip", &["tuntap", "del", "dev", &name, "mode", "tap"])
+                .map_err(|e| NetworkError::CommandFailed {
+                    cmd: format!("remove stale tap {name}"),
+                    stderr: e.to_string(),
+                })?;
         }
 
         run("ip", &["tuntap", "add", "dev", &name, "mode", "tap"])?;

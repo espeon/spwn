@@ -48,7 +48,10 @@ async function request<T>(
     const text = await resp.text().catch(() => resp.statusText)
     throw new ApiError(resp.status, text)
   }
-  if (resp.status === 204) return undefined as unknown as T
+  const contentType = resp.headers.get('content-type')
+  if (resp.status === 204 || !contentType?.includes('application/json')) {
+    return undefined as unknown as T
+  }
   return resp.json()
 }
 

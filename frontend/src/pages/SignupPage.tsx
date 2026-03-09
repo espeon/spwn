@@ -15,12 +15,10 @@ export function SignupPage() {
     mutationFn: async () => {
       await signup(email, password, inviteCode)
       await login(email, password)
-    },
-    onSuccess: async () => {
       const me = await getMe()
       qc.setQueryData(['me'], me)
-      navigate({ to: '/vms' })
     },
+    onSuccess: () => navigate({ to: '/vms' }),
     onError: (err) => {
       if (err instanceof ApiError) {
         if (err.status === 403) setError('invalid invite code')

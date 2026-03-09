@@ -136,11 +136,9 @@ impl VmManager {
             .await?
             .ok_or_else(|| anyhow!("vm not found: {vm_id}"))?;
 
-        if vm.status == "running" || vm.status == "starting" {
-            return Err(anyhow!("vm {vm_id} is already {}", vm.status));
+        if vm.status == "running" {
+            return Err(anyhow!("vm {vm_id} is already running"));
         }
-
-        db::set_vm_status(&self.pool, vm_id, "starting").await?;
 
         if let Err(e) = self.start_vm_inner(vm_id).await {
             db::set_vm_status(&self.pool, vm_id, "error").await.ok();

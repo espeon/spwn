@@ -474,6 +474,8 @@ dependencies = [
  "dotenvy",
  "rand",
  "router-sync",
+ "serde",
+ "serde_json",
  "sqlx",
  "tokio",
  "tokio-stream",

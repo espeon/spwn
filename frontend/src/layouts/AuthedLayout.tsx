@@ -1,10 +1,12 @@
 import { Outlet, Link, useNavigate } from '@tanstack/react-router'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { getMe, logout } from '../api'
+import { useVmEvents } from '../hooks/useVmEvents'
 
 export function AuthedLayout() {
   const qc = useQueryClient()
   const navigate = useNavigate()
+  useVmEvents()
   const { data: me } = useQuery({ queryKey: ['me'], queryFn: getMe })
 
   const logoutMutation = useMutation({

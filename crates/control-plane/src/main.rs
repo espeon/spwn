@@ -1,10 +1,12 @@
-use std::{path::PathBuf, str::FromStr, sync::Arc};
+use std::{convert::Infallible, path::PathBuf, str::FromStr, sync::Arc};
 
 use anyhow::Context;
+use axum::{Extension, routing::get};
+use axum::response::sse::{Event, KeepAlive, Sse};
 use tower_http::services::{ServeDir, ServeFile};
 use agent_proto::agent::control_plane_server::ControlPlaneServer;
-use axum::Extension;
 use router_sync::CaddyClient;
+use tokio_stream::{StreamExt, wrappers::BroadcastStream};
 use tracing::info;
 
 mod events;
@@ -54,13 +56,11 @@ async fn main() -> anyhow::Result<()> {
     let caddy = CaddyClient::new(&caddy_url, static_files_path);
     caddy.write_static_files()?;
 
-    // rebuild caddy routes from DB state
     rebuild_caddy_routes(&pool, &caddy).await;
 
-    // event watcher for host → control plane streams
     let event_watcher = events::EventWatcher::new(pool.clone(), caddy.clone());
+    let event_tx = event_watcher.tx.clone();
 
-    // start watching events from all already-registered hosts
     let hosts = db::list_hosts(&pool).await.unwrap_or_default();
     for host in hosts {
         event_watcher.watch_host(host.id, host.address).await;
@@ -85,11 +85,13 @@ async fn main() -> anyhow::Result<()> {
     let http_app = axum::Router::new()
         .merge(auth::auth_router(auth_state))
         .merge(api::router(ops as Arc<dyn api::VmOps>))
+        .route("/api/events", get(vm_events_sse))
         .fallback_service(
             ServeDir::new(&frontend_path)
                 .not_found_service(ServeFile::new(format!("{frontend_path}/index.html")))
         )
-        .layer(Extension(pool.clone()));
+        .layer(Extension(pool.clone()))
+        .layer(Extension(event_tx));
 
     let http_listener = tokio::net::TcpListener::bind(&listen_addr).await?;
     info!("control-plane HTTP listening on {listen_addr}");
@@ -109,6 +111,21 @@ async fn main() -> anyhow::Result<()> {
     }
 
     Ok(())
+}
+
+async fn vm_events_sse(
+    _account_id: auth::AccountId,
+    Extension(tx): Extension<events::EventBroadcast>,
+) -> Sse<impl tokio_stream::Stream<Item = Result<Event, Infallible>>> {
+    let stream = BroadcastStream::new(tx.subscribe()).filter_map(|result| {
+        match result {
+            Ok(event) => serde_json::to_string(&event).ok().map(|data| {
+                Ok(Event::default().event("vm_status").data(data))
+            }),
+            Err(_) => None,
+        }
+    });
+    Sse::new(stream).keep_alive(KeepAlive::default())
 }
 
 async fn rebuild_caddy_routes(pool: &db::PgPool, caddy: &CaddyClient) {

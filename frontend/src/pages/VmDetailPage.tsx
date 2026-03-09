@@ -11,12 +11,6 @@ export function VmDetailPage() {
   const { data: vm, isLoading, error } = useQuery({
     queryKey: ['vms', vmId],
     queryFn: () => getVm(vmId),
-    refetchInterval: (q) => {
-      const status = q.state.data?.status
-      return status === 'starting' || status === 'stopping' || status === 'snapshotting'
-        ? 2000
-        : false
-    },
   })
 
   const invalidate = () => {

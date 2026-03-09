@@ -11,12 +11,12 @@ export function LoginPage() {
   const [error, setError] = useState<string | null>(null)
 
   const mutation = useMutation({
-    mutationFn: () => login(email, password),
-    onSuccess: async () => {
+    mutationFn: async () => {
+      await login(email, password)
       const me = await getMe()
       qc.setQueryData(['me'], me)
-      navigate({ to: '/vms' })
     },
+    onSuccess: () => navigate({ to: '/vms' }),
     onError: (err) => {
       if (err instanceof ApiError && err.status === 401) {
         setError('invalid email or password')
