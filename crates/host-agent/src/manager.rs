@@ -185,7 +185,8 @@ impl VmManager {
         let vmm_args = VmmArguments::new(VmmApiSocket::Enabled(PathBuf::from("fc.sock")));
         let jailer_args = JailerArguments::new(jail_id)
             .chroot_base_dir(&self.chroot_base_dir)
-            .exec_in_new_pid_ns();
+            .exec_in_new_pid_ns()
+            .daemonize();
         let executor = JailedVmmExecutor::new(vmm_args, jailer_args, FlatVirtualPathResolver);
 
         let ownership = VmmOwnershipModel::Downgraded {
@@ -546,7 +547,8 @@ impl VmManager {
         let vmm_args = VmmArguments::new(VmmApiSocket::Enabled(PathBuf::from("fc.sock")));
         let jailer_args = JailerArguments::new(jail_id)
             .chroot_base_dir(&self.chroot_base_dir)
-            .exec_in_new_pid_ns();
+            .exec_in_new_pid_ns()
+            .daemonize();
         let executor = JailedVmmExecutor::new(vmm_args, jailer_args, FlatVirtualPathResolver);
 
         let ownership = VmmOwnershipModel::Downgraded {
@@ -679,21 +681,28 @@ impl VmManager {
         Ok(())
     }
 
-    // Returns the host-side path to the jail root for a given vm.
-    // Layout: <chroot_base>/firecracker/<vm_id>/root
     fn jail_root_path(&self, vm_id: &str) -> PathBuf {
-        let fc_name = self
-            .installation
-            .get_firecracker_path()
-            .file_name()
-            .and_then(|f| f.to_str())
-            .unwrap_or("firecracker");
-        self.chroot_base_dir.join(fc_name).join(vm_id).join("root")
+        jail_root_path(&self.chroot_base_dir, &self.installation, vm_id)
     }
 
     fn jail_socket_path(&self, vm_id: &str) -> PathBuf {
         self.jail_root_path(vm_id).join("fc.sock")
     }
+}
+
+// Returns the host-side path to the jail root for a given vm.
+// Layout: <chroot_base>/<fc_binary_name>/<vm_id>/root
+fn jail_root_path(
+    chroot_base_dir: &std::path::Path,
+    installation: &VmmInstallation,
+    vm_id: &str,
+) -> PathBuf {
+    let fc_name = installation
+        .get_firecracker_path()
+        .file_name()
+        .and_then(|f| f.to_str())
+        .unwrap_or("firecracker");
+    chroot_base_dir.join(fc_name).join(vm_id).join("root")
 }
 
 fn ip_to_slot(guest_ip: &str) -> anyhow::Result<u32> {
@@ -722,7 +731,7 @@ fn read_jailer_pid(
         .file_name()
         .and_then(|f| f.to_str())
         .unwrap_or("firecracker");
-    let jail_root = chroot_base_dir.join(fc_name).join(vm_id).join("root");
+    let jail_root = jail_root_path(chroot_base_dir, installation, vm_id);
     let pid_file = jail_root.join(format!("{fc_name}.pid"));
 
     for _ in 0..20 {
@@ -754,4 +763,190 @@ fn read_image_init(images_dir: &std::path::Path, name: &str) -> String {
     std::fs::read_to_string(&sidecar)
         .map(|s| s.trim().to_string())
         .unwrap_or_else(|_| "/sbin/init".into())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use fctools::vmm::installation::VmmInstallation;
+
+    use super::{ip_to_slot, jail_root_path, make_jail_id, read_image_init, read_jailer_pid};
+
+    fn installation(fc_bin: &str) -> VmmInstallation {
+        VmmInstallation::new(
+            PathBuf::from(fc_bin),
+            PathBuf::from("/usr/local/bin/jailer"),
+            PathBuf::from("/usr/local/bin/snapshot-editor"),
+        )
+    }
+
+    // ── ip_to_slot ────────────────────────────────────────────────────────────
+
+    #[test]
+    fn ip_to_slot_extracts_third_octet() {
+        assert_eq!(ip_to_slot("172.16.1.2").unwrap(), 1);
+        assert_eq!(ip_to_slot("172.16.42.2").unwrap(), 42);
+        assert_eq!(ip_to_slot("172.16.255.2").unwrap(), 255);
+    }
+
+    #[test]
+    fn ip_to_slot_rejects_too_few_octets() {
+        assert!(ip_to_slot("172.16.1").is_err());
+        assert!(ip_to_slot("").is_err());
+    }
+
+    #[test]
+    fn ip_to_slot_rejects_non_numeric_octet() {
+        assert!(ip_to_slot("172.16.abc.2").is_err());
+    }
+
+    // ── make_jail_id ──────────────────────────────────────────────────────────
+
+    #[test]
+    fn make_jail_id_accepts_uuid() {
+        let id = make_jail_id("550e8400-e29b-41d4-a716-446655440000");
+        assert!(id.is_ok(), "uuid should be a valid jail id");
+    }
+
+    #[test]
+    fn make_jail_id_rejects_too_short() {
+        assert!(make_jail_id("ab").is_err());
+        assert!(make_jail_id("1234").is_err());
+    }
+
+    #[test]
+    fn make_jail_id_rejects_invalid_chars() {
+        assert!(make_jail_id("invalid_vm_id").is_err());
+    }
+
+    #[test]
+    fn make_jail_id_accepts_alphanumeric_dashes() {
+        assert!(make_jail_id("vm-abc-123").is_ok());
+    }
+
+    // ── jail_root_path ────────────────────────────────────────────────────────
+
+    #[test]
+    fn jail_root_path_uses_fc_binary_name() {
+        let inst = installation("/usr/local/bin/firecracker");
+        let vm_id = "550e8400-e29b-41d4-a716-446655440000";
+        let root = jail_root_path(std::path::Path::new("/srv/jailer"), &inst, vm_id);
+        assert_eq!(
+            root,
+            PathBuf::from(format!("/srv/jailer/firecracker/{vm_id}/root"))
+        );
+    }
+
+    #[test]
+    fn jail_root_path_uses_custom_fc_binary_name() {
+        let inst = installation("/opt/bin/firecracker-1.9");
+        let root = jail_root_path(std::path::Path::new("/srv/jailer"), &inst, "vm-test-id-one");
+        assert_eq!(
+            root,
+            PathBuf::from("/srv/jailer/firecracker-1.9/vm-test-id-one/root")
+        );
+    }
+
+    #[test]
+    fn jail_root_path_custom_chroot_base() {
+        let inst = installation("/usr/local/bin/firecracker");
+        let root = jail_root_path(
+            std::path::Path::new("/var/run/jails"),
+            &inst,
+            "vm-abc-12345",
+        );
+        assert_eq!(
+            root,
+            PathBuf::from("/var/run/jails/firecracker/vm-abc-12345/root")
+        );
+    }
+
+    #[test]
+    fn jail_socket_path_is_fc_sock_inside_jail_root() {
+        let inst = installation("/usr/local/bin/firecracker");
+        let vm_id = "550e8400-e29b-41d4-a716-446655440000";
+        let sock =
+            jail_root_path(std::path::Path::new("/srv/jailer"), &inst, vm_id).join("fc.sock");
+        assert_eq!(
+            sock,
+            PathBuf::from(format!("/srv/jailer/firecracker/{vm_id}/root/fc.sock"))
+        );
+    }
+
+    // ── read_jailer_pid ───────────────────────────────────────────────────────
+
+    #[test]
+    fn read_jailer_pid_reads_pid_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let vm_id = "vm-pid-test-abcd";
+        let inst = installation(dir.path().join("firecracker").to_str().unwrap());
+
+        let jail_root = dir.path().join("firecracker").join(vm_id).join("root");
+        std::fs::create_dir_all(&jail_root).unwrap();
+        std::fs::write(jail_root.join("firecracker.pid"), "12345\n").unwrap();
+
+        let pid = read_jailer_pid(vm_id, dir.path(), &inst);
+        assert_eq!(pid, Some(12345));
+    }
+
+    #[test]
+    fn read_jailer_pid_trims_whitespace() {
+        let dir = tempfile::tempdir().unwrap();
+        let vm_id = "vm-pid-trim-abcd";
+        let inst = installation(dir.path().join("firecracker").to_str().unwrap());
+
+        let jail_root = dir.path().join("firecracker").join(vm_id).join("root");
+        std::fs::create_dir_all(&jail_root).unwrap();
+        std::fs::write(jail_root.join("firecracker.pid"), "  99\n  ").unwrap();
+
+        let pid = read_jailer_pid(vm_id, dir.path(), &inst);
+        assert_eq!(pid, Some(99));
+    }
+
+    #[test]
+    fn read_jailer_pid_returns_none_when_no_pid_file_and_no_cgroup() {
+        let dir = tempfile::tempdir().unwrap();
+        let vm_id = "vm-pid-missing-abcd";
+        let inst = installation(dir.path().join("firecracker").to_str().unwrap());
+
+        let pid = read_jailer_pid(vm_id, dir.path(), &inst);
+        assert_eq!(pid, None);
+    }
+
+    #[test]
+    fn read_jailer_pid_ignores_non_numeric_content() {
+        let dir = tempfile::tempdir().unwrap();
+        let vm_id = "vm-pid-bogus-abcd";
+        let inst = installation(dir.path().join("firecracker").to_str().unwrap());
+
+        let jail_root = dir.path().join("firecracker").join(vm_id).join("root");
+        std::fs::create_dir_all(&jail_root).unwrap();
+        std::fs::write(jail_root.join("firecracker.pid"), "not-a-pid\n").unwrap();
+
+        let pid = read_jailer_pid(vm_id, dir.path(), &inst);
+        assert_eq!(pid, None);
+    }
+
+    // ── read_image_init ───────────────────────────────────────────────────────
+
+    #[test]
+    fn read_image_init_reads_sidecar_file() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("ubuntu.init"), "/usr/sbin/init\n").unwrap();
+        assert_eq!(read_image_init(dir.path(), "ubuntu"), "/usr/sbin/init");
+    }
+
+    #[test]
+    fn read_image_init_trims_whitespace() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("custom.init"), "  /sbin/runit  \n").unwrap();
+        assert_eq!(read_image_init(dir.path(), "custom"), "/sbin/runit");
+    }
+
+    #[test]
+    fn read_image_init_defaults_to_sbin_init_when_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(read_image_init(dir.path(), "nonexistent"), "/sbin/init");
+    }
 }

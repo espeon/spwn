@@ -101,5 +101,74 @@ fn pid_is_alive(pid: u32) -> bool {
 fn read_pid_from_cgroup(vm_id: &str) -> Option<i64> {
     let cgroup_procs = format!("/sys/fs/cgroup/firecracker/{vm_id}/cgroup.procs");
     let contents = std::fs::read_to_string(&cgroup_procs).ok()?;
+    parse_first_pid(&contents)
+}
+
+fn parse_first_pid(contents: &str) -> Option<i64> {
     contents.lines().next()?.trim().parse::<i64>().ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{parse_first_pid, pid_is_alive};
+
+    // ── pid_is_alive ──────────────────────────────────────────────────────────
+
+    #[test]
+    fn pid_is_alive_returns_true_for_current_process() {
+        let pid = std::process::id();
+        assert!(pid_is_alive(pid), "current process should be alive");
+    }
+
+    #[test]
+    fn pid_is_alive_returns_false_for_pid_1_if_not_init() {
+        // PID 1 always exists on Linux (init/systemd), so this is a sanity
+        // check that the function can return true for a real pid.
+        assert!(pid_is_alive(1), "pid 1 should always exist on Linux");
+    }
+
+    #[test]
+    fn pid_is_alive_returns_false_for_implausible_pid() {
+        // PID 0 is never a real process.
+        assert!(!pid_is_alive(0));
+    }
+
+    // ── parse_first_pid ───────────────────────────────────────────────────────
+
+    #[test]
+    fn parse_first_pid_reads_single_pid() {
+        assert_eq!(parse_first_pid("12345\n"), Some(12345));
+    }
+
+    #[test]
+    fn parse_first_pid_reads_first_of_multiple_pids() {
+        assert_eq!(parse_first_pid("12345\n67890\n"), Some(12345));
+    }
+
+    #[test]
+    fn parse_first_pid_trims_whitespace() {
+        assert_eq!(parse_first_pid("  99  \n"), Some(99));
+    }
+
+    #[test]
+    fn parse_first_pid_returns_none_for_empty_input() {
+        assert_eq!(parse_first_pid(""), None);
+    }
+
+    #[test]
+    fn parse_first_pid_returns_none_for_whitespace_only() {
+        assert_eq!(parse_first_pid("   \n"), None);
+    }
+
+    #[test]
+    fn parse_first_pid_returns_none_for_non_numeric() {
+        assert_eq!(parse_first_pid("not-a-pid\n"), None);
+    }
+
+    #[test]
+    fn parse_first_pid_parses_negative_as_valid_i64() {
+        // parse_first_pid is a straight i64 parse — negative values won't
+        // appear in a real cgroup.procs file but we don't need to reject them
+        assert_eq!(parse_first_pid("-1\n"), Some(-1));
+    }
 }

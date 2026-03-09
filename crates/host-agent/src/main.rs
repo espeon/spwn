@@ -45,32 +45,38 @@ fn jailer_gid() -> anyhow::Result<u32> {
 
 fn resolve_user_id(name: &str) -> anyhow::Result<u32> {
     let contents = std::fs::read_to_string("/etc/passwd").context("read /etc/passwd")?;
-    for line in contents.lines() {
-        let fields: Vec<&str> = line.split(':').collect();
-        if fields.len() >= 3 && fields[0] == name {
-            return fields[2]
-                .parse::<u32>()
-                .with_context(|| format!("parse uid for {name}"));
-        }
-    }
-    Err(anyhow::anyhow!(
-        "user '{name}' not found in /etc/passwd — create it or set JAILER_UID"
-    ))
+    parse_id_from_passwd(&contents, name).ok_or_else(|| {
+        anyhow::anyhow!("user '{name}' not found in /etc/passwd — create it or set JAILER_UID")
+    })
 }
 
 fn resolve_group_id(name: &str) -> anyhow::Result<u32> {
     let contents = std::fs::read_to_string("/etc/group").context("read /etc/group")?;
+    parse_id_from_passwd(&contents, name).ok_or_else(|| {
+        anyhow::anyhow!("group '{name}' not found in /etc/group — create it or set JAILER_GID")
+    })
+}
+
+// Parse a uid or gid from a colon-delimited passwd/group file buffer.
+// Both formats share the same structure for the fields we care about:
+//   name:password:id:...
+fn parse_id_from_passwd(contents: &str, name: &str) -> Option<u32> {
     for line in contents.lines() {
-        let fields: Vec<&str> = line.split(':').collect();
-        if fields.len() >= 3 && fields[0] == name {
-            return fields[2]
-                .parse::<u32>()
-                .with_context(|| format!("parse gid for {name}"));
+        let mut fields = line.splitn(4, ':');
+        let Some(entry_name) = fields.next() else {
+            continue;
+        };
+        let Some(_password) = fields.next() else {
+            continue;
+        };
+        let Some(id_str) = fields.next() else {
+            continue;
+        };
+        if entry_name == name {
+            return id_str.parse::<u32>().ok();
         }
     }
-    Err(anyhow::anyhow!(
-        "group '{name}' not found in /etc/group — create it or set JAILER_GID"
-    ))
+    None
 }
 
 fn snapshot_editor_path() -> PathBuf {
@@ -269,6 +275,71 @@ fn num_cpus() -> u32 {
     std::thread::available_parallelism()
         .map(|n| n.get() as u32)
         .unwrap_or(1)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_id_from_passwd;
+
+    const PASSWD: &str = "\
+root:x:0:0:root:/root:/bin/bash
+daemon:x:1:1:daemon:/usr/sbin:/usr/sbin/nologin
+spwn-vm:x:954:954::/home/spwn-vm:/sbin/nologin
+nobody:x:65534:65534:nobody:/nonexistent:/usr/sbin/nologin
+";
+
+    const GROUP: &str = "\
+root:x:0:
+daemon:x:1:
+spwn-vm:x:954:
+nogroup:x:65534:
+";
+
+    #[test]
+    fn parse_id_finds_existing_user() {
+        assert_eq!(parse_id_from_passwd(PASSWD, "spwn-vm"), Some(954));
+    }
+
+    #[test]
+    fn parse_id_finds_root() {
+        assert_eq!(parse_id_from_passwd(PASSWD, "root"), Some(0));
+    }
+
+    #[test]
+    fn parse_id_finds_high_uid() {
+        assert_eq!(parse_id_from_passwd(PASSWD, "nobody"), Some(65534));
+    }
+
+    #[test]
+    fn parse_id_returns_none_for_missing_user() {
+        assert_eq!(parse_id_from_passwd(PASSWD, "nonexistent"), None);
+    }
+
+    #[test]
+    fn parse_id_returns_none_for_empty_input() {
+        assert_eq!(parse_id_from_passwd("", "spwn-vm"), None);
+    }
+
+    #[test]
+    fn parse_id_works_for_group_file() {
+        assert_eq!(parse_id_from_passwd(GROUP, "spwn-vm"), Some(954));
+        assert_eq!(parse_id_from_passwd(GROUP, "nogroup"), Some(65534));
+    }
+
+    #[test]
+    fn parse_id_does_not_match_partial_name() {
+        assert_eq!(parse_id_from_passwd(PASSWD, "spwn"), None);
+        assert_eq!(parse_id_from_passwd(PASSWD, "spwn-vm-extra"), None);
+    }
+
+    #[test]
+    fn parse_id_skips_lines_missing_id_field() {
+        // a line with only one colon-separated field means the id field is
+        // missing; the iterator returns None for fields.next() on the id
+        // position and the line is skipped. the next valid line is found.
+        let malformed = "no-password-or-id\nspwn-vm:x:954:954::/home/spwn-vm:/sbin/nologin\n";
+        assert_eq!(parse_id_from_passwd(malformed, "spwn-vm"), Some(954));
+    }
 }
 
 fn total_mem_mb() -> u32 {
