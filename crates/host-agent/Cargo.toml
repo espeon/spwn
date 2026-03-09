@@ -7,6 +7,10 @@ edition = "2024"
 name = "spwn-host-agent"
 path = "src/main.rs"
 
+[lib]
+name = "host_agent"
+path = "src/lib.rs"
+
 [dependencies]
 agent-proto = { path = "../agent-proto" }
 common = { path = "../common" }
@@ -34,3 +38,9 @@ dotenvy = "0.15"
 sqlx = { version = "0.8", features = ["postgres", "runtime-tokio-native-tls"] }
 tokio-stream = { version = "0.1", features = ["sync"] }
 futures-core = "0.3"
+
+[dev-dependencies]
+uuid = { version = "1", features = ["v4"] }
+dotenvy = "0.15"
+sqlx = { version = "0.8", features = ["postgres", "runtime-tokio-native-tls"] }
+tokio = { version = "1", features = ["full"] }
