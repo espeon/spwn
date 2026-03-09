@@ -29,7 +29,7 @@ message CreateVmRequest {
   string name         = 3;
   string subdomain    = 4;
   string image        = 5;
-  int32  vcores       = 6;
+  double vcpus        = 6;
   int32  memory_mb    = 7;
   int32  exposed_port = 8;
   string ip_address   = 9;

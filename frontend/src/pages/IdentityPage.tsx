@@ -75,7 +75,7 @@ export function IdentityPage() {
 
   const activeVms =
     vms?.filter((v) => v.status === "running" || v.status === "starting") ?? [];
-  const usedVcores = activeVms.reduce((s, v) => s + v.vcores, 0);
+  const usedVcpus = activeVms.reduce((s, v) => s + v.vcpus, 0);
   const usedMem = activeVms.reduce((s, v) => s + v.memory_mb, 0);
 
   const profileMutation = useMutation({
@@ -364,9 +364,9 @@ export function IdentityPage() {
             label="vms"
           />
           <QuotaBar
-            used={usedVcores}
+            used={usedVcpus}
             limit={me?.vcpu_limit ?? 0}
-            label="vcores"
+            label="vcpus"
           />
           <QuotaBar
             used={usedMem}

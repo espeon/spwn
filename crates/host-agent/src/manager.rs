@@ -101,7 +101,7 @@ impl VmManager {
         name: &str,
         subdomain: &str,
         image: &str,
-        vcores: i32,
+        vcpus: f64,
         memory_mb: i32,
         exposed_port: i32,
         ip_address: &str,
@@ -128,7 +128,7 @@ impl VmManager {
                 account_id: account_id.to_string(),
                 name: name.to_string(),
                 subdomain: subdomain.to_string(),
-                vcores,
+                vcpus,
                 memory_mb,
                 kernel_path: self.kernel_path.to_string_lossy().into(),
                 rootfs_path: rootfs_path.to_string_lossy().into(),
@@ -186,7 +186,8 @@ impl VmManager {
         let jailer_args = JailerArguments::new(jail_id)
             .chroot_base_dir(&self.chroot_base_dir)
             .exec_in_new_pid_ns()
-            .daemonize();
+            .daemonize()
+            .cgroup_version(fctools::vmm::arguments::jailer::JailerCgroupVersion::V2);
         let executor = JailedVmmExecutor::new(vmm_args, jailer_args, FlatVirtualPathResolver);
 
         let ownership = VmmOwnershipModel::Downgraded {
@@ -259,7 +260,7 @@ impl VmManager {
                 ],
                 pmem_devices: vec![],
                 machine_configuration: MachineConfiguration {
-                    vcpu_count: vm.vcores as u8,
+                    vcpu_count: vm.vcpus.ceil() as u8,
                     mem_size_mib: vm.memory_mb as usize,
                     smt: None,
                     track_dirty_pages: Some(true),
@@ -299,6 +300,9 @@ impl VmManager {
                 0
             },
         );
+
+        apply_cpu_quota(vm_id, vm.vcpus)
+            .unwrap_or_else(|e| warn!("could not apply cpu quota for vm {vm_id}: {e}"));
 
         db::set_vm_running(
             &self.pool,
@@ -548,7 +552,8 @@ impl VmManager {
         let jailer_args = JailerArguments::new(jail_id)
             .chroot_base_dir(&self.chroot_base_dir)
             .exec_in_new_pid_ns()
-            .daemonize();
+            .daemonize()
+            .cgroup_version(fctools::vmm::arguments::jailer::JailerCgroupVersion::V2);
         let executor = JailedVmmExecutor::new(vmm_args, jailer_args, FlatVirtualPathResolver);
 
         let ownership = VmmOwnershipModel::Downgraded {
@@ -622,7 +627,7 @@ impl VmManager {
                 drives: vec![],
                 pmem_devices: vec![],
                 machine_configuration: MachineConfiguration {
-                    vcpu_count: vm.vcores as u8,
+                    vcpu_count: vm.vcpus.ceil() as u8,
                     mem_size_mib: vm.memory_mb as usize,
                     smt: None,
                     track_dirty_pages: Some(true),
@@ -658,6 +663,9 @@ impl VmManager {
                 );
                 0
             });
+
+        apply_cpu_quota(&vm.id, vm.vcpus)
+            .unwrap_or_else(|e| warn!("could not apply cpu quota for vm {}: {e}", vm.id));
 
         db::set_vm_running(
             &self.pool,
@@ -703,6 +711,21 @@ fn jail_root_path(
         .and_then(|f| f.to_str())
         .unwrap_or("firecracker");
     chroot_base_dir.join(fc_name).join(vm_id).join("root")
+}
+
+// Write the cgroup v2 cpu.max throttle for a VM.
+// cpu.max format: "$quota $period" where quota/period are in microseconds.
+fn apply_cpu_quota(vm_id: &str, vcpus: f64) -> anyhow::Result<()> {
+    let cgroup_cpu_max = format!("/sys/fs/cgroup/firecracker/{vm_id}/cpu.max");
+    std::fs::write(&cgroup_cpu_max, cpu_max_value(vcpus))
+        .with_context(|| format!("write {cgroup_cpu_max}"))?;
+    Ok(())
+}
+
+fn cpu_max_value(vcpus: f64) -> String {
+    let period_us: u64 = 100_000;
+    let quota_us = (vcpus * period_us as f64).round() as u64;
+    format!("{quota_us} {period_us}")
 }
 
 fn ip_to_slot(guest_ip: &str) -> anyhow::Result<u32> {
@@ -771,7 +794,9 @@ mod tests {
 
     use fctools::vmm::installation::VmmInstallation;
 
-    use super::{ip_to_slot, jail_root_path, make_jail_id, read_image_init, read_jailer_pid};
+    use super::{
+        cpu_max_value, ip_to_slot, jail_root_path, make_jail_id, read_image_init, read_jailer_pid,
+    };
 
     fn installation(fc_bin: &str) -> VmmInstallation {
         VmmInstallation::new(
@@ -926,6 +951,31 @@ mod tests {
 
         let pid = read_jailer_pid(vm_id, dir.path(), &inst);
         assert_eq!(pid, None);
+    }
+
+    // ── read_image_init ───────────────────────────────────────────────────────
+
+    // ── cpu_max_value ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn cpu_max_value_full_core() {
+        assert_eq!(cpu_max_value(1.0), "100000 100000");
+    }
+
+    #[test]
+    fn cpu_max_value_half_core() {
+        assert_eq!(cpu_max_value(0.5), "50000 100000");
+    }
+
+    #[test]
+    fn cpu_max_value_two_cores() {
+        assert_eq!(cpu_max_value(2.0), "200000 100000");
+    }
+
+    #[test]
+    fn cpu_max_value_rounds_to_nearest_microsecond() {
+        // 0.333... * 100_000 = 33_333.3 -> rounds to 33_333
+        assert_eq!(cpu_max_value(1.0 / 3.0), "33333 100000");
     }
 
     // ── read_image_init ───────────────────────────────────────────────────────

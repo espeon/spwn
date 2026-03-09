@@ -259,19 +259,19 @@ async fn test_delete_expired_sessions() {
 async fn insert_vm_with_status(
     pool: &db::PgPool,
     account_id: &str,
-    vcores: i32,
+    vcpus: f64,
     memory_mb: i32,
     status: &str,
 ) -> String {
     let vm_id = uuid::Uuid::new_v4().to_string();
     sqlx::query(
-        "INSERT INTO vms (id, account_id, name, status, subdomain, vcores, memory_mb,
+        "INSERT INTO vms (id, account_id, name, status, subdomain, vcpus, memory_mb,
          kernel_path, rootfs_path, overlay_path, real_init, ip_address, exposed_port, created_at)
          VALUES ($1,$2,'test','running',$1,$3,$4,'/k','/r','/o','init','1.2.3.4',8080,0)",
     )
     .bind(&vm_id)
     .bind(account_id)
-    .bind(vcores)
+    .bind(vcpus)
     .bind(memory_mb)
     .execute(pool)
     .await
@@ -295,9 +295,9 @@ async fn test_quota_reserve_success() {
     db::create_account(&pool, &acct).await.expect("create");
 
     // create a stopped vm to reserve
-    let vm_id = insert_vm_with_status(&pool, &acct.id, 2, 512, "stopped").await;
+    let vm_id = insert_vm_with_status(&pool, &acct.id, 2.0, 512, "stopped").await;
 
-    db::check_quota_and_reserve(&pool, &acct.id, &vm_id, 2, 512)
+    db::check_quota_and_reserve(&pool, &acct.id, &vm_id, 2.0, 512)
         .await
         .expect("quota should pass");
 
@@ -323,11 +323,11 @@ async fn test_quota_vm_limit_exceeded() {
         .await
         .expect("update limit");
 
-    insert_vm_with_status(&pool, &acct.id, 1, 256, "running").await;
+    insert_vm_with_status(&pool, &acct.id, 1.0, 256, "running").await;
 
-    let candidate = insert_vm_with_status(&pool, &acct.id, 1, 256, "stopped").await;
+    let candidate = insert_vm_with_status(&pool, &acct.id, 1.0, 256, "stopped").await;
 
-    let err = db::check_quota_and_reserve(&pool, &acct.id, &candidate, 1, 256)
+    let err = db::check_quota_and_reserve(&pool, &acct.id, &candidate, 1.0, 256)
         .await
         .expect_err("should exceed vm limit");
     assert!(
@@ -349,10 +349,10 @@ async fn test_quota_vcpu_limit_exceeded() {
         .await
         .expect("update");
 
-    insert_vm_with_status(&pool, &acct.id, 3, 256, "running").await;
-    let candidate = insert_vm_with_status(&pool, &acct.id, 2, 256, "stopped").await;
+    insert_vm_with_status(&pool, &acct.id, 3.0, 256, "running").await;
+    let candidate = insert_vm_with_status(&pool, &acct.id, 2.0, 256, "stopped").await;
 
-    let err = db::check_quota_and_reserve(&pool, &acct.id, &candidate, 2, 256)
+    let err = db::check_quota_and_reserve(&pool, &acct.id, &candidate, 2.0, 256)
         .await
         .expect_err("should exceed vcpu limit");
     assert!(matches!(err, db::QuotaError::Exceeded(_)));
@@ -371,10 +371,10 @@ async fn test_quota_mem_limit_exceeded() {
         .await
         .expect("update");
 
-    insert_vm_with_status(&pool, &acct.id, 1, 768, "running").await;
-    let candidate = insert_vm_with_status(&pool, &acct.id, 1, 512, "stopped").await;
+    insert_vm_with_status(&pool, &acct.id, 1.0, 768, "running").await;
+    let candidate = insert_vm_with_status(&pool, &acct.id, 1.0, 512, "stopped").await;
 
-    let err = db::check_quota_and_reserve(&pool, &acct.id, &candidate, 1, 512)
+    let err = db::check_quota_and_reserve(&pool, &acct.id, &candidate, 1.0, 512)
         .await
         .expect_err("should exceed mem limit");
     assert!(matches!(err, db::QuotaError::Exceeded(_)));
@@ -393,12 +393,12 @@ async fn test_quota_only_counts_active_vms() {
         .await
         .expect("update");
 
-    insert_vm_with_status(&pool, &acct.id, 2, 512, "stopped").await;
-    insert_vm_with_status(&pool, &acct.id, 2, 512, "stopped").await;
+    insert_vm_with_status(&pool, &acct.id, 2.0, 512, "stopped").await;
+    insert_vm_with_status(&pool, &acct.id, 2.0, 512, "stopped").await;
 
-    let candidate = insert_vm_with_status(&pool, &acct.id, 2, 512, "stopped").await;
+    let candidate = insert_vm_with_status(&pool, &acct.id, 2.0, 512, "stopped").await;
 
-    db::check_quota_and_reserve(&pool, &acct.id, &candidate, 2, 512)
+    db::check_quota_and_reserve(&pool, &acct.id, &candidate, 2.0, 512)
         .await
         .expect("stopped vms should not count against quota");
 }

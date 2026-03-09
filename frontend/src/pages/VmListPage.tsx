@@ -36,7 +36,7 @@ function CreateVmDialog({
 }) {
   const qc = useQueryClient();
   const [name, setName] = useState("");
-  const [vcores, setVcores] = useState(2);
+  const [vcpus, setVcpus] = useState(1.0);
   const [memoryMb, setMemoryMb] = useState(512);
   const [port, setPort] = useState(8080);
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
@@ -44,7 +44,7 @@ function CreateVmDialog({
 
   function initAllDefault() {
     setName("");
-    setVcores(2);
+    setVcpus(1.0);
     setMemoryMb(512);
     setPort(8080);
     setFieldErrors({});
@@ -67,8 +67,8 @@ function CreateVmDialog({
     } else if (!/^[a-zA-Z0-9][a-zA-Z0-9\- ]*$/.test(trimmed)) {
       errs.name = "letters, numbers, hyphens, and spaces only";
     }
-    if (vcores < 1 || vcores > 8) {
-      errs.vcores = "must be between 1 and 8";
+    if (vcpus < 0.5 || vcpus > 8) {
+      errs.vcpus = "must be between 0.5 and 8";
     }
     if (memoryMb < 128 || memoryMb > 12288 || memoryMb % 128 !== 0) {
       errs.memory = "must be 128–12288 mb in multiples of 128";
@@ -99,7 +99,7 @@ function CreateVmDialog({
     setFieldErrors({});
     const req = {
       name: name.trim(),
-      vcores,
+      vcpus,
       memory_mb: memoryMb,
       exposed_port: port,
     };
@@ -150,27 +150,28 @@ function CreateVmDialog({
           </div>
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1.5">
-              <Label htmlFor="vm-vcores">vcores</Label>
+              <Label htmlFor="vm-vcpus">vcpus</Label>
               <Input
-                id="vm-vcores"
+                id="vm-vcpus"
                 type="number"
-                min={1}
+                min={0.5}
                 max={8}
-                value={vcores}
+                step={0.5}
+                value={vcpus}
                 onChange={(e) => {
-                  setVcores(Number(e.target.value));
-                  if (fieldErrors.vcores)
-                    setFieldErrors((p) => ({ ...p, vcores: "" }));
+                  setVcpus(Number(e.target.value));
+                  if (fieldErrors.vcpus)
+                    setFieldErrors((p) => ({ ...p, vcpus: "" }));
                 }}
-                aria-invalid={!!fieldErrors.vcores}
+                aria-invalid={!!fieldErrors.vcpus}
                 className={
-                  fieldErrors.vcores
+                  fieldErrors.vcpus
                     ? "border-destructive focus-visible:ring-destructive"
                     : ""
                 }
               />
-              {fieldErrors.vcores && (
-                <p className="text-xs text-destructive">{fieldErrors.vcores}</p>
+              {fieldErrors.vcpus && (
+                <p className="text-xs text-destructive">{fieldErrors.vcpus}</p>
               )}
             </div>
             <div className="space-y-1.5">
@@ -374,7 +375,7 @@ function VmRow({ vm }: { vm: Vm }) {
           <div className="flex gap-4 text-xs text-muted-foreground">
             <span className="flex items-center gap-1">
               <IconCpu size={16} />
-              {vm.vcores} vCore{vm.vcores > 1 && "s"}
+              {vm.vcpus} vCPU{vm.vcpus !== 1 && "s"}
             </span>
             <span className="flex items-center gap-1">
               <MemoryStick size={16} />

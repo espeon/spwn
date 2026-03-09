@@ -62,7 +62,7 @@ impl api::VmOps for ControlPlaneOps {
                 name: req.name,
                 subdomain: sub,
                 image: req.image,
-                vcores: req.vcores,
+                vcpus: req.vcpus,
                 memory_mb: req.memory_mb,
                 exposed_port: req.exposed_port,
                 ip_address,
@@ -89,22 +89,16 @@ impl api::VmOps for ControlPlaneOps {
 
         // quota check + atomic status='starting' in a serializable tx
         let result =
-            db::check_quota_and_reserve(&self.pool, &vm.account_id, id, vm.vcores, vm.memory_mb)
+            db::check_quota_and_reserve(&self.pool, &vm.account_id, id, vm.vcpus, vm.memory_mb)
                 .await;
 
         match result {
             Ok(()) => {}
             Err(db::QuotaError::Serialization) => {
                 // retry once on serialization conflict
-                db::check_quota_and_reserve(
-                    &self.pool,
-                    &vm.account_id,
-                    id,
-                    vm.vcores,
-                    vm.memory_mb,
-                )
-                .await
-                .map_err(|e| anyhow!("{e}"))?;
+                db::check_quota_and_reserve(&self.pool, &vm.account_id, id, vm.vcpus, vm.memory_mb)
+                    .await
+                    .map_err(|e| anyhow!("{e}"))?;
             }
             Err(e) => return Err(anyhow!("{e}")),
         }
@@ -237,7 +231,11 @@ impl api::VmOps for ControlPlaneOps {
 
             let set_result = if current.status == "running" {
                 self.caddy
-                    .set_vm_route(&new_subdomain, &current.ip_address, current.exposed_port as u16)
+                    .set_vm_route(
+                        &new_subdomain,
+                        &current.ip_address,
+                        current.exposed_port as u16,
+                    )
                     .await
             } else {
                 self.caddy.set_stopped_route(&new_subdomain).await

@@ -28,7 +28,7 @@ export interface Vm {
   status: VmStatus;
   subdomain: string;
   image: string;
-  vcores: number;
+  vcpus: number;
   memory_mb: number;
   ip_address: string;
   exposed_port: number;
@@ -37,7 +37,7 @@ export interface Vm {
 
 export interface CreateVmRequest {
   name: string;
-  vcores: number;
+  vcpus: number;
   memory_mb: number;
   exposed_port: number;
 }

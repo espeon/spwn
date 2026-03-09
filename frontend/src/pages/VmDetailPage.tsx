@@ -126,7 +126,7 @@ export function VmDetailPage() {
       <div className="grid grid-cols-2 gap-3 mb-6 sm:grid-cols-4">
         {(
           [
-            ["vcores", vm.vcores],
+            ["vcpus", vm.vcpus],
             ["memory", `${vm.memory_mb} mb`],
             ["ip", vm.ip_address],
             ["port", vm.exposed_port],

@@ -1,20 +1,15 @@
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use tokio_stream::wrappers::BroadcastStream;
 use tokio_stream::StreamExt;
+use tokio_stream::wrappers::BroadcastStream;
 use tonic::{Request, Response, Status, Streaming};
 
 use agent_proto::agent::{
+    AgentEvent, ConsoleInput, ConsoleOutput, CreateVmRequest, CreateVmResponse, DeleteVmRequest,
+    DeleteVmResponse, RestoreRequest, RestoreResponse, StartVmRequest, StartVmResponse,
+    StopVmRequest, StopVmResponse, TakeSnapshotRequest, TakeSnapshotResponse, WatchRequest,
     host_agent_server::HostAgent,
-    AgentEvent, ConsoleInput, ConsoleOutput,
-    CreateVmRequest, CreateVmResponse,
-    DeleteVmRequest, DeleteVmResponse,
-    RestoreRequest, RestoreResponse,
-    StartVmRequest, StartVmResponse,
-    StopVmRequest, StopVmResponse,
-    TakeSnapshotRequest, TakeSnapshotResponse,
-    WatchRequest,
 };
 
 use crate::manager::{VmEvent, VmManager};
@@ -23,7 +18,6 @@ pub struct HostAgentService {
     pub manager: Arc<VmManager>,
 }
 
-
 #[tonic::async_trait]
 impl HostAgent for HostAgentService {
     async fn create_vm(
@@ -31,19 +25,29 @@ impl HostAgent for HostAgentService {
         req: Request<CreateVmRequest>,
     ) -> Result<Response<CreateVmResponse>, Status> {
         let r = req.into_inner();
-        match self.manager.create_vm(
-            &r.vm_id,
-            &r.account_id,
-            &r.name,
-            &r.subdomain,
-            &r.image,
-            r.vcores,
-            r.memory_mb,
-            r.exposed_port,
-            &r.ip_address,
-        ).await {
-            Ok(()) => Ok(Response::new(CreateVmResponse { ok: true, error: String::new() })),
-            Err(e) => Ok(Response::new(CreateVmResponse { ok: false, error: e.to_string() })),
+        match self
+            .manager
+            .create_vm(
+                &r.vm_id,
+                &r.account_id,
+                &r.name,
+                &r.subdomain,
+                &r.image,
+                r.vcpus,
+                r.memory_mb,
+                r.exposed_port,
+                &r.ip_address,
+            )
+            .await
+        {
+            Ok(()) => Ok(Response::new(CreateVmResponse {
+                ok: true,
+                error: String::new(),
+            })),
+            Err(e) => Ok(Response::new(CreateVmResponse {
+                ok: false,
+                error: e.to_string(),
+            })),
         }
     }
 
@@ -53,8 +57,14 @@ impl HostAgent for HostAgentService {
     ) -> Result<Response<StartVmResponse>, Status> {
         let vm_id = req.into_inner().vm_id;
         match self.manager.start_vm(&vm_id).await {
-            Ok(()) => Ok(Response::new(StartVmResponse { ok: true, error: String::new() })),
-            Err(e) => Ok(Response::new(StartVmResponse { ok: false, error: e.to_string() })),
+            Ok(()) => Ok(Response::new(StartVmResponse {
+                ok: true,
+                error: String::new(),
+            })),
+            Err(e) => Ok(Response::new(StartVmResponse {
+                ok: false,
+                error: e.to_string(),
+            })),
         }
     }
 
@@ -64,8 +74,14 @@ impl HostAgent for HostAgentService {
     ) -> Result<Response<StopVmResponse>, Status> {
         let vm_id = req.into_inner().vm_id;
         match self.manager.stop_vm(&vm_id).await {
-            Ok(()) => Ok(Response::new(StopVmResponse { ok: true, error: String::new() })),
-            Err(e) => Ok(Response::new(StopVmResponse { ok: false, error: e.to_string() })),
+            Ok(()) => Ok(Response::new(StopVmResponse {
+                ok: true,
+                error: String::new(),
+            })),
+            Err(e) => Ok(Response::new(StopVmResponse {
+                ok: false,
+                error: e.to_string(),
+            })),
         }
     }
 
@@ -75,8 +91,14 @@ impl HostAgent for HostAgentService {
     ) -> Result<Response<DeleteVmResponse>, Status> {
         let vm_id = req.into_inner().vm_id;
         match self.manager.delete_vm(&vm_id).await {
-            Ok(()) => Ok(Response::new(DeleteVmResponse { ok: true, error: String::new() })),
-            Err(e) => Ok(Response::new(DeleteVmResponse { ok: false, error: e.to_string() })),
+            Ok(()) => Ok(Response::new(DeleteVmResponse {
+                ok: true,
+                error: String::new(),
+            })),
+            Err(e) => Ok(Response::new(DeleteVmResponse {
+                ok: false,
+                error: e.to_string(),
+            })),
         }
     }
 
@@ -85,7 +107,11 @@ impl HostAgent for HostAgentService {
         req: Request<TakeSnapshotRequest>,
     ) -> Result<Response<TakeSnapshotResponse>, Status> {
         let r = req.into_inner();
-        let label = if r.label.is_empty() { None } else { Some(r.label) };
+        let label = if r.label.is_empty() {
+            None
+        } else {
+            Some(r.label)
+        };
         match self.manager.take_snapshot(&r.vm_id, label).await {
             Ok(snap) => Ok(Response::new(TakeSnapshotResponse {
                 ok: true,
@@ -108,8 +134,14 @@ impl HostAgent for HostAgentService {
     ) -> Result<Response<RestoreResponse>, Status> {
         let r = req.into_inner();
         match self.manager.restore_snapshot(&r.vm_id, &r.snap_id).await {
-            Ok(()) => Ok(Response::new(RestoreResponse { ok: true, error: String::new() })),
-            Err(e) => Ok(Response::new(RestoreResponse { ok: false, error: e.to_string() })),
+            Ok(()) => Ok(Response::new(RestoreResponse {
+                ok: true,
+                error: String::new(),
+            })),
+            Err(e) => Ok(Response::new(RestoreResponse {
+                ok: false,
+                error: e.to_string(),
+            })),
         }
     }
 
@@ -168,6 +200,8 @@ impl HostAgent for HostAgentService {
         &self,
         _req: Request<Streaming<ConsoleInput>>,
     ) -> Result<Response<Self::StreamConsoleStream>, Status> {
-        Err(Status::unimplemented("StreamConsole is reserved for phase 6"))
+        Err(Status::unimplemented(
+            "StreamConsole is reserved for phase 6",
+        ))
     }
 }

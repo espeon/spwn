@@ -55,8 +55,8 @@ pub struct CreateVmRequest {
     pub name: String,
     #[serde(default = "default_image")]
     pub image: String,
-    #[serde(default = "default_vcores")]
-    pub vcores: i32,
+    #[serde(default = "default_vcpus")]
+    pub vcpus: f64,
     #[serde(default = "default_memory")]
     pub memory_mb: i32,
     #[serde(default = "default_port")]
@@ -66,8 +66,8 @@ pub struct CreateVmRequest {
 fn default_image() -> String {
     "ubuntu".into()
 }
-fn default_vcores() -> i32 {
-    2
+fn default_vcpus() -> f64 {
+    1.0
 }
 fn default_memory() -> i32 {
     512
@@ -98,7 +98,7 @@ struct VmResponse {
     name: String,
     status: String,
     subdomain: String,
-    vcores: i32,
+    vcpus: f64,
     memory_mb: i32,
     ip_address: String,
     exposed_port: i32,
@@ -118,7 +118,7 @@ impl From<db::VmRow> for VmResponse {
             name: v.name,
             status: v.status,
             subdomain: v.subdomain,
-            vcores: v.vcores,
+            vcpus: v.vcpus,
             memory_mb: v.memory_mb,
             ip_address: v.ip_address,
             exposed_port: v.exposed_port,
@@ -175,7 +175,10 @@ type AppState = Arc<dyn VmOps>;
 pub fn router(ops: Arc<dyn VmOps>) -> Router {
     Router::new()
         .route("/api/vms", get(list_vms).post(create_vm))
-        .route("/api/vms/{id}", get(get_vm).delete(delete_vm).patch(patch_vm))
+        .route(
+            "/api/vms/{id}",
+            get(get_vm).delete(delete_vm).patch(patch_vm),
+        )
         .route("/api/vms/{id}/start", post(start_vm))
         .route("/api/vms/{id}/stop", post(stop_vm))
         .route("/api/vms/{id}/snapshot", post(take_snapshot))

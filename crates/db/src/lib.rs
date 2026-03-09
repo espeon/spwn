@@ -20,7 +20,7 @@ pub struct VmRow {
     pub name: String,
     pub status: String,
     pub subdomain: String,
-    pub vcores: i32,
+    pub vcpus: f64,
     pub memory_mb: i32,
     pub kernel_path: String,
     pub rootfs_path: String,
@@ -67,7 +67,7 @@ pub struct NewVm {
     pub account_id: String,
     pub name: String,
     pub subdomain: String,
-    pub vcores: i32,
+    pub vcpus: f64,
     pub memory_mb: i32,
     pub kernel_path: String,
     pub rootfs_path: String,
@@ -109,7 +109,7 @@ pub async fn migrate(pool: &PgPool) -> Result<()> {
 pub async fn create_vm(pool: &PgPool, vm: &NewVm) -> Result<()> {
     let now = unix_now();
     sqlx::query(
-        "INSERT INTO vms (id, account_id, name, status, subdomain, vcores, memory_mb,
+        "INSERT INTO vms (id, account_id, name, status, subdomain, vcpus, memory_mb,
          kernel_path, rootfs_path, overlay_path, real_init, ip_address, exposed_port, created_at)
          VALUES ($1,$2,$3,'stopped',$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)",
     )
@@ -117,7 +117,7 @@ pub async fn create_vm(pool: &PgPool, vm: &NewVm) -> Result<()> {
     .bind(&vm.account_id)
     .bind(&vm.name)
     .bind(&vm.subdomain)
-    .bind(vm.vcores)
+    .bind(vm.vcpus)
     .bind(vm.memory_mb)
     .bind(&vm.kernel_path)
     .bind(&vm.rootfs_path)
@@ -133,7 +133,7 @@ pub async fn create_vm(pool: &PgPool, vm: &NewVm) -> Result<()> {
 
 pub async fn get_vm(pool: &PgPool, id: &str) -> Result<Option<VmRow>> {
     let row = sqlx::query(
-        "SELECT id, account_id, name, status, subdomain, vcores, memory_mb,
+        "SELECT id, account_id, name, status, subdomain, vcpus, memory_mb,
          kernel_path, rootfs_path, overlay_path, real_init, ip_address, exposed_port, tap_device, pid,
          socket_path, host_id, created_at, last_started_at FROM vms WHERE id = $1",
     )
@@ -145,7 +145,7 @@ pub async fn get_vm(pool: &PgPool, id: &str) -> Result<Option<VmRow>> {
 
 pub async fn list_vms(pool: &PgPool, account_id: &str) -> Result<Vec<VmRow>> {
     let rows = sqlx::query(
-        "SELECT id, account_id, name, status, subdomain, vcores, memory_mb,
+        "SELECT id, account_id, name, status, subdomain, vcpus, memory_mb,
          kernel_path, rootfs_path, overlay_path, real_init, ip_address, exposed_port, tap_device, pid,
          socket_path, host_id, created_at, last_started_at FROM vms WHERE account_id = $1
          ORDER BY created_at DESC",
@@ -158,7 +158,7 @@ pub async fn list_vms(pool: &PgPool, account_id: &str) -> Result<Vec<VmRow>> {
 
 pub async fn get_vms_by_status(pool: &PgPool, status: &str) -> Result<Vec<VmRow>> {
     let rows = sqlx::query(
-        "SELECT id, account_id, name, status, subdomain, vcores, memory_mb,
+        "SELECT id, account_id, name, status, subdomain, vcpus, memory_mb,
          kernel_path, rootfs_path, overlay_path, real_init, ip_address, exposed_port, tap_device, pid,
          socket_path, host_id, created_at, last_started_at FROM vms WHERE status = $1",
     )
@@ -170,7 +170,7 @@ pub async fn get_vms_by_status(pool: &PgPool, status: &str) -> Result<Vec<VmRow>
 
 pub async fn get_all_vms(pool: &PgPool) -> Result<Vec<VmRow>> {
     let rows = sqlx::query(
-        "SELECT id, account_id, name, status, subdomain, vcores, memory_mb,
+        "SELECT id, account_id, name, status, subdomain, vcpus, memory_mb,
          kernel_path, rootfs_path, overlay_path, real_init, ip_address, exposed_port, tap_device, pid,
          socket_path, host_id, created_at, last_started_at FROM vms",
     )
@@ -181,7 +181,7 @@ pub async fn get_all_vms(pool: &PgPool) -> Result<Vec<VmRow>> {
 
 pub async fn get_vms_by_host(pool: &PgPool, host_id: &str) -> Result<Vec<VmRow>> {
     let rows = sqlx::query(
-        "SELECT id, account_id, name, status, subdomain, vcores, memory_mb,
+        "SELECT id, account_id, name, status, subdomain, vcpus, memory_mb,
          kernel_path, rootfs_path, overlay_path, real_init, ip_address, exposed_port, tap_device, pid,
          socket_path, host_id, created_at, last_started_at FROM vms WHERE host_id = $1",
     )
@@ -293,7 +293,7 @@ fn row_to_vm(r: sqlx::postgres::PgRow) -> VmRow {
         name: r.get("name"),
         status: r.get("status"),
         subdomain: r.get("subdomain"),
-        vcores: r.get("vcores"),
+        vcpus: r.get("vcpus"),
         memory_mb: r.get("memory_mb"),
         kernel_path: r.get("kernel_path"),
         rootfs_path: r.get("rootfs_path"),
@@ -766,7 +766,7 @@ pub async fn check_quota_and_reserve(
     pool: &PgPool,
     account_id: &str,
     vm_id: &str,
-    vcores: i32,
+    vcpus: f64,
     mem_mb: i32,
 ) -> std::result::Result<(), QuotaError> {
     let mut tx = pool.begin().await.map_err(DbError::from)?;
@@ -784,12 +784,12 @@ pub async fn check_quota_and_reserve(
             .map_err(DbError::from)?
             .ok_or_else(|| QuotaError::Exceeded("account not found".into()))?;
 
-    let vcpu_limit: i32 = account_row.get("vcpu_limit");
+    let vcpu_limit: f64 = account_row.get::<i32, _>("vcpu_limit") as f64;
     let mem_limit: i32 = account_row.get("mem_limit_mb");
     let vm_limit: i32 = account_row.get("vm_limit");
 
     let usage_row = sqlx::query(
-        "SELECT COALESCE(SUM(vcores),0)::int AS used_vcores,
+        "SELECT COALESCE(SUM(vcpus),0)::float8 AS used_vcpus,
                 COALESCE(SUM(memory_mb),0)::int AS used_mem,
                 COUNT(*)::int AS used_vms
          FROM vms
@@ -800,7 +800,7 @@ pub async fn check_quota_and_reserve(
     .await
     .map_err(DbError::from)?;
 
-    let used_vcores: i32 = usage_row.get("used_vcores");
+    let used_vcpus: f64 = usage_row.get("used_vcpus");
     let used_mem: i32 = usage_row.get("used_mem");
     let used_vms: i32 = usage_row.get("used_vms");
 
@@ -809,9 +809,9 @@ pub async fn check_quota_and_reserve(
             "vm limit {vm_limit} reached ({used_vms} running/starting)"
         )));
     }
-    if used_vcores + vcores > vcpu_limit {
+    if used_vcpus + vcpus > vcpu_limit {
         return Err(QuotaError::Exceeded(format!(
-            "vcpu limit {vcpu_limit} would be exceeded ({used_vcores} used + {vcores} requested)"
+            "vcpu limit {vcpu_limit} would be exceeded ({used_vcpus} used + {vcpus} requested)"
         )));
     }
     if used_mem + mem_mb > mem_limit {
@@ -852,7 +852,7 @@ pub struct VmEventRow {
 
 pub async fn get_vm_by_name(pool: &PgPool, account_id: &str, name: &str) -> Result<Option<VmRow>> {
     let row = sqlx::query(
-        "SELECT id, account_id, name, status, subdomain, vcores, memory_mb,
+        "SELECT id, account_id, name, status, subdomain, vcpus, memory_mb,
          kernel_path, rootfs_path, overlay_path, real_init, ip_address, exposed_port, tap_device, pid,
          socket_path, host_id, created_at, last_started_at
          FROM vms WHERE account_id = $1 AND name = $2",
