@@ -42,6 +42,14 @@ async fn setup() -> (db::PgPool, Arc<host_agent::manager::VmManager>) {
         env_or("SNAPSHOT_EDITOR_BIN", "/usr/local/bin/snapshot-editor").into(),
     );
 
+    let jailer_uid = env_or("JAILER_UID", "")
+        .parse::<u32>()
+        .unwrap_or_else(|_| panic!("JAILER_UID must be a valid u32"));
+    let jailer_gid = env_or("JAILER_GID", "")
+        .parse::<u32>()
+        .unwrap_or_else(|_| panic!("JAILER_GID must be a valid u32"));
+    let chroot_base_dir = std::path::PathBuf::from(env_or("JAILER_CHROOT_BASE", "/srv/jailer"));
+
     let manager = Arc::new(host_agent::manager::VmManager::new(
         pool.clone(),
         NetworkManager::new(),
@@ -51,6 +59,9 @@ async fn setup() -> (db::PgPool, Arc<host_agent::manager::VmManager>) {
         env_or("OVERLAY_DIR", "/var/lib/spwn/overlays").into(),
         env_or("SNAPSHOT_DIR", "/var/lib/spwn/snapshots").into(),
         "test-host".to_string(),
+        jailer_uid,
+        jailer_gid,
+        chroot_base_dir,
     ));
 
     (pool, manager)

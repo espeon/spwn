@@ -47,22 +47,26 @@ just check      # cargo check across workspace
 
 ## key env vars
 
-| var                 | used by   | default                                 |
-| ------------------- | --------- | --------------------------------------- |
-| `DATABASE_URL`      | cp, agent | postgres://postgres:spwn@localhost/spwn |
-| `LISTEN_ADDR`       | cp        | 0.0.0.0:3019                            |
-| `GRPC_LISTEN_ADDR`  | cp        | 0.0.0.0:5000                            |
-| `INVITE_CODE`       | cp        | _(required)_                            |
-| `PUBLIC_URL`        | cp        | https://spwn.dev                        |
-| `FRONTEND_PATH`     | cp        | frontend/dist                           |
-| `CADDY_URL`         | cp        | http://localhost:2019                   |
-| `STATIC_FILES_PATH` | cp        | /var/lib/spwn/static                    |
-| `AGENT_LISTEN_ADDR` | agent     | 0.0.0.0:4000                            |
-| `AGENT_PUBLIC_ADDR` | agent     | http://localhost:4000                   |
-| `CONTROL_PLANE_URL` | agent     | http://localhost:5000                   |
-| `KERNEL_PATH`       | agent     | /tmp/vmlinux                            |
-| `ROOTFS_PATH`       | agent     | /tmp/rootfs.sqfs                        |
-| `FIRECRACKER_BIN`   | agent     | ~/.local/bin/firecracker                |
+| var                  | used by   | default                                 |
+| -------------------- | --------- | --------------------------------------- |
+| `DATABASE_URL`       | cp, agent | postgres://postgres:spwn@localhost/spwn |
+| `LISTEN_ADDR`        | cp        | 0.0.0.0:3019                            |
+| `GRPC_LISTEN_ADDR`   | cp        | 0.0.0.0:5000                            |
+| `INVITE_CODE`        | cp        | _(required)_                            |
+| `PUBLIC_URL`         | cp        | https://spwn.dev                        |
+| `FRONTEND_PATH`      | cp        | frontend/dist                           |
+| `CADDY_URL`          | cp        | http://localhost:2019                   |
+| `STATIC_FILES_PATH`  | cp        | /var/lib/spwn/static                    |
+| `AGENT_LISTEN_ADDR`  | agent     | 0.0.0.0:4000                            |
+| `AGENT_PUBLIC_ADDR`  | agent     | http://localhost:4000                   |
+| `CONTROL_PLANE_URL`  | agent     | http://localhost:5000                   |
+| `KERNEL_PATH`        | agent     | /tmp/vmlinux                            |
+| `ROOTFS_PATH`        | agent     | /tmp/rootfs.sqfs                        |
+| `FIRECRACKER_BIN`    | agent     | ~/.local/bin/firecracker                |
+| `JAILER_BIN`         | agent     | /usr/local/bin/jailer                   |
+| `JAILER_UID`         | agent     | uid of `spwn-vm` user (auto-resolved)   |
+| `JAILER_GID`         | agent     | gid of `spwn-vm` group (auto-resolved)  |
+| `JAILER_CHROOT_BASE` | agent     | /srv/jailer                             |
 
 ---
 
@@ -85,6 +89,9 @@ tests live in:
 ## gotchas
 
 - **protoc required** — `sudo pacman -S protobuf` (or distro equivalent) for agent-proto build
+- **jailer requires a dedicated unprivileged user** — create `spwn-vm` with `useradd -r -s /sbin/nologin spwn-vm`, or set `JAILER_UID`/`JAILER_GID` explicitly. the agent resolves uid/gid from `/etc/passwd` and `/etc/group` at startup if the env vars are absent
+- **jailer chroot layout** — each VM jail lives at `<JAILER_CHROOT_BASE>/firecracker/<vm_id>/root/`. snapshots are written inside the jail root and their host-side paths (e.g. `/srv/jailer/firecracker/<vm_id>/root/<snap>.snap`) are what gets stored in the DB
+- **PID tracking with new PID namespace** — `exec_in_new_pid_ns` is enabled; the jailer writes `<jail_root>/firecracker.pid` with the outer host PID. reconciler falls back to reading `/sys/fs/cgroup/firecracker/<vm_id>/cgroup.procs` if the pid file isn't present
 - **TAP device names ≤15 chars** — use slot number not VM UUID (`fc-tap-{slot}`)
 - **TAP devices survive crashes** — reconciler resets stuck `starting`/`stopping` VMs on startup
 - **`sudo -E` for agent** — cargo isn't on sudo's PATH; build first, then run the binary

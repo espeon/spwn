@@ -1,10 +1,9 @@
 use std::{path::PathBuf, sync::Arc, time::Duration};
 
-use anyhow::Context;
 use agent_proto::agent::{
-    control_plane_client::ControlPlaneClient,
-    HeartbeatRequest, RegisterRequest,
+    HeartbeatRequest, RegisterRequest, control_plane_client::ControlPlaneClient,
 };
+use anyhow::Context;
 use fctools::vmm::installation::VmmInstallation;
 use networking::NetworkManager;
 use tonic::transport::Channel;
@@ -28,6 +27,50 @@ fn jailer_path() -> PathBuf {
     std::env::var("JAILER_BIN")
         .unwrap_or_else(|_| "/usr/local/bin/jailer".into())
         .into()
+}
+
+fn jailer_uid() -> anyhow::Result<u32> {
+    if let Ok(val) = std::env::var("JAILER_UID") {
+        return val.parse::<u32>().context("parse JAILER_UID");
+    }
+    resolve_user_id("spwn-vm")
+}
+
+fn jailer_gid() -> anyhow::Result<u32> {
+    if let Ok(val) = std::env::var("JAILER_GID") {
+        return val.parse::<u32>().context("parse JAILER_GID");
+    }
+    resolve_group_id("spwn-vm")
+}
+
+fn resolve_user_id(name: &str) -> anyhow::Result<u32> {
+    let contents = std::fs::read_to_string("/etc/passwd").context("read /etc/passwd")?;
+    for line in contents.lines() {
+        let fields: Vec<&str> = line.split(':').collect();
+        if fields.len() >= 3 && fields[0] == name {
+            return fields[2]
+                .parse::<u32>()
+                .with_context(|| format!("parse uid for {name}"));
+        }
+    }
+    Err(anyhow::anyhow!(
+        "user '{name}' not found in /etc/passwd — create it or set JAILER_UID"
+    ))
+}
+
+fn resolve_group_id(name: &str) -> anyhow::Result<u32> {
+    let contents = std::fs::read_to_string("/etc/group").context("read /etc/group")?;
+    for line in contents.lines() {
+        let fields: Vec<&str> = line.split(':').collect();
+        if fields.len() >= 3 && fields[0] == name {
+            return fields[2]
+                .parse::<u32>()
+                .with_context(|| format!("parse gid for {name}"));
+        }
+    }
+    Err(anyhow::anyhow!(
+        "group '{name}' not found in /etc/group — create it or set JAILER_GID"
+    ))
 }
 
 fn snapshot_editor_path() -> PathBuf {
@@ -64,10 +107,9 @@ async fn main() -> anyhow::Result<()> {
         Ok(id) => id,
         Err(_) => load_or_create_host_id()?,
     };
-    let host_name = std::env::var("HOST_NAME")
-        .unwrap_or_else(|_| hostname());
-    let agent_listen_addr = std::env::var("AGENT_LISTEN_ADDR")
-        .unwrap_or_else(|_| "0.0.0.0:4000".into());
+    let host_name = std::env::var("HOST_NAME").unwrap_or_else(|_| hostname());
+    let agent_listen_addr =
+        std::env::var("AGENT_LISTEN_ADDR").unwrap_or_else(|_| "0.0.0.0:4000".into());
     let agent_public_addr = std::env::var("AGENT_PUBLIC_ADDR")
         .expect("AGENT_PUBLIC_ADDR must be set (e.g. http://localhost:4000)");
     let control_plane_url = std::env::var("CONTROL_PLANE_URL")
@@ -85,6 +127,15 @@ async fn main() -> anyhow::Result<()> {
     let snapshot_dir: PathBuf = std::env::var("SNAPSHOT_DIR")
         .unwrap_or_else(|_| "/var/lib/spwn/snapshots".into())
         .into();
+    let chroot_base_dir: PathBuf = std::env::var("JAILER_CHROOT_BASE")
+        .unwrap_or_else(|_| "/srv/jailer".into())
+        .into();
+    let jailer_uid = jailer_uid().context("resolve jailer UID")?;
+    let jailer_gid = jailer_gid().context("resolve jailer GID")?;
+    info!(
+        "jailer uid={jailer_uid} gid={jailer_gid} chroot_base={}",
+        chroot_base_dir.display()
+    );
     let database_url = std::env::var("DATABASE_URL")
         .unwrap_or_else(|_| "postgres://postgres:spwn@localhost/spwn".into());
 
@@ -101,14 +152,16 @@ async fn main() -> anyhow::Result<()> {
     networking::iptables::setup(&external_iface)?;
 
     for dir in [&overlay_dir, &images_dir, &snapshot_dir] {
-        std::fs::create_dir_all(dir)
-            .with_context(|| format!("create dir: {}", dir.display()))?;
+        std::fs::create_dir_all(dir).with_context(|| format!("create dir: {}", dir.display()))?;
     }
 
     info!("connecting to database");
     let pool = db::connect(&database_url).await?;
     db::migrate(&pool).await?;
     info!("migrations complete");
+
+    std::fs::create_dir_all(&chroot_base_dir)
+        .with_context(|| format!("create chroot base dir: {}", chroot_base_dir.display()))?;
 
     let manager = Arc::new(VmManager::new(
         pool,
@@ -119,6 +172,9 @@ async fn main() -> anyhow::Result<()> {
         overlay_dir.clone(),
         snapshot_dir.clone(),
         host_id.clone(),
+        jailer_uid,
+        jailer_gid,
+        chroot_base_dir,
     ));
 
     reconcile::reconcile_once(&manager).await?;
@@ -132,18 +188,20 @@ async fn main() -> anyhow::Result<()> {
         .connect_lazy();
     let mut cp_client = ControlPlaneClient::new(cp_channel);
 
-    cp_client.register(RegisterRequest {
-        host_id: host_id.clone(),
-        name: host_name.clone(),
-        address: agent_public_addr.clone(),
-        vcpu_total: num_cpus(),
-        mem_total_mb: total_mem_mb(),
-        images_dir: images_dir.to_string_lossy().into(),
-        overlay_dir: overlay_dir.to_string_lossy().into(),
-        snapshot_dir: snapshot_dir.to_string_lossy().into(),
-        kernel_path: kernel_path.to_string_lossy().into(),
-    }).await
-    .context("register with control plane")?;
+    cp_client
+        .register(RegisterRequest {
+            host_id: host_id.clone(),
+            name: host_name.clone(),
+            address: agent_public_addr.clone(),
+            vcpu_total: num_cpus(),
+            mem_total_mb: total_mem_mb(),
+            images_dir: images_dir.to_string_lossy().into(),
+            overlay_dir: overlay_dir.to_string_lossy().into(),
+            snapshot_dir: snapshot_dir.to_string_lossy().into(),
+            kernel_path: kernel_path.to_string_lossy().into(),
+        })
+        .await
+        .context("register with control plane")?;
 
     info!("registered with control plane at {control_plane_url}");
 
@@ -159,25 +217,31 @@ async fn main() -> anyhow::Result<()> {
         loop {
             tokio::time::sleep(Duration::from_secs(10)).await;
             let running_ids = match db::get_vms_by_host(&hb_manager.pool, &hb_host_id).await {
-                Ok(vms) => vms.into_iter()
+                Ok(vms) => vms
+                    .into_iter()
                     .filter(|v| v.status == "running")
                     .map(|v| v.id)
                     .collect(),
                 Err(_) => vec![],
             };
-            let _ = client.heartbeat(HeartbeatRequest {
-                host_id: hb_host_id.clone(),
-                running_vm_ids: running_ids,
-                vcpu_used: 0,
-                mem_used_mb: 0,
-            }).await;
+            let _ = client
+                .heartbeat(HeartbeatRequest {
+                    host_id: hb_host_id.clone(),
+                    running_vm_ids: running_ids,
+                    vcpu_used: 0,
+                    mem_used_mb: 0,
+                })
+                .await;
         }
     });
 
     // gRPC server
     use agent_proto::agent::host_agent_server::HostAgentServer;
-    let svc = agent::HostAgentService { manager: manager.clone() };
-    let listen: std::net::SocketAddr = agent_listen_addr.parse()
+    let svc = agent::HostAgentService {
+        manager: manager.clone(),
+    };
+    let listen: std::net::SocketAddr = agent_listen_addr
+        .parse()
         .context("parse AGENT_LISTEN_ADDR")?;
 
     info!("host-agent gRPC listening on {agent_listen_addr}");
@@ -208,7 +272,9 @@ fn num_cpus() -> u32 {
 }
 
 fn total_mem_mb() -> u32 {
-    let Ok(info) = std::fs::read_to_string("/proc/meminfo") else { return 0 };
+    let Ok(info) = std::fs::read_to_string("/proc/meminfo") else {
+        return 0;
+    };
     for line in info.lines() {
         if let Some(rest) = line.strip_prefix("MemTotal:") {
             if let Some(kb) = rest.trim().split_whitespace().next() {

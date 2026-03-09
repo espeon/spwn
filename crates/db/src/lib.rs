@@ -230,6 +230,15 @@ pub async fn set_vm_running(
     Ok(())
 }
 
+pub async fn set_vm_pid(pool: &PgPool, id: &str, pid: i64) -> Result<()> {
+    sqlx::query("UPDATE vms SET pid=$1 WHERE id=$2")
+        .bind(pid)
+        .bind(id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
 pub async fn set_vm_stopped(pool: &PgPool, id: &str) -> Result<()> {
     sqlx::query(
         "UPDATE vms SET status='stopped', pid=NULL, tap_device=NULL, socket_path=NULL WHERE id=$1",
@@ -841,11 +850,7 @@ pub struct VmEventRow {
     pub created_at: i64,
 }
 
-pub async fn get_vm_by_name(
-    pool: &PgPool,
-    account_id: &str,
-    name: &str,
-) -> Result<Option<VmRow>> {
+pub async fn get_vm_by_name(pool: &PgPool, account_id: &str, name: &str) -> Result<Option<VmRow>> {
     let row = sqlx::query(
         "SELECT id, account_id, name, status, subdomain, vcores, memory_mb,
          kernel_path, rootfs_path, overlay_path, real_init, ip_address, exposed_port, tap_device, pid,
@@ -932,13 +937,11 @@ pub struct CliAuthCode {
 }
 
 pub async fn create_cli_auth_code(pool: &PgPool, code: &str, expires_at: i64) -> Result<()> {
-    sqlx::query(
-        "INSERT INTO cli_auth_codes (code, status, expires_at) VALUES ($1, 'pending', $2)",
-    )
-    .bind(code)
-    .bind(expires_at)
-    .execute(pool)
-    .await?;
+    sqlx::query("INSERT INTO cli_auth_codes (code, status, expires_at) VALUES ($1, 'pending', $2)")
+        .bind(code)
+        .bind(expires_at)
+        .execute(pool)
+        .await?;
     Ok(())
 }
 
@@ -957,18 +960,12 @@ pub async fn get_cli_auth_code(pool: &PgPool, code: &str) -> Result<Option<CliAu
     }))
 }
 
-pub async fn authorize_cli_auth_code(
-    pool: &PgPool,
-    code: &str,
-    account_id: &str,
-) -> Result<()> {
-    sqlx::query(
-        "UPDATE cli_auth_codes SET status = 'authorized', account_id = $1 WHERE code = $2",
-    )
-    .bind(account_id)
-    .bind(code)
-    .execute(pool)
-    .await?;
+pub async fn authorize_cli_auth_code(pool: &PgPool, code: &str, account_id: &str) -> Result<()> {
+    sqlx::query("UPDATE cli_auth_codes SET status = 'authorized', account_id = $1 WHERE code = $2")
+        .bind(account_id)
+        .bind(code)
+        .execute(pool)
+        .await?;
     Ok(())
 }
 
@@ -1026,11 +1023,10 @@ pub async fn get_account_id_by_token_hash(
     pool: &PgPool,
     token_hash: &str,
 ) -> Result<Option<String>> {
-    let row =
-        sqlx::query("SELECT account_id FROM api_tokens WHERE token_hash = $1")
-            .bind(token_hash)
-            .fetch_optional(pool)
-            .await?;
+    let row = sqlx::query("SELECT account_id FROM api_tokens WHERE token_hash = $1")
+        .bind(token_hash)
+        .fetch_optional(pool)
+        .await?;
     Ok(row.map(|r| r.get("account_id")))
 }
 
