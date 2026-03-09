@@ -26,6 +26,7 @@ export interface Vm {
   name: string;
   status: VmStatus;
   subdomain: string;
+  image: string;
   vcores: number;
   memory_mb: number;
   ip_address: string;

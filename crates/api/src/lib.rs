@@ -80,12 +80,17 @@ struct VmResponse {
     memory_mb: i32,
     ip_address: String,
     exposed_port: i32,
-    rootfs_path: String,
+    image: String,
     overlay_path: Option<String>,
 }
 
 impl From<db::VmRow> for VmResponse {
     fn from(v: db::VmRow) -> Self {
+        let image = std::path::Path::new(&v.rootfs_path)
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or(&v.rootfs_path)
+            .to_string();
         Self {
             id: v.id,
             name: v.name,
@@ -95,7 +100,7 @@ impl From<db::VmRow> for VmResponse {
             memory_mb: v.memory_mb,
             ip_address: v.ip_address,
             exposed_port: v.exposed_port,
-            rootfs_path: v.rootfs_path,
+            image,
             overlay_path: v.overlay_path,
         }
     }

@@ -1,7 +1,14 @@
 import { useState, type FormEvent } from "react";
 import { Link } from "@tanstack/react-router";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { listVms, createVm, type CreateVmRequest } from "@/api";
+import {
+  listVms,
+  createVm,
+  startVm,
+  stopVm,
+  type CreateVmRequest,
+  type Vm,
+} from "@/api";
 import { StatusBadge } from "@/components/StatusBadge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -146,32 +153,90 @@ export function VmListPage() {
       ) : (
         <div className="flex flex-col gap-2">
           {vms?.map((vm) => (
-            <Link
-              key={vm.id}
-              to="/vms/$vmId"
-              params={{ vmId: vm.id }}
-              className="block border rounded-lg px-5 py-4 hover:bg-accent transition-colors"
-            >
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-3">
-                  <span className="font-medium">{vm.name}</span>
-                  <StatusBadge status={vm.status} />
-                </div>
-                <span className="text-xs text-muted-foreground font-mono">
-                  {vm.subdomain}
-                </span>
-              </div>
-              <div className="mt-2 flex gap-4 text-xs text-muted-foreground">
-                <span>{vm.vcores}c</span>
-                <span>{vm.memory_mb}mb</span>
-                <span>:{vm.exposed_port}</span>
-              </div>
-            </Link>
+            <VmRow key={vm.id} vm={vm} />
           ))}
         </div>
       )}
 
       <CreateVmDialog open={showCreate} onClose={() => setShowCreate(false)} />
     </>
+  );
+}
+
+function VmRow({ vm }: { vm: Vm }) {
+  const qc = useQueryClient();
+
+  const invalidate = () => qc.invalidateQueries({ queryKey: ["vms"] });
+
+  const startMutation = useMutation({
+    mutationFn: () => startVm(vm.id),
+    onSuccess: invalidate,
+  });
+  const stopMutation = useMutation({
+    mutationFn: () => stopVm(vm.id),
+    onSuccess: invalidate,
+  });
+
+  const isTransitioning =
+    vm.status === "starting" ||
+    vm.status === "stopping" ||
+    vm.status === "snapshotting";
+  const canStart = vm.status === "stopped" || vm.status === "error";
+  const canStop = vm.status === "running";
+
+  return (
+    <div className="border rounded-lg px-5 py-4">
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-3">
+          <Link
+            to="/vms/$vmId"
+            params={{ vmId: vm.id }}
+            className="font-medium hover:underline underline-offset-4"
+          >
+            {vm.name}
+          </Link>
+          <StatusBadge status={vm.status} />
+          <span className="text-xs text-muted-foreground font-mono bg-secondary px-1.5 py-0.5 rounded">
+            {vm.image}
+          </span>
+        </div>
+        <span className="text-xs text-muted-foreground font-mono">
+          {vm.subdomain}
+        </span>
+      </div>
+      <div className="mt-2 flex items-center justify-between">
+        <div className="flex gap-4 text-xs text-muted-foreground">
+          <span>{vm.vcores}c</span>
+          <span>{vm.memory_mb}mb</span>
+          <span>:{vm.exposed_port}</span>
+        </div>
+        <div className="flex gap-1.5">
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-6 text-xs px-2 border-green-800 text-green-400 hover:bg-green-950 hover:text-green-300 disabled:opacity-40"
+            disabled={!canStart || isTransitioning || startMutation.isPending}
+            onClick={(e) => {
+              e.preventDefault();
+              startMutation.mutate();
+            }}
+          >
+            {startMutation.isPending ? "starting..." : "start"}
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-6 text-xs px-2 disabled:opacity-40"
+            disabled={!canStop || isTransitioning || stopMutation.isPending}
+            onClick={(e) => {
+              e.preventDefault();
+              stopMutation.mutate();
+            }}
+          >
+            {stopMutation.isPending ? "stopping..." : "stop"}
+          </Button>
+        </div>
+      </div>
+    </div>
   );
 }
