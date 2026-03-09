@@ -73,6 +73,16 @@ agent: build-agent
     @sudo -v 2>/dev/null || { echo "error: sudo credentials required — run: sudo -v"; exit 1; }
     sudo -E ./target/debug/spwn-host-agent
 
+# ── frontend ──────────────────────────────────────────────────────────────────
+
+# build frontend for production (output: frontend/dist)
+frontend-build:
+    cd frontend && npm run build
+
+# run vite dev server (proxies /auth and /api to localhost:3000)
+frontend:
+    cd frontend && npm run dev
+
 # ── dev setup ────────────────────────────────────────────────────────────────
 
 # full first-time setup: download kernel + rootfs, build squashfs image

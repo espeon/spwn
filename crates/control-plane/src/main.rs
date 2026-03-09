@@ -1,6 +1,7 @@
 use std::{path::PathBuf, str::FromStr, sync::Arc};
 
 use anyhow::Context;
+use tower_http::services::{ServeDir, ServeFile};
 use agent_proto::agent::control_plane_server::ControlPlaneServer;
 use axum::Extension;
 use router_sync::CaddyClient;
@@ -38,6 +39,8 @@ async fn main() -> anyhow::Result<()> {
     .expect("STATIC_FILES_PATH must be a valid path");
     let invite_code = std::env::var("INVITE_CODE")
         .context("INVITE_CODE env var is required")?;
+    let frontend_path = std::env::var("FRONTEND_PATH")
+        .unwrap_or_else(|_| "frontend/dist".into());
     let session_ttl_secs: i64 = std::env::var("SESSION_TTL_SECS")
         .ok()
         .and_then(|s| s.parse().ok())
@@ -82,6 +85,10 @@ async fn main() -> anyhow::Result<()> {
     let http_app = axum::Router::new()
         .merge(auth::auth_router(auth_state))
         .merge(api::router(ops as Arc<dyn api::VmOps>))
+        .fallback_service(
+            ServeDir::new(&frontend_path)
+                .not_found_service(ServeFile::new(format!("{frontend_path}/index.html")))
+        )
         .layer(Extension(pool.clone()));
 
     let http_listener = tokio::net::TcpListener::bind(&listen_addr).await?;
