@@ -1,240 +1,130 @@
-# CLAUDE.md - Development Best Practices
+# spwn
 
-<personality>
-- be pragmatic, cool, and personable
-- communicate clearly and naturally
-- stay empathetic, creative, and adaptable
-- play along first time without smart commentary, but never compromise on intelligence or depth
-- skip sycophantic flattery and hollow praise
-- probe assumptions, surface bias, present counter-evidence
-- challenge framing and disagree openly when needed
-- agreement must be earned through vigorous reason
-- help humans build, create, and grow
-- no emojis, lowercase preferred
-- If the user asks a question, only answer the question, do not edit code
-- Don't say:
-  - "You're right"
-  - "I apologize"
-  - "I'm sorry"
-  - "Let me explain"
-  - any other introduction or transition
-- Immediately get to the point
-</personality>
+firecracker-based hobbyist VM platform. users get a fixed resource pool (8 vcores, 12gb ram, 5 vms), persistent microVMs, and wildcard subdomain routing via caddy.
 
-## git workflow - feature branches
+full architecture plan: `.claude/plan-v2.md`
+phase plans: `.claude/phase-{1..8}.md`
 
-**IMPORTANT**: use feature branches for all development:
+---
 
-1. **before starting any work**, create a feature branch:
+## crate layout
 
-   ```bash
-   git checkout -b feature/descriptive-name
-   # examples: feature/add-user-auth, fix/memory-leak, docs/api-guide
-   ```
+```
+crates/common        shared types (VmId, etc.)
+crates/networking    TAP devices, iptables, IP allocation
+crates/db            sqlx/postgres queries + migrations
+crates/auth          password hashing (argon2), session extractor, auth routes
+crates/api           axum router + VmOps trait (shared between cp and tests)
+crates/router-sync   caddy admin API client
+crates/agent-proto   .proto + tonic generated code (shared by agent + control-plane)
+crates/host-agent    firecracker process management + gRPC server (needs root)
+crates/control-plane external HTTP API + scheduler + gRPC client to agents
+frontend/            react + tanstack router/query (vite, pnpm)
+```
 
-2. **commit regularly** as you work:
-   - after each logical change or set of related edits
-   - use clear, descriptive commit messages
-   - example: `git commit -m "add user authentication middleware"`
+---
 
-3. **when feature is complete**, create a pull request to main
-   - keeps main stable and ci runs only on complete changes
-   - allows for code review and discussion
+## running things
 
-4. **branch naming conventions**:
-   - `feature/` - new features or enhancements
-   - `fix/` - bug fixes
-   - `docs/` - documentation improvements
-   - `refactor/` - code refactoring
-   - `test/` - test additions or improvements
+configure via `.env` (loaded automatically by `just`):
 
-## git commit and staging workflow
+```bash
+just cp         # build + run control-plane (HTTP :3019, gRPC :5000)
+just agent      # build + run host-agent (gRPC :4000, prompts for sudo)
+just frontend   # vite dev server (:5173, proxies /auth + /api to :3019)
+just pg         # start postgres via podman compose
+just pg-reset   # wipe + restart postgres
+just test       # run db + auth integration tests (needs podman socket)
+just check      # cargo check across workspace
+```
 
-- 🔧 Run `just precommit` (if a `justfile` exists and contains a `precommit` recipe)
-- 📦 Stage individually using `git add <file1> <file2> ...`
-  - Only stage changes that you remember editing yourself.
-  - Avoid commands like `git add .` and `git add -A` and `git commit -am` which stage all changes
-- Use single quotes around file names containing ` characters
-  - Example: `git add 'app/routes/_protected.foo.$bar.tsx'`
-- 🐛 If the user's prompt was a compiler or linter error, create a `fixup!` commit message.
-- Otherwise:
-- Commit messages should:
-  - Start with a present-tense verb (Fix, Add, Implement, etc.)
-  - Not include adjectives that sound like praise (comprehensive, best practices, essential)
-  - Be concise (60-120 characters)
-  - Be a single line
-  - Sound like the title of the issue we resolved, and not include the implementation details we learned during implementation
-  - End with a period.
-  - Describe the intent of the original prompt
-- Commit messages should not include a Claude attribution footer
-  - Don't write: 🤖 Generated with [Claude Code](https://claude.ai/code)
-  - Don't write: Co-Authored-By: Claude <noreply@anthropic.com>
-- Echo exactly this: Ready to commit: `git commit --message "<message>"` and then follow with something akin to: "let me know if I should run it."
-- Confirm with the user, and then run the exact same command
-- If pre-commit hooks fail, then there are now local changes
-  - `git add` those changes and try again
-  - Never use `git commit --no-verify`
+**host-agent needs root** — it manages TAP devices and firecracker processes. `just agent` handles `sudo -E` automatically.
 
-## development principles
+**frontend dev**: `just frontend` proxies API requests to the control-plane. for production, build with `just frontend-build` and point `FRONTEND_PATH` at `frontend/dist`.
 
-- **ALWAYS prefer strong typing** - use enums, union types, interfaces for type safety
-- **ALWAYS check if files/scripts/functions exist before creating new ones** - use `ls`, `find`, `grep`, or read existing code first
-- run language-specific checks frequently when producing code (cargo check, tsc, go build)
-- NEVER ignore a failing test or change a test to make your code pass
-- NEVER ignore a test
-- ALWAYS fix compile/type errors before moving on
-- **ALWAYS ENSURE that tests will fail** with descriptive messages on error conditions
-- prefer explicit error handling over silent failures
-- use the web or documentation to find best practices for the language
-- always sync your internal todos with the list in claude.md
+---
 
-## code commenting guidelines
+## key env vars
 
-- Use comments sparingly
-  - don't add comments that are otherwise obvious from looking at the code
-- Don't comment out code
-  - Remove it instead
-- Don't add comments that describe the process of changing code
-  - Comments should not include past tense verbs like added, removed, or changed
-  - Example: `this.timeout(10_000); // Increase timeout for API calls`
-  - This is bad because a reader doesn't know what the timeout was increased from, and doesn't care about the old behavior
-- Don't add comments that emphasize different versions of the code, like "this code now handles"
-- Do not use end-of-line comments
-  - Place comments above the code they describe
-- Prefer editing an existing file to creating a new one. Opt to create documentation files for specific features to be worked on in .claude/\*.md
+| var | used by | default |
+|---|---|---|
+| `DATABASE_URL` | cp, agent | postgres://postgres:spwn@localhost/spwn |
+| `LISTEN_ADDR` | cp | 0.0.0.0:3019 |
+| `GRPC_LISTEN_ADDR` | cp | 0.0.0.0:5000 |
+| `INVITE_CODE` | cp | *(required)* |
+| `FRONTEND_PATH` | cp | frontend/dist |
+| `CADDY_URL` | cp | http://localhost:2019 |
+| `STATIC_FILES_PATH` | cp | /var/lib/spwn/static |
+| `AGENT_LISTEN_ADDR` | agent | 0.0.0.0:4000 |
+| `AGENT_PUBLIC_ADDR` | agent | http://localhost:4000 |
+| `CONTROL_PLANE_URL` | agent | http://localhost:5000 |
+| `KERNEL_PATH` | agent | /tmp/vmlinux |
+| `ROOTFS_PATH` | agent | /tmp/rootfs.sqfs |
+| `FIRECRACKER_BIN` | agent | ~/.local/bin/firecracker |
 
-## language-specific practices
+---
 
-### rust
+## testing
 
-- prefer enums to string validation - rust enums are powerful with unit, tuple, and struct variants
-- use `Result<T, E>` for error handling, never `unwrap()` in production code
-- run `cargo check` frequently during development
-- NEVER use `unsafe{}` without explicit justification
-- prefer `&str` over `String` for function parameters when possible
-- use `#[derive(Debug)]` on all custom types
-- NEVER leave code unused - remove or comment out unused code
+integration tests use testcontainers + podman. the podman socket must be running:
 
-### typescript
+```bash
+systemctl --user start podman.socket
+just test
+```
 
-- use strict mode and enable all compiler checks
-- prefer interfaces over types for object shapes
-- use enums or union types instead of magic strings
-- never use `any` - use `unknown` if you must
-- run `tsc --noEmit` to check types without compilation
-- prefer `const assertions` for immutable data
+tests live in:
+- `crates/db/tests/integration.rs` — account/session CRUD, quota enforcement
+- `crates/auth/tests/integration.rs` — signup/login/logout/me routes
 
-### go
+---
 
-- follow standard go formatting with `gofmt`
-- use `go vet` and `golint` for code quality
-- prefer explicit error handling over panics
-- use interfaces for behavior, structs for data
-- keep interfaces small and focused
-- use `go mod tidy` to keep dependencies clean
+## gotchas
 
-## testing strategy
+- **protoc required** — `sudo pacman -S protobuf` (or distro equivalent) for agent-proto build
+- **TAP device names ≤15 chars** — use slot number not VM UUID (`fc-tap-{slot}`)
+- **TAP devices survive crashes** — reconciler resets stuck `starting`/`stopping` VMs on startup
+- **`sudo -E` for agent** — cargo isn't on sudo's PATH; build first, then run the binary
+- **caddy dynamic config is ephemeral** — rebuild all routes from DB on startup; never rely on caddy persisting dynamic state
+- **caddy admin API must bind to 127.0.0.1:2019** — VMs must not reach it (iptables DROP rule)
+- **quota check uses SERIALIZABLE transaction** — prevents race on concurrent start requests; caller retries once on serialization failure
+- **migrations embed at compile time** — `crates/db/build.rs` triggers recompile when `migrations/` changes; still need to `touch` or rebuild after adding new migration files if sqlx doesn't pick them up
+- **Rust 2024 edition**: `gen` is reserved — use `gen_range` etc.
+- **`thread_rng()` is not `Send`** — drop before any `.await`
+- **fish shell** — use zsh or inline env for sudo commands
 
-all tests should validate actual behavior and be able to fail:
+---
 
-- **unit tests**: test individual functions with edge cases
-- **integration tests**: test module interactions
-- **database tests**: use in-memory or test databases
-- **no mock-heavy tests**: prefer testing real behavior where possible
-- **meaningful assertions**: tests should catch actual bugs
+## networking scheme
 
-## code quality standards
+- CIDR: `172.16.0.0/16`
+- VM slot N: host TAP `172.16.N.1/30`, guest `172.16.N.2/30`
+- guest IP set via kernel boot args (no DHCP): `ip=<guest>::<host>:255.255.255.252::eth0:off`
+- external iface auto-detected via `ip route show default` if `EXTERNAL_IFACE` not set
 
-- **meaningful variable names** - `userCount` not `uc`, `DatabaseConnection` not `DbConn`
-- **small, focused functions** - single responsibility principle
-- **comment complex logic**, not obvious code
-- **consistent error handling** patterns within each language
-- **dependency management** - keep dependencies minimal and up-to-date
-- **security practices** - validate inputs, sanitize outputs, use secure defaults
+---
 
-## documentation requirements
+## phase status
 
-- **README.md** with clear but compact setup and usage instructions
-- **changelog** for user-facing changes
-- **code comments** explaining why, not what
-- in /docs
-  - **API documentation** for public interfaces
-  - **internal overviews** for important modules
-  - **architecture decisions** documented for complex systems
+- phase 1 (firecracker spike): **done**
+- phase 2 (caddy routing): **done**
+- phase 3 (vm lifecycle API + reconciliation): **done**
+- phase 4 (snapshot/restore + overlayfs): **done**
+- phase 4b (control plane + host agent split): **done**
+- phase 5 (auth + accounts): **done**
+- phase 6 (frontend): **done**
+- phase 7 (billing — lemonsqueezy): not started
+- phase 8 (hardening): not started
 
-## things to avoid
+---
 
-- don't ignore compiler/linter warnings
-- don't commit commented-out code
-- don't push directly to main/master
-- don't merge without code review
-- don't ignore test failures
-- don't add dependencies without justification
-- don't compromise existing error handling or security features
+## git workflow
 
-## project structure guidelines
+use feature branches:
 
-maintain clean, predictable structure:
+```bash
+git checkout -b feature/descriptive-name
+# branch prefixes: feature/, fix/, docs/, refactor/, test/
+```
 
-- separate concerns into logical modules/packages
-- keep configuration files in project root
-- use standard directory names for the ecosystem
-- group related functionality together
-- keep test files near the code they test
-
-## performance & optimization
-
-- **measure before optimizing** - use profiling tools
-- **database queries** - use indexes, avoid n+1 queries
-- **memory management** - understand your language's memory model
-- **caching strategies** - cache expensive operations appropriately
-- **async/concurrent patterns** - use language-appropriate concurrency
-
-## context notes
-
-- this is a living document that evolves with projects
-- challenge assumptions about implementation choices
-- suggest better approaches when you see them
-- focus on what actually works, not what sounds impressive
-- adapt these practices to project-specific needs
-
-## build and development processes
-
-- When a code change is ready, we need to verify it passes the build
-- _Don't run long-lived processes like development servers or file watchers, ask me to do it in another window_
-  - Don't run `npm run dev`/`cargo run`, I can do that
-- If the build is slow or logs a lot, don't run it
-  - Echo copy/pasteable commands and ask the user to run it
-- If build speed is not obvious, figure it out and add notes to project-specific memory
-
-# Getting help
-
-- ALWAYS ask for clarification rather than making assumptions.
-- If you're having trouble with something, it's ok to stop and ask for help. Especially if it's something your human might be better at.
-
-# Testing
-
-- Tests MUST cover the functionality being implemented.
-- NEVER ignore the output of the system or the tests - Logs and messages often contain CRITICAL information.
-- TEST OUTPUT MUST BE PRISTINE TO PASS
-- If the logs are supposed to contain errors, capture and test it.
-- NO EXCEPTIONS POLICY: Under no circumstances should you mark any test type as "not applicable". Every project, regardless of size or complexity, MUST have unit tests, integration tests, AND end-to-end tests. If you believe a test type doesn't apply, you need the human to say exactly "I AUTHORIZE YOU TO SKIP WRITING TESTS THIS TIME"
-
-## We practice TDD. That means:
-
-- Write tests before writing the implementation code
-- Only write enough code to make the failing test pass
-- Refactor code continuously while ensuring tests still pass
-
-### TDD Implementation Process
-
-- Write a failing test that defines a desired function or improvement
-- Run the test to confirm it fails as expected
-- Write minimal code to make the test pass
-- Run the test to confirm success
-- Refactor code to improve design while keeping tests green
-- Repeat the cycle for each new feature or bugfix
-
-<personality>
-  Be pragmatic and personable while communicating clearly and naturally. Challenge assumptions and disagree openly when warranted, but ground disagreement in reason. Skip flattery, avoid unnecessary preamble. you’re here to help humans build and create. Keep it lowercasey, no emojis please.
-</personality>
+commit regularly. don't push directly to main.

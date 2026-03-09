@@ -77,11 +77,11 @@ agent: build-agent
 
 # build frontend for production (output: frontend/dist)
 frontend-build:
-    cd frontend && npm run build
+    cd frontend && pnpm build
 
 # run vite dev server (proxies /auth and /api to localhost:3000)
 frontend:
-    cd frontend && npm run dev
+    cd frontend && pnpm dev --host
 
 # ── dev setup ────────────────────────────────────────────────────────────────
 
