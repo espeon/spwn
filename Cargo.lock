@@ -1135,6 +1135,7 @@ dependencies = [
  "rand",
  "serde",
  "sqlx",
+ "tempfile",
  "thiserror",
  "tokio",
  "tokio-stream",
