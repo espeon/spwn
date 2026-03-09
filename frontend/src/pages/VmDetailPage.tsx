@@ -1,14 +1,24 @@
+import { useState } from "react";
 import { useParams, useNavigate } from "@tanstack/react-router";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { getVm, startVm, stopVm, snapshotVm, deleteVm, ApiError } from "@/api";
 import { StatusBadge } from "@/components/StatusBadge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+  DialogFooter,
+} from "@/components/ui/dialog";
 
 export function VmDetailPage() {
   const { vmId } = useParams({ from: "/_authed/vms/$vmId" });
   const navigate = useNavigate();
   const qc = useQueryClient();
+  const [confirmDelete, setConfirmDelete] = useState(false);
 
   const {
     data: vm,
@@ -84,9 +94,7 @@ export function VmDetailPage() {
         <Button
           variant="ghost"
           size="sm"
-          onClick={() => {
-            if (confirm("delete this vm?")) deleteMutation.mutate();
-          }}
+          onClick={() => setConfirmDelete(true)}
           disabled={deleteMutation.isPending || isTransitioning}
           className="text-destructive hover:text-destructive hover:bg-destructive/10"
         >
@@ -111,6 +119,33 @@ export function VmDetailPage() {
           </Card>
         ))}
       </div>
+
+      <Dialog open={confirmDelete} onOpenChange={setConfirmDelete}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>delete {vm.name}?</DialogTitle>
+            <DialogDescription>
+              this is permanent. the vm and all its data will be gone.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button
+              variant="ghost"
+              onClick={() => setConfirmDelete(false)}
+              disabled={deleteMutation.isPending}
+            >
+              cancel
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={() => deleteMutation.mutate()}
+              disabled={deleteMutation.isPending}
+            >
+              {deleteMutation.isPending ? "deleting..." : "delete"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {mutError && <p className="text-sm text-destructive mb-4">{mutError}</p>}
 
