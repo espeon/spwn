@@ -209,7 +209,13 @@ pub async fn set_vm_status(pool: &PgPool, id: &str, status: &str) -> Result<()> 
     Ok(())
 }
 
-pub async fn set_vm_running(pool: &PgPool, id: &str, pid: i64, tap_device: &str, socket_path: &str) -> Result<()> {
+pub async fn set_vm_running(
+    pool: &PgPool,
+    id: &str,
+    pid: i64,
+    tap_device: &str,
+    socket_path: &str,
+) -> Result<()> {
     let now = unix_now();
     sqlx::query(
         "UPDATE vms SET status='running', pid=$1, tap_device=$2, socket_path=$3, last_started_at=$4 WHERE id=$5",
@@ -246,10 +252,18 @@ pub async fn get_used_ips(pool: &PgPool) -> Result<Vec<String>> {
     let rows = sqlx::query("SELECT ip_address FROM vms")
         .fetch_all(pool)
         .await?;
-    Ok(rows.iter().map(|r| r.get::<String, _>("ip_address")).collect())
+    Ok(rows
+        .iter()
+        .map(|r| r.get::<String, _>("ip_address"))
+        .collect())
 }
 
-pub async fn log_event(pool: &PgPool, vm_id: &str, event: &str, metadata: Option<&str>) -> Result<()> {
+pub async fn log_event(
+    pool: &PgPool,
+    vm_id: &str,
+    event: &str,
+    metadata: Option<&str>,
+) -> Result<()> {
     let now = unix_now();
     sqlx::query(
         "INSERT INTO vm_events (vm_id, event, metadata, created_at) VALUES ($1, $2, $3, $4)",
@@ -322,11 +336,7 @@ pub async fn upsert_host(pool: &PgPool, host: &NewHost) -> Result<HostRow> {
     })
 }
 
-pub async fn update_host_heartbeat(
-    pool: &PgPool,
-    host_id: &str,
-    now: i64,
-) -> Result<()> {
+pub async fn update_host_heartbeat(pool: &PgPool, host_id: &str, now: i64) -> Result<()> {
     sqlx::query("UPDATE hosts SET last_seen_at=$1 WHERE id=$2")
         .bind(now)
         .bind(host_id)
@@ -454,6 +464,9 @@ pub struct AccountRow {
     pub id: String,
     pub email: String,
     pub password_hash: String,
+    pub username: String,
+    pub display_name: Option<String>,
+    pub avatar_bytes: Option<Vec<u8>>,
     pub vcpu_limit: i32,
     pub mem_limit_mb: i32,
     pub vm_limit: i32,
@@ -464,7 +477,13 @@ pub struct NewAccount {
     pub id: String,
     pub email: String,
     pub password_hash: String,
+    pub username: String,
     pub created_at: i64,
+}
+
+pub struct UpdateAccountProfile {
+    pub display_name: Option<String>,
+    pub avatar_bytes: Option<Vec<u8>>,
 }
 
 #[derive(Debug, Clone)]
@@ -484,12 +503,13 @@ pub struct NewSession {
 
 pub async fn create_account(pool: &PgPool, account: &NewAccount) -> Result<AccountRow> {
     sqlx::query(
-        "INSERT INTO accounts (id, email, password_hash, created_at)
-         VALUES ($1, $2, $3, $4)",
+        "INSERT INTO accounts (id, email, password_hash, username, created_at)
+         VALUES ($1, $2, $3, $4, $5)",
     )
     .bind(&account.id)
     .bind(&account.email)
     .bind(&account.password_hash)
+    .bind(&account.username)
     .bind(account.created_at)
     .execute(pool)
     .await?;
@@ -497,6 +517,9 @@ pub async fn create_account(pool: &PgPool, account: &NewAccount) -> Result<Accou
         id: account.id.clone(),
         email: account.email.clone(),
         password_hash: account.password_hash.clone(),
+        username: account.username.clone(),
+        display_name: None,
+        avatar_bytes: None,
         vcpu_limit: 8,
         mem_limit_mb: 12288,
         vm_limit: 5,
@@ -506,7 +529,8 @@ pub async fn create_account(pool: &PgPool, account: &NewAccount) -> Result<Accou
 
 pub async fn get_account_by_email(pool: &PgPool, email: &str) -> Result<Option<AccountRow>> {
     let row = sqlx::query(
-        "SELECT id, email, password_hash, vcpu_limit, mem_limit_mb, vm_limit, created_at
+        "SELECT id, email, password_hash, username, display_name, avatar_bytes,
+         vcpu_limit, mem_limit_mb, vm_limit, created_at
          FROM accounts WHERE email = $1",
     )
     .bind(email)
@@ -515,9 +539,22 @@ pub async fn get_account_by_email(pool: &PgPool, email: &str) -> Result<Option<A
     Ok(row.map(row_to_account))
 }
 
+pub async fn get_account_by_username(pool: &PgPool, username: &str) -> Result<Option<AccountRow>> {
+    let row = sqlx::query(
+        "SELECT id, email, password_hash, username, display_name, avatar_bytes,
+         vcpu_limit, mem_limit_mb, vm_limit, created_at
+         FROM accounts WHERE username = $1",
+    )
+    .bind(username)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row.map(row_to_account))
+}
+
 pub async fn get_account(pool: &PgPool, id: &str) -> Result<Option<AccountRow>> {
     let row = sqlx::query(
-        "SELECT id, email, password_hash, vcpu_limit, mem_limit_mb, vm_limit, created_at
+        "SELECT id, email, password_hash, username, display_name, avatar_bytes,
+         vcpu_limit, mem_limit_mb, vm_limit, created_at
          FROM accounts WHERE id = $1",
     )
     .bind(id)
@@ -526,11 +563,91 @@ pub async fn get_account(pool: &PgPool, id: &str) -> Result<Option<AccountRow>> 
     Ok(row.map(row_to_account))
 }
 
+pub struct UsernameUpdate {
+    pub old_username: String,
+    pub new_username: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct RenamedSubdomain {
+    pub vm_id: String,
+    pub old_subdomain: String,
+    pub new_subdomain: String,
+}
+
+pub async fn update_username(
+    pool: &PgPool,
+    account_id: &str,
+    update: &UsernameUpdate,
+) -> Result<Vec<RenamedSubdomain>> {
+    let mut tx = pool.begin().await?;
+
+    sqlx::query("UPDATE accounts SET username = $1 WHERE id = $2")
+        .bind(&update.new_username)
+        .bind(account_id)
+        .execute(&mut *tx)
+        .await?;
+
+    let vms = sqlx::query("SELECT id, subdomain FROM vms WHERE account_id = $1")
+        .bind(account_id)
+        .fetch_all(&mut *tx)
+        .await?;
+
+    let mut renamed = Vec::with_capacity(vms.len());
+
+    for vm in &vms {
+        let vm_id: String = vm.get("id");
+        let old_subdomain: String = vm.get("subdomain");
+
+        let new_subdomain = if let Some(vm_name) =
+            old_subdomain.strip_suffix(&format!(".{}", update.old_username))
+        {
+            format!("{vm_name}.{}", update.new_username)
+        } else {
+            old_subdomain.clone()
+        };
+
+        if new_subdomain != old_subdomain {
+            sqlx::query("UPDATE vms SET subdomain = $1 WHERE id = $2")
+                .bind(&new_subdomain)
+                .bind(&vm_id)
+                .execute(&mut *tx)
+                .await?;
+
+            renamed.push(RenamedSubdomain {
+                vm_id,
+                old_subdomain,
+                new_subdomain,
+            });
+        }
+    }
+
+    tx.commit().await?;
+    Ok(renamed)
+}
+
+pub async fn update_account_profile(
+    pool: &PgPool,
+    id: &str,
+    update: &UpdateAccountProfile,
+) -> Result<()> {
+    sqlx::query("UPDATE accounts SET display_name = $1, avatar_bytes = $2 WHERE id = $3")
+        .bind(&update.display_name)
+        .bind(&update.avatar_bytes)
+        .bind(id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
 fn row_to_account(r: sqlx::postgres::PgRow) -> AccountRow {
     AccountRow {
         id: r.get("id"),
         email: r.get("email"),
         password_hash: r.get("password_hash"),
+        username: r.get("username"),
+        display_name: r.get("display_name"),
+        avatar_bytes: r.get("avatar_bytes"),
         vcpu_limit: r.get("vcpu_limit"),
         mem_limit_mb: r.get("mem_limit_mb"),
         vm_limit: r.get("vm_limit"),
@@ -560,12 +677,11 @@ pub async fn create_session(pool: &PgPool, session: &NewSession) -> Result<Sessi
 }
 
 pub async fn get_session(pool: &PgPool, id: &str) -> Result<Option<SessionRow>> {
-    let row = sqlx::query(
-        "SELECT id, account_id, created_at, expires_at FROM sessions WHERE id = $1",
-    )
-    .bind(id)
-    .fetch_optional(pool)
-    .await?;
+    let row =
+        sqlx::query("SELECT id, account_id, created_at, expires_at FROM sessions WHERE id = $1")
+            .bind(id)
+            .fetch_optional(pool)
+            .await?;
     Ok(row.map(|r| SessionRow {
         id: r.get("id"),
         account_id: r.get("account_id"),
@@ -635,14 +751,13 @@ pub async fn check_quota_and_reserve(
         .await
         .map_err(DbError::from)?;
 
-    let account_row = sqlx::query(
-        "SELECT vcpu_limit, mem_limit_mb, vm_limit FROM accounts WHERE id = $1",
-    )
-    .bind(account_id)
-    .fetch_optional(&mut *tx)
-    .await
-    .map_err(DbError::from)?
-    .ok_or_else(|| QuotaError::Exceeded("account not found".into()))?;
+    let account_row =
+        sqlx::query("SELECT vcpu_limit, mem_limit_mb, vm_limit FROM accounts WHERE id = $1")
+            .bind(account_id)
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(DbError::from)?
+            .ok_or_else(|| QuotaError::Exceeded("account not found".into()))?;
 
     let vcpu_limit: i32 = account_row.get("vcpu_limit");
     let mem_limit: i32 = account_row.get("mem_limit_mb");

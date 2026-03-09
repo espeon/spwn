@@ -1,11 +1,13 @@
 use axum::{
     Json, Router,
-    extract::State,
-    http::StatusCode,
+    body::Bytes,
+    extract::{Path, State},
+    http::{HeaderMap, StatusCode, header},
     response::IntoResponse,
-    routing::{get, post},
+    routing::{get, patch, post},
 };
 use axum_extra::extract::cookie::{Cookie, CookieJar, SameSite};
+use image::{ImageFormat, imageops::FilterType};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -22,6 +24,7 @@ pub struct AuthState {
 struct SignupRequest {
     email: String,
     password: String,
+    username: String,
     invite_code: String,
 }
 
@@ -31,10 +34,21 @@ struct LoginRequest {
     password: String,
 }
 
+#[derive(Deserialize)]
+struct UpdateProfileRequest {
+    display_name: Option<String>,
+}
+
 #[derive(Serialize)]
 struct MeResponse {
     id: String,
     email: String,
+    username: String,
+    display_name: Option<String>,
+    has_avatar: bool,
+    vm_limit: i32,
+    vcpu_limit: i32,
+    mem_limit_mb: i32,
 }
 
 pub fn auth_router(state: AuthState) -> Router {
@@ -43,7 +57,18 @@ pub fn auth_router(state: AuthState) -> Router {
         .route("/auth/login", post(login))
         .route("/auth/logout", post(logout))
         .route("/auth/me", get(me))
+        .route("/auth/me", patch(update_profile))
+        .route("/auth/me/avatar", post(upload_avatar))
+        .route("/auth/avatar/:account_id", get(get_avatar))
         .with_state(state)
+}
+
+fn resize_avatar(data: &[u8]) -> anyhow::Result<Vec<u8>> {
+    let img = image::load_from_memory(data)?;
+    let resized = img.resize_to_fill(256, 256, FilterType::Lanczos3);
+    let mut buf = Vec::new();
+    resized.write_to(&mut std::io::Cursor::new(&mut buf), ImageFormat::Png)?;
+    Ok(buf)
 }
 
 async fn signup(
@@ -52,6 +77,11 @@ async fn signup(
 ) -> impl IntoResponse {
     if req.invite_code != state.invite_code {
         return StatusCode::FORBIDDEN.into_response();
+    }
+
+    let username = req.username.to_lowercase();
+    if let Err(msg) = crate::validate_username(&username) {
+        return (StatusCode::BAD_REQUEST, msg).into_response();
     }
 
     let hash = match password::hash_password(&req.password) {
@@ -63,6 +93,7 @@ async fn signup(
     let account = db::NewAccount {
         id: Uuid::new_v4().to_string(),
         email: req.email,
+        username,
         password_hash: hash,
         created_at: now,
     };
@@ -72,7 +103,7 @@ async fn signup(
         Err(e) => {
             let msg = e.to_string();
             if msg.contains("unique") || msg.contains("duplicate") {
-                (StatusCode::BAD_REQUEST, "email already registered").into_response()
+                (StatusCode::BAD_REQUEST, "email or username already taken").into_response()
             } else {
                 StatusCode::INTERNAL_SERVER_ERROR.into_response()
             }
@@ -128,14 +159,104 @@ async fn logout(State(state): State<AuthState>, jar: CookieJar) -> impl IntoResp
     (jar.remove(removal), StatusCode::NO_CONTENT).into_response()
 }
 
-async fn me(
-    State(state): State<AuthState>,
-    account_id: AccountId,
-) -> impl IntoResponse {
+async fn me(State(state): State<AuthState>, account_id: AccountId) -> impl IntoResponse {
     match db::get_account(&state.pool, &account_id.0).await {
-        Ok(Some(acc)) => Json(MeResponse { id: acc.id, email: acc.email }).into_response(),
+        Ok(Some(acc)) => Json(MeResponse {
+            id: acc.id,
+            email: acc.email,
+            username: acc.username,
+            display_name: acc.display_name,
+            has_avatar: acc.avatar_bytes.is_some(),
+            vm_limit: acc.vm_limit,
+            vcpu_limit: acc.vcpu_limit,
+            mem_limit_mb: acc.mem_limit_mb,
+        })
+        .into_response(),
         Ok(None) => StatusCode::UNAUTHORIZED.into_response(),
         Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    }
+}
+
+async fn update_profile(
+    State(state): State<AuthState>,
+    account_id: AccountId,
+    Json(req): Json<UpdateProfileRequest>,
+) -> impl IntoResponse {
+    let acc = match db::get_account(&state.pool, &account_id.0).await {
+        Ok(Some(a)) => a,
+        Ok(None) => return StatusCode::UNAUTHORIZED.into_response(),
+        Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    };
+
+    let update = db::UpdateAccountProfile {
+        display_name: req.display_name,
+        avatar_bytes: acc.avatar_bytes,
+    };
+
+    match db::update_account_profile(&state.pool, &account_id.0, &update).await {
+        Ok(_) => StatusCode::NO_CONTENT.into_response(),
+        Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    }
+}
+
+async fn upload_avatar(
+    State(state): State<AuthState>,
+    account_id: AccountId,
+    headers: HeaderMap,
+    body: Bytes,
+) -> impl IntoResponse {
+    let content_type = headers
+        .get(header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+
+    let is_image = content_type.starts_with("image/png")
+        || content_type.starts_with("image/jpeg")
+        || content_type.starts_with("image/webp");
+
+    if !is_image {
+        return (StatusCode::BAD_REQUEST, "unsupported image type").into_response();
+    }
+
+    if body.len() > 10 * 1024 * 1024 {
+        return (StatusCode::BAD_REQUEST, "image too large (max 10mb)").into_response();
+    }
+
+    let resized = match resize_avatar(&body) {
+        Ok(b) => b,
+        Err(_) => return (StatusCode::BAD_REQUEST, "could not decode image").into_response(),
+    };
+
+    let acc = match db::get_account(&state.pool, &account_id.0).await {
+        Ok(Some(a)) => a,
+        Ok(None) => return StatusCode::UNAUTHORIZED.into_response(),
+        Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    };
+
+    let update = db::UpdateAccountProfile {
+        display_name: acc.display_name,
+        avatar_bytes: Some(resized),
+    };
+
+    match db::update_account_profile(&state.pool, &account_id.0, &update).await {
+        Ok(_) => StatusCode::NO_CONTENT.into_response(),
+        Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    }
+}
+
+async fn get_avatar(
+    State(state): State<AuthState>,
+    Path(account_id): Path<String>,
+) -> impl IntoResponse {
+    let acc = match db::get_account(&state.pool, &account_id).await {
+        Ok(Some(a)) => a,
+        Ok(None) => return StatusCode::NOT_FOUND.into_response(),
+        Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    };
+
+    match acc.avatar_bytes {
+        Some(bytes) => ([(header::CONTENT_TYPE, "image/png")], bytes).into_response(),
+        None => StatusCode::NOT_FOUND.into_response(),
     }
 }
 
@@ -148,6 +269,10 @@ fn unix_now() -> i64 {
 
 // exposed for tests only
 #[doc(hidden)]
-pub fn __test_hash(pw: &str) -> anyhow::Result<String> { password::hash_password(pw) }
+pub fn __test_hash(pw: &str) -> anyhow::Result<String> {
+    password::hash_password(pw)
+}
 #[doc(hidden)]
-pub fn __test_verify(pw: &str, hash: &str) -> anyhow::Result<bool> { password::verify_password(pw, hash) }
+pub fn __test_verify(pw: &str, hash: &str) -> anyhow::Result<bool> {
+    password::verify_password(pw, hash)
+}

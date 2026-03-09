@@ -1,38 +1,64 @@
-use rand::Rng;
+use db::PgPool;
 
-const ADJECTIVES: &[&str] = &[
-    "autumn", "bold", "calm", "dark", "eager", "fast", "gentle", "happy",
-    "icy", "jolly", "keen", "lively", "merry", "neat", "odd", "proud",
-    "quiet", "rapid", "sharp", "tidy", "urban", "vivid", "warm", "young",
-];
+pub async fn generate(pool: &PgPool, vm_name: &str, username: &str) -> anyhow::Result<String> {
+    let base_name = slugify(vm_name);
+    let slug = format!("{base_name}.{username}");
 
-const NOUNS: &[&str] = &[
-    "brook", "cloud", "dawn", "echo", "flame", "grove", "hill", "iris",
-    "jade", "kite", "lake", "moon", "nova", "oak", "pine", "reef",
-    "snow", "tide", "vale", "wind",
-];
+    let row = sqlx::query("SELECT id FROM vms WHERE subdomain = $1")
+        .bind(&slug)
+        .fetch_optional(pool)
+        .await?;
 
-pub async fn generate(pool: &db::PgPool) -> anyhow::Result<String> {
-    let candidates: Vec<String> = {
-        let mut rng = rand::thread_rng();
-        (0..20)
-            .map(|_| {
-                let adj = ADJECTIVES[rng.gen_range(0..ADJECTIVES.len())];
-                let noun = NOUNS[rng.gen_range(0..NOUNS.len())];
-                let suffix = format!("{:04x}", rng.gen_range(0u32..=0xFFFF));
-                format!("{adj}-{noun}-{suffix}")
-            })
-            .collect()
-    };
+    if row.is_none() {
+        return Ok(slug);
+    }
 
-    for subdomain in candidates {
+    for n in 2u32..=99 {
+        let candidate = format!("{base_name}-{n}.{username}");
         let row = sqlx::query("SELECT id FROM vms WHERE subdomain = $1")
-            .bind(&subdomain)
+            .bind(&candidate)
             .fetch_optional(pool)
             .await?;
         if row.is_none() {
-            return Ok(subdomain);
+            return Ok(candidate);
         }
     }
-    anyhow::bail!("could not generate unique subdomain after 20 attempts")
+
+    anyhow::bail!("could not generate unique subdomain for {slug} after 99 attempts")
+}
+
+fn slugify(name: &str) -> String {
+    name.to_lowercase()
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect::<String>()
+        .split('-')
+        .filter(|s| !s.is_empty())
+        .collect::<Vec<_>>()
+        .join("-")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::slugify;
+
+    #[test]
+    fn test_slugify_basic() {
+        assert_eq!(slugify("my-app"), "my-app");
+    }
+
+    #[test]
+    fn test_slugify_spaces_and_specials() {
+        assert_eq!(slugify("My Cool VM!"), "my-cool-vm");
+    }
+
+    #[test]
+    fn test_slugify_leading_trailing_hyphens() {
+        assert_eq!(slugify("--hello--"), "hello");
+    }
+
+    #[test]
+    fn test_slugify_uppercase() {
+        assert_eq!(slugify("WebServer"), "webserver");
+    }
 }

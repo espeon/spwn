@@ -11,10 +11,18 @@ async fn setup() -> (ContainerAsync<Postgres>, db::PgPool) {
 }
 
 fn new_account(email: &str) -> db::NewAccount {
+    new_account_with_username(
+        email,
+        &email.split('@').next().unwrap_or("user").replace('.', "-"),
+    )
+}
+
+fn new_account_with_username(email: &str, username: &str) -> db::NewAccount {
     db::NewAccount {
         id: uuid::Uuid::new_v4().to_string(),
         email: email.to_string(),
         password_hash: "hash".to_string(),
+        username: username.to_string(),
         created_at: 1_000_000,
     }
 }
@@ -24,7 +32,7 @@ fn new_account(email: &str) -> db::NewAccount {
 #[tokio::test]
 async fn test_create_and_get_account() {
     let (_c, pool) = setup().await;
-    let acct = new_account("alice@example.com");
+    let acct = new_account_with_username("alice@example.com", "alice");
     let id = acct.id.clone();
     db::create_account(&pool, &acct).await.expect("create");
 
@@ -33,6 +41,7 @@ async fn test_create_and_get_account() {
         .expect("get by email")
         .expect("should exist");
     assert_eq!(by_email.email, "alice@example.com");
+    assert_eq!(by_email.username, "alice");
     assert_eq!(by_email.vcpu_limit, 8);
     assert_eq!(by_email.mem_limit_mb, 12288);
     assert_eq!(by_email.vm_limit, 5);
@@ -42,6 +51,12 @@ async fn test_create_and_get_account() {
         .expect("get by id")
         .expect("should exist");
     assert_eq!(by_id.id, id);
+
+    let by_username = db::get_account_by_username(&pool, "alice")
+        .await
+        .expect("get by username")
+        .expect("should exist");
+    assert_eq!(by_username.id, id);
 }
 
 #[tokio::test]
@@ -56,16 +71,105 @@ async fn test_get_account_missing() {
 #[tokio::test]
 async fn test_duplicate_email_rejected() {
     let (_c, pool) = setup().await;
-    db::create_account(&pool, &new_account("dup@example.com"))
-        .await
-        .expect("first insert ok");
-    let err = db::create_account(&pool, &new_account("dup@example.com"))
-        .await
-        .expect_err("second insert should fail");
+    db::create_account(
+        &pool,
+        &new_account_with_username("dup@example.com", "dup-user"),
+    )
+    .await
+    .expect("first insert ok");
+    let err = db::create_account(
+        &pool,
+        &new_account_with_username("dup@example.com", "dup-user2"),
+    )
+    .await
+    .expect_err("second insert should fail");
     assert!(
         err.to_string().contains("unique") || err.to_string().contains("duplicate"),
         "expected unique violation, got: {err}"
     );
+}
+
+#[tokio::test]
+async fn test_duplicate_username_rejected() {
+    let (_c, pool) = setup().await;
+    db::create_account(
+        &pool,
+        &new_account_with_username("user1@example.com", "taken"),
+    )
+    .await
+    .expect("first insert ok");
+    let err = db::create_account(
+        &pool,
+        &new_account_with_username("user2@example.com", "taken"),
+    )
+    .await
+    .expect_err("second insert with same username should fail");
+    assert!(
+        err.to_string().contains("unique") || err.to_string().contains("duplicate"),
+        "expected unique violation, got: {err}"
+    );
+}
+
+#[tokio::test]
+async fn test_update_account_profile() {
+    let (_c, pool) = setup().await;
+    let acct = new_account_with_username("profile@example.com", "profile-user");
+    let id = acct.id.clone();
+    db::create_account(&pool, &acct).await.expect("create");
+
+    let update = db::UpdateAccountProfile {
+        display_name: Some("Profile User".to_string()),
+        avatar_bytes: Some(vec![0x89, 0x50, 0x4e, 0x47]),
+    };
+    db::update_account_profile(&pool, &id, &update)
+        .await
+        .expect("update profile");
+
+    let fetched = db::get_account(&pool, &id)
+        .await
+        .expect("get account")
+        .expect("should exist");
+    assert_eq!(fetched.display_name.as_deref(), Some("Profile User"));
+    assert_eq!(
+        fetched.avatar_bytes.as_deref(),
+        Some(&[0x89u8, 0x50, 0x4e, 0x47][..])
+    );
+}
+
+#[tokio::test]
+async fn test_update_profile_clears_avatar() {
+    let (_c, pool) = setup().await;
+    let acct = new_account_with_username("clear@example.com", "clear-user");
+    let id = acct.id.clone();
+    db::create_account(&pool, &acct).await.expect("create");
+
+    db::update_account_profile(
+        &pool,
+        &id,
+        &db::UpdateAccountProfile {
+            display_name: Some("Clear User".to_string()),
+            avatar_bytes: Some(vec![1, 2, 3]),
+        },
+    )
+    .await
+    .expect("set avatar");
+
+    db::update_account_profile(
+        &pool,
+        &id,
+        &db::UpdateAccountProfile {
+            display_name: Some("Clear User".to_string()),
+            avatar_bytes: None,
+        },
+    )
+    .await
+    .expect("clear avatar");
+
+    let fetched = db::get_account(&pool, &id)
+        .await
+        .expect("get")
+        .expect("exists");
+    assert!(fetched.avatar_bytes.is_none());
 }
 
 // ── sessions ──────────────────────────────────────────────────────────────────
@@ -74,7 +178,9 @@ async fn test_duplicate_email_rejected() {
 async fn test_session_lifecycle() {
     let (_c, pool) = setup().await;
     let acct = new_account("bob@example.com");
-    db::create_account(&pool, &acct).await.expect("create account");
+    db::create_account(&pool, &acct)
+        .await
+        .expect("create account");
 
     let session = db::NewSession {
         id: uuid::Uuid::new_v4().to_string(),
@@ -84,7 +190,9 @@ async fn test_session_lifecycle() {
     };
     let sid = session.id.clone();
 
-    db::create_session(&pool, &session).await.expect("create session");
+    db::create_session(&pool, &session)
+        .await
+        .expect("create session");
 
     let fetched = db::get_session(&pool, &sid)
         .await
@@ -103,7 +211,9 @@ async fn test_session_lifecycle() {
 async fn test_delete_expired_sessions() {
     let (_c, pool) = setup().await;
     let acct = new_account("carol@example.com");
-    db::create_account(&pool, &acct).await.expect("create account");
+    db::create_account(&pool, &acct)
+        .await
+        .expect("create account");
 
     let expired = db::NewSession {
         id: uuid::Uuid::new_v4().to_string(),
@@ -120,14 +230,28 @@ async fn test_delete_expired_sessions() {
     let expired_id = expired.id.clone();
     let live_id = live.id.clone();
 
-    db::create_session(&pool, &expired).await.expect("create expired");
+    db::create_session(&pool, &expired)
+        .await
+        .expect("create expired");
     db::create_session(&pool, &live).await.expect("create live");
 
-    let deleted = db::delete_expired_sessions(&pool).await.expect("delete expired");
+    let deleted = db::delete_expired_sessions(&pool)
+        .await
+        .expect("delete expired");
     assert_eq!(deleted, 1);
 
-    assert!(db::get_session(&pool, &expired_id).await.expect("query").is_none());
-    assert!(db::get_session(&pool, &live_id).await.expect("query").is_some());
+    assert!(
+        db::get_session(&pool, &expired_id)
+            .await
+            .expect("query")
+            .is_none()
+    );
+    assert!(
+        db::get_session(&pool, &live_id)
+            .await
+            .expect("query")
+            .is_some()
+    );
 }
 
 // ── quota ─────────────────────────────────────────────────────────────────────
@@ -171,8 +295,7 @@ async fn test_quota_reserve_success() {
     db::create_account(&pool, &acct).await.expect("create");
 
     // create a stopped vm to reserve
-    let vm_id =
-        insert_vm_with_status(&pool, &acct.id, 2, 512, "stopped").await;
+    let vm_id = insert_vm_with_status(&pool, &acct.id, 2, 512, "stopped").await;
 
     db::check_quota_and_reserve(&pool, &acct.id, &vm_id, 2, 512)
         .await

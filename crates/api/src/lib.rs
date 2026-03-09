@@ -13,16 +13,30 @@ use auth::AccountId;
 
 #[async_trait::async_trait]
 pub trait VmOps: Send + Sync {
-    async fn create_vm(&self, account_id: String, req: CreateVmRequest) -> anyhow::Result<db::VmRow>;
+    async fn create_vm(
+        &self,
+        account_id: String,
+        req: CreateVmRequest,
+    ) -> anyhow::Result<db::VmRow>;
     async fn start_vm(&self, id: &str) -> anyhow::Result<()>;
     async fn stop_vm(&self, id: &str) -> anyhow::Result<()>;
     async fn delete_vm(&self, id: &str) -> anyhow::Result<()>;
     async fn get_vm(&self, id: &str) -> anyhow::Result<Option<db::VmRow>>;
     async fn list_vms(&self, account_id: &str) -> anyhow::Result<Vec<db::VmRow>>;
-    async fn take_snapshot(&self, vm_id: &str, label: Option<String>) -> anyhow::Result<db::SnapshotRow>;
+    async fn take_snapshot(
+        &self,
+        vm_id: &str,
+        label: Option<String>,
+    ) -> anyhow::Result<db::SnapshotRow>;
     async fn list_snapshots(&self, vm_id: &str) -> anyhow::Result<Vec<db::SnapshotRow>>;
     async fn delete_snapshot(&self, vm_id: &str, snap_id: &str) -> anyhow::Result<()>;
     async fn restore_snapshot(&self, vm_id: &str, snap_id: &str) -> anyhow::Result<()>;
+    async fn change_username(&self, account_id: &str, new_username: &str) -> anyhow::Result<()>;
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ChangeUsernameRequest {
+    pub username: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -38,10 +52,18 @@ pub struct CreateVmRequest {
     pub exposed_port: i32,
 }
 
-fn default_image() -> String { "ubuntu".into() }
-fn default_vcores() -> i32 { 2 }
-fn default_memory() -> i32 { 512 }
-fn default_port() -> i32 { 8080 }
+fn default_image() -> String {
+    "ubuntu".into()
+}
+fn default_vcores() -> i32 {
+    2
+}
+fn default_memory() -> i32 {
+    512
+}
+fn default_port() -> i32 {
+    8080
+}
 
 #[derive(Debug, Deserialize)]
 pub struct SnapshotRequest {
@@ -112,14 +134,33 @@ pub fn router(ops: Arc<dyn VmOps>) -> Router {
         .route("/api/vms/{id}/snapshots", get(list_snapshots))
         .route("/api/vms/{id}/snapshots/{snap_id}", delete(delete_snapshot))
         .route("/api/vms/{id}/restore/{snap_id}", post(restore_snapshot))
+        .route("/api/account/username", post(change_username))
         .route("/healthz", get(|| async { "ok" }))
         .with_state(ops)
 }
 
-async fn list_vms(
+async fn change_username(
     State(ops): State<AppState>,
     account_id: AccountId,
+    Json(req): Json<ChangeUsernameRequest>,
 ) -> impl IntoResponse {
+    match ops.change_username(&account_id.0, &req.username).await {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(e) => {
+            let msg = e.to_string();
+            if msg.contains("unique") || msg.contains("duplicate") || msg.contains("already taken")
+            {
+                (StatusCode::CONFLICT, "username already taken").into_response()
+            } else if msg.contains("invalid username") {
+                (StatusCode::BAD_REQUEST, msg).into_response()
+            } else {
+                (StatusCode::INTERNAL_SERVER_ERROR, msg).into_response()
+            }
+        }
+    }
+}
+
+async fn list_vms(State(ops): State<AppState>, account_id: AccountId) -> impl IntoResponse {
     match ops.list_vms(&account_id.0).await {
         Ok(vms) => Json(vms.into_iter().map(VmResponse::from).collect::<Vec<_>>()).into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
@@ -205,7 +246,13 @@ async fn list_snapshots(
     Path(id): Path<String>,
 ) -> impl IntoResponse {
     match ops.list_snapshots(&id).await {
-        Ok(snaps) => Json(snaps.into_iter().map(SnapshotResponse::from).collect::<Vec<_>>()).into_response(),
+        Ok(snaps) => Json(
+            snaps
+                .into_iter()
+                .map(SnapshotResponse::from)
+                .collect::<Vec<_>>(),
+        )
+        .into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     }
 }

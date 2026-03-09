@@ -13,6 +13,8 @@ tokio = { version = "1", features = ["full"] }
 uuid = { version = "1", features = ["v4"] }
 anyhow = "1"
 tracing = "0.1"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp"] }
+bytes = "1"
 
 [dev-dependencies]
 testcontainers = "0.23"

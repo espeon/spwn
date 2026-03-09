@@ -1,52 +1,36 @@
-import { Outlet, Link, useNavigate } from '@tanstack/react-router'
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { getMe, logout } from '../api'
-import { useVmEvents } from '../hooks/useVmEvents'
+import { Outlet } from "@tanstack/react-router";
+import { useVmEvents } from "@/hooks/useVmEvents";
+import {
+  SidebarInset,
+  SidebarProvider,
+  SidebarTrigger,
+} from "@/components/ui/sidebar";
+import { AppSidebar } from "@/components/Sidebar";
 
 export function AuthedLayout() {
-  const qc = useQueryClient()
-  const navigate = useNavigate()
-  useVmEvents()
-  const { data: me } = useQuery({ queryKey: ['me'], queryFn: getMe })
-
-  const logoutMutation = useMutation({
-    mutationFn: logout,
-    onSuccess: () => {
-      qc.clear()
-      navigate({ to: '/login' })
-    },
-  })
+  useVmEvents();
 
   return (
-    <div className="min-h-screen bg-zinc-950 text-zinc-100">
-      <nav className="border-b border-zinc-800 px-6 py-3 flex items-center gap-6">
-        <span className="font-mono font-bold text-violet-400 text-lg">spwn</span>
-        <Link
-          to="/vms"
-          className="text-sm text-zinc-400 hover:text-zinc-100 [&.active]:text-zinc-100"
-        >
-          vms
-        </Link>
-        <Link
-          to="/account"
-          className="text-sm text-zinc-400 hover:text-zinc-100 [&.active]:text-zinc-100"
-        >
-          account
-        </Link>
-        <div className="ml-auto flex items-center gap-4">
-          <span className="text-sm text-zinc-500">{me?.email}</span>
-          <button
-            onClick={() => logoutMutation.mutate()}
-            disabled={logoutMutation.isPending}
-            className="text-sm text-zinc-400 hover:text-zinc-100 disabled:opacity-50"
-          >
-            logout
-          </button>
+    <SidebarProvider
+      style={
+        {
+          "--sidebar-width": "calc(var(--spacing) * 64)",
+          "--header-height": "calc(var(--spacing) * 12)",
+        } as React.CSSProperties
+      }
+    >
+      <AppSidebar variant="inset" />
+      <SidebarInset>
+        <header className="flex h-12 items-center gap-2 border-b px-4">
+          <SidebarTrigger />
+        </header>
+
+        <div className="flex flex-1 flex-col max-w-6xl mx-auto w-full">
+          <div className="flex flex-col p-4 md:p-6">
+            <Outlet />
+          </div>
         </div>
-      </nav>
-      <main className="px-6 py-8 max-w-5xl mx-auto">
-        <Outlet />
-      </main>
-    </div>
-  )
+      </SidebarInset>
+    </SidebarProvider>
+  );
 }

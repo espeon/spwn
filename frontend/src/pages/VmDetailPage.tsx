@@ -1,55 +1,73 @@
-import { useParams, useNavigate } from '@tanstack/react-router'
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { getVm, startVm, stopVm, snapshotVm, deleteVm, ApiError } from '../api'
-import { StatusBadge } from '../components/StatusBadge'
+import { useParams, useNavigate } from "@tanstack/react-router";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { getVm, startVm, stopVm, snapshotVm, deleteVm, ApiError } from "@/api";
+import { StatusBadge } from "@/components/StatusBadge";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent } from "@/components/ui/card";
 
 export function VmDetailPage() {
-  const { vmId } = useParams({ from: '/_authed/vms/$vmId' })
-  const navigate = useNavigate()
-  const qc = useQueryClient()
+  const { vmId } = useParams({ from: "/_authed/vms/$vmId" });
+  const navigate = useNavigate();
+  const qc = useQueryClient();
 
-  const { data: vm, isLoading, error } = useQuery({
-    queryKey: ['vms', vmId],
+  const {
+    data: vm,
+    isLoading,
+    error,
+  } = useQuery({
+    queryKey: ["vms", vmId],
     queryFn: () => getVm(vmId),
-  })
+  });
 
   const invalidate = () => {
-    qc.invalidateQueries({ queryKey: ['vms', vmId] })
-    qc.invalidateQueries({ queryKey: ['vms'] })
-  }
+    qc.invalidateQueries({ queryKey: ["vms", vmId] });
+    qc.invalidateQueries({ queryKey: ["vms"] });
+  };
 
-  const startMutation = useMutation({ mutationFn: () => startVm(vmId), onSuccess: invalidate })
-  const stopMutation = useMutation({ mutationFn: () => stopVm(vmId), onSuccess: invalidate })
-  const snapshotMutation = useMutation({ mutationFn: () => snapshotVm(vmId), onSuccess: invalidate })
+  const startMutation = useMutation({
+    mutationFn: () => startVm(vmId),
+    onSuccess: invalidate,
+  });
+  const stopMutation = useMutation({
+    mutationFn: () => stopVm(vmId),
+    onSuccess: invalidate,
+  });
+  const snapshotMutation = useMutation({
+    mutationFn: () => snapshotVm(vmId),
+    onSuccess: invalidate,
+  });
   const deleteMutation = useMutation({
     mutationFn: () => deleteVm(vmId),
-    onSuccess: () => navigate({ to: '/vms' }),
-  })
+    onSuccess: () => navigate({ to: "/vms" }),
+  });
 
-  if (isLoading) return <p className="text-zinc-500 text-sm">loading...</p>
+  if (isLoading)
+    return <p className="text-muted-foreground text-sm">loading...</p>;
 
   if (error) {
-    const status = error instanceof ApiError ? error.status : null
+    const status = error instanceof ApiError ? error.status : null;
     return (
-      <p className="text-red-400 text-sm">
-        {status === 404 ? 'vm not found' : 'failed to load vm'}
+      <p className="text-destructive text-sm">
+        {status === 404 ? "vm not found" : "failed to load vm"}
       </p>
-    )
+    );
   }
 
-  if (!vm) return null
+  if (!vm) return null;
 
   const isTransitioning =
-    vm.status === 'starting' || vm.status === 'stopping' || vm.status === 'snapshotting'
-  const canStart = vm.status === 'stopped' || vm.status === 'error'
-  const canStop = vm.status === 'running'
-  const canSnapshot = vm.status === 'running'
+    vm.status === "starting" ||
+    vm.status === "stopping" ||
+    vm.status === "snapshotting";
+  const canStart = vm.status === "stopped" || vm.status === "error";
+  const canStop = vm.status === "running";
+  const canSnapshot = vm.status === "running";
 
   const mutError =
     startMutation.error?.message ||
     stopMutation.error?.message ||
     snapshotMutation.error?.message ||
-    deleteMutation.error?.message
+    deleteMutation.error?.message;
 
   return (
     <>
@@ -59,58 +77,70 @@ export function VmDetailPage() {
             <h1 className="text-xl font-semibold">{vm.name}</h1>
             <StatusBadge status={vm.status} />
           </div>
-          <p className="text-sm text-zinc-500 font-mono">{vm.subdomain}</p>
+          <p className="text-sm text-muted-foreground font-mono">
+            {vm.subdomain}
+          </p>
         </div>
-        <button
+        <Button
+          variant="ghost"
+          size="sm"
           onClick={() => {
-            if (confirm('delete this vm?')) deleteMutation.mutate()
+            if (confirm("delete this vm?")) deleteMutation.mutate();
           }}
           disabled={deleteMutation.isPending || isTransitioning}
-          className="text-sm text-red-400 hover:text-red-300 disabled:opacity-40"
+          className="text-destructive hover:text-destructive hover:bg-destructive/10"
         >
           delete
-        </button>
+        </Button>
       </div>
 
       <div className="grid grid-cols-2 gap-3 mb-6 sm:grid-cols-4">
-        {[
-          ['vcores', vm.vcores],
-          ['memory', `${vm.memory_mb} mb`],
-          ['ip', vm.ip_address],
-          ['port', vm.exposed_port],
-        ].map(([label, value]) => (
-          <div key={label as string} className="bg-zinc-900 border border-zinc-800 rounded-lg px-4 py-3">
-            <p className="text-xs text-zinc-500 mb-1">{label}</p>
-            <p className="font-mono text-sm">{value}</p>
-          </div>
+        {(
+          [
+            ["vcores", vm.vcores],
+            ["memory", `${vm.memory_mb} mb`],
+            ["ip", vm.ip_address],
+            ["port", vm.exposed_port],
+          ] as const
+        ).map(([label, value]) => (
+          <Card key={label}>
+            <CardContent className="px-4 py-3">
+              <p className="text-xs text-muted-foreground mb-1">{label}</p>
+              <p className="font-mono text-sm">{value}</p>
+            </CardContent>
+          </Card>
         ))}
       </div>
 
-      {mutError && <p className="text-sm text-red-400 mb-4">{mutError}</p>}
+      {mutError && <p className="text-sm text-destructive mb-4">{mutError}</p>}
 
       <div className="flex gap-3">
-        <button
+        <Button
+          variant="outline"
           onClick={() => startMutation.mutate()}
           disabled={!canStart || isTransitioning || startMutation.isPending}
-          className="bg-green-700 hover:bg-green-600 disabled:opacity-40 text-white rounded px-4 py-2 text-sm font-medium transition-colors"
+          className="border-green-800 text-green-400 hover:bg-green-950 hover:text-green-300 disabled:opacity-40"
         >
-          {startMutation.isPending ? 'starting...' : 'start'}
-        </button>
-        <button
+          {startMutation.isPending ? "starting..." : "start"}
+        </Button>
+        <Button
+          variant="outline"
           onClick={() => stopMutation.mutate()}
           disabled={!canStop || isTransitioning || stopMutation.isPending}
-          className="bg-zinc-700 hover:bg-zinc-600 disabled:opacity-40 text-white rounded px-4 py-2 text-sm font-medium transition-colors"
         >
-          {stopMutation.isPending ? 'stopping...' : 'stop'}
-        </button>
-        <button
+          {stopMutation.isPending ? "stopping..." : "stop"}
+        </Button>
+        <Button
+          variant="outline"
           onClick={() => snapshotMutation.mutate()}
-          disabled={!canSnapshot || isTransitioning || snapshotMutation.isPending}
-          className="bg-blue-700 hover:bg-blue-600 disabled:opacity-40 text-white rounded px-4 py-2 text-sm font-medium transition-colors"
+          disabled={
+            !canSnapshot || isTransitioning || snapshotMutation.isPending
+          }
+          className="border-blue-800 text-blue-400 hover:bg-blue-950 hover:text-blue-300 disabled:opacity-40"
         >
-          {snapshotMutation.isPending ? 'snapshotting...' : 'snapshot'}
-        </button>
+          {snapshotMutation.isPending ? "snapshotting..." : "snapshot"}
+        </Button>
       </div>
     </>
-  )
+  );
 }

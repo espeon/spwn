@@ -52,7 +52,11 @@ impl CaddyClient {
     }
 
     pub async fn health(&self) -> Result<()> {
-        let resp = self.client.get(format!("{}/config/", self.base)).send().await?;
+        let resp = self
+            .client
+            .get(format!("{}/config/", self.base))
+            .send()
+            .await?;
         check(resp).await.map(|_| ())
     }
 
@@ -60,6 +64,16 @@ impl CaddyClient {
     pub async fn set_vm_route(&self, subdomain: &str, vm_ip: &str, port: u16) -> Result<()> {
         let route = vm_route(subdomain, vm_ip, port);
         self.upsert_route(subdomain, route).await
+    }
+
+    /// Delete a route by subdomain. Ignores 404 (already gone).
+    pub async fn delete_route(&self, subdomain: &str) -> Result<()> {
+        let id_url = format!("{}/id/route-{subdomain}", self.base);
+        let resp = self.client.delete(&id_url).send().await?;
+        if resp.status() == 404 {
+            return Ok(());
+        }
+        check(resp).await.map(|_| ())
     }
 
     /// Set or replace the route for a stopped VM (serves a static 503 page).
@@ -77,7 +91,8 @@ impl CaddyClient {
                 RouteTarget::Stopped => self.stopped_route(&r.subdomain),
             })
             .collect::<Result<Vec<Value>>>()?;
-        self.patch("/config/apps/http/servers/main/routes", &array).await?;
+        self.patch("/config/apps/http/servers/main/routes", &array)
+            .await?;
         Ok(())
     }
 
@@ -86,7 +101,8 @@ impl CaddyClient {
         let id_url = format!("{}/id/route-{subdomain}", self.base);
         let resp = self.client.put(&id_url).json(&route).send().await?;
         if resp.status() == 404 {
-            self.post("/config/apps/http/servers/main/routes/", &route).await?;
+            self.post("/config/apps/http/servers/main/routes/", &route)
+                .await?;
         } else {
             check(resp).await?;
         }

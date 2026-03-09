@@ -1,5 +1,9 @@
-use axum::{Extension, Router, body::Body, http::{Request, StatusCode, header}};
 use axum::response::Response;
+use axum::{
+    Extension, Router,
+    body::Body,
+    http::{Request, StatusCode, header},
+};
 use http_body_util::BodyExt;
 use serde_json::{Value, json};
 use testcontainers::{ContainerAsync, runners::AsyncRunner};
@@ -78,10 +82,19 @@ async fn get_authed(app: Router, uri: &str, cookie: &str) -> Response {
 }
 
 async fn signup(pool: db::PgPool, email: &str) {
+    signup_with_username(
+        pool,
+        email,
+        &email.split('@').next().unwrap_or("user").replace('.', "-"),
+    )
+    .await;
+}
+
+async fn signup_with_username(pool: db::PgPool, email: &str, username: &str) {
     post_json(
         test_app(pool),
         "/auth/signup",
-        json!({"email": email, "password": "password123", "invite_code": "testcode"}),
+        json!({"email": email, "password": "password123", "username": username, "invite_code": "testcode"}),
     )
     .await;
 }
@@ -117,7 +130,7 @@ async fn test_signup_success() {
     let resp = post_json(
         test_app(pool),
         "/auth/signup",
-        json!({"email":"a@b.com","password":"pw","invite_code":"testcode"}),
+        json!({"email":"a@b.com","password":"pw","username":"alice","invite_code":"testcode"}),
     )
     .await;
     assert_eq!(resp.status(), StatusCode::CREATED);
@@ -129,20 +142,57 @@ async fn test_signup_wrong_invite_code() {
     let resp = post_json(
         test_app(pool),
         "/auth/signup",
-        json!({"email":"a@b.com","password":"pw","invite_code":"nope"}),
+        json!({"email":"a@b.com","password":"pw","username":"alice","invite_code":"nope"}),
     )
     .await;
     assert_eq!(resp.status(), StatusCode::FORBIDDEN);
 }
 
 #[tokio::test]
-async fn test_signup_duplicate_email() {
+async fn test_signup_duplicate_username() {
     let (_c, pool) = setup().await;
-    signup(pool.clone(), "dup@b.com").await;
+    signup_with_username(pool.clone(), "first@b.com", "taken").await;
     let resp = post_json(
         test_app(pool),
         "/auth/signup",
-        json!({"email":"dup@b.com","password":"pw","invite_code":"testcode"}),
+        json!({"email":"second@b.com","password":"pw","username":"taken","invite_code":"testcode"}),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn test_signup_invalid_username_too_short() {
+    let (_c, pool) = setup().await;
+    let resp = post_json(
+        test_app(pool),
+        "/auth/signup",
+        json!({"email":"a@b.com","password":"pw","username":"ab","invite_code":"testcode"}),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn test_signup_invalid_username_special_chars() {
+    let (_c, pool) = setup().await;
+    let resp = post_json(
+        test_app(pool),
+        "/auth/signup",
+        json!({"email":"a@b.com","password":"pw","username":"bad_name!","invite_code":"testcode"}),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn test_signup_duplicate_email() {
+    let (_c, pool) = setup().await;
+    signup_with_username(pool.clone(), "dup@b.com", "dupuser").await;
+    let resp = post_json(
+        test_app(pool),
+        "/auth/signup",
+        json!({"email":"dup@b.com","password":"pw","username":"dupuser2","invite_code":"testcode"}),
     )
     .await;
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
@@ -195,7 +245,12 @@ async fn test_login_unknown_email() {
 async fn test_me_unauthenticated() {
     let (_c, pool) = setup().await;
     let resp = test_app(pool)
-        .oneshot(Request::builder().uri("/auth/me").body(Body::empty()).unwrap())
+        .oneshot(
+            Request::builder()
+                .uri("/auth/me")
+                .body(Body::empty())
+                .unwrap(),
+        )
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
@@ -217,6 +272,8 @@ async fn test_me_returns_account_info() {
     let body: Value = serde_json::from_str(&body_str(resp.into_body()).await).unwrap();
     assert_eq!(body["email"], "me@b.com");
     assert!(body["id"].is_string());
+    assert!(body["username"].is_string());
+    assert_eq!(body["has_avatar"], false);
 }
 
 // ── logout ────────────────────────────────────────────────────────────────────
@@ -246,4 +303,69 @@ async fn test_logout_invalidates_session() {
 
     let me_resp = get_authed(test_app(pool), "/auth/me", &cookie_header).await;
     assert_eq!(me_resp.status(), StatusCode::UNAUTHORIZED);
+}
+
+// ── profile update ────────────────────────────────────────────────────────────
+
+#[tokio::test]
+async fn test_update_profile_display_name() {
+    let (_c, pool) = setup().await;
+    signup_with_username(pool.clone(), "prof@b.com", "profuser").await;
+
+    let login_resp = login(pool.clone(), "prof@b.com").await;
+    let set_cookie = extract_set_cookie(&login_resp).expect("cookie");
+    let session_id = session_cookie_value(&set_cookie).expect("session_id");
+    let cookie_header = format!("session_id={session_id}");
+
+    let resp = test_app(pool.clone())
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri("/auth/me")
+                .header(header::CONTENT_TYPE, "application/json")
+                .header(header::COOKIE, &cookie_header)
+                .body(Body::from(json!({"display_name": "Prof User"}).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+
+    let me_resp = get_authed(test_app(pool), "/auth/me", &cookie_header).await;
+    let body: Value = serde_json::from_str(&body_str(me_resp.into_body()).await).unwrap();
+    assert_eq!(body["display_name"], "Prof User");
+}
+
+#[tokio::test]
+async fn test_update_profile_unauthenticated() {
+    let (_c, pool) = setup().await;
+    let resp = test_app(pool)
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri("/auth/me")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(json!({"display_name": "Nope"}).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+}
+
+// ── avatar ────────────────────────────────────────────────────────────────────
+
+#[tokio::test]
+async fn test_avatar_not_found_for_unknown_account() {
+    let (_c, pool) = setup().await;
+    let resp = test_app(pool)
+        .oneshot(
+            Request::builder()
+                .uri("/auth/avatar/nonexistent-id")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
 }
