@@ -34,7 +34,7 @@ impl ControlPlaneOps {
 
 #[async_trait]
 impl api::VmOps for ControlPlaneOps {
-    async fn create_vm(&self, req: api::CreateVmRequest) -> anyhow::Result<db::VmRow> {
+    async fn create_vm(&self, account_id: String, req: api::CreateVmRequest) -> anyhow::Result<db::VmRow> {
         let host = scheduler::pick_host(&self.pool).await?;
         let vm_id = uuid::Uuid::new_v4().to_string();
         let used_ips = db::get_used_ips(&self.pool).await?;
@@ -49,7 +49,7 @@ impl api::VmOps for ControlPlaneOps {
 
         let resp = agent.create_vm(CreateVmRequest {
             vm_id: vm_id.clone(),
-            account_id: "dev".into(),
+            account_id,
             name: req.name,
             subdomain: sub,
             image: req.image,
@@ -71,9 +71,34 @@ impl api::VmOps for ControlPlaneOps {
     }
 
     async fn start_vm(&self, id: &str) -> anyhow::Result<()> {
+        let vm = db::get_vm(&self.pool, id).await?
+            .ok_or_else(|| anyhow!("vm not found: {id}"))?;
+
+        // quota check + atomic status='starting' in a serializable tx
+        let result = db::check_quota_and_reserve(
+            &self.pool,
+            &vm.account_id,
+            id,
+            vm.vcores,
+            vm.memory_mb,
+        ).await;
+
+        match result {
+            Ok(()) => {}
+            Err(db::QuotaError::Serialization) => {
+                // retry once on serialization conflict
+                db::check_quota_and_reserve(&self.pool, &vm.account_id, id, vm.vcores, vm.memory_mb)
+                    .await
+                    .map_err(|e| anyhow!("{e}"))?;
+            }
+            Err(e) => return Err(anyhow!("{e}")),
+        }
+
         let mut agent = self.agent_client(id).await?;
         let resp = agent.start_vm(StartVmRequest { vm_id: id.into() }).await?.into_inner();
         if !resp.ok {
+            // revert status on agent failure
+            let _ = db::set_vm_status(&self.pool, id, "stopped").await;
             return Err(anyhow!("agent start_vm failed: {}", resp.error));
         }
         Ok(())
@@ -99,7 +124,6 @@ impl api::VmOps for ControlPlaneOps {
         if !resp.ok {
             return Err(anyhow!("agent delete_vm failed: {}", resp.error));
         }
-        // best-effort: remove caddy route for deleted VM
         if let Err(e) = self.caddy.set_stopped_route(&vm.subdomain).await {
             error!("failed to update caddy route for deleted {id}: {e}");
         }
@@ -134,12 +158,9 @@ impl api::VmOps for ControlPlaneOps {
     }
 
     async fn delete_snapshot(&self, _vm_id: &str, snap_id: &str) -> anyhow::Result<()> {
-        // agent deletes files; control plane just removes DB row
-        // for now delete the DB row and let files be cleaned up on agent side
         let snap = db::get_snapshot(&self.pool, snap_id).await?
             .ok_or_else(|| anyhow!("snapshot not found: {snap_id}"))?;
         db::delete_snapshot(&self.pool, snap_id).await?;
-        // best-effort file cleanup via agent would need a DeleteSnapshot RPC (future)
         let _ = snap;
         Ok(())
     }

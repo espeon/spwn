@@ -9,9 +9,11 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 
+use auth::AccountId;
+
 #[async_trait::async_trait]
 pub trait VmOps: Send + Sync {
-    async fn create_vm(&self, req: CreateVmRequest) -> anyhow::Result<db::VmRow>;
+    async fn create_vm(&self, account_id: String, req: CreateVmRequest) -> anyhow::Result<db::VmRow>;
     async fn start_vm(&self, id: &str) -> anyhow::Result<()>;
     async fn stop_vm(&self, id: &str) -> anyhow::Result<()>;
     async fn delete_vm(&self, id: &str) -> anyhow::Result<()>;
@@ -114,8 +116,11 @@ pub fn router(ops: Arc<dyn VmOps>) -> Router {
         .with_state(ops)
 }
 
-async fn list_vms(State(ops): State<AppState>) -> impl IntoResponse {
-    match ops.list_vms("dev").await {
+async fn list_vms(
+    State(ops): State<AppState>,
+    account_id: AccountId,
+) -> impl IntoResponse {
+    match ops.list_vms(&account_id.0).await {
         Ok(vms) => Json(vms.into_iter().map(VmResponse::from).collect::<Vec<_>>()).into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     }
@@ -123,15 +128,20 @@ async fn list_vms(State(ops): State<AppState>) -> impl IntoResponse {
 
 async fn create_vm(
     State(ops): State<AppState>,
+    account_id: AccountId,
     Json(req): Json<CreateVmRequest>,
 ) -> impl IntoResponse {
-    match ops.create_vm(req).await {
+    match ops.create_vm(account_id.0, req).await {
         Ok(vm) => (StatusCode::CREATED, Json(VmResponse::from(vm))).into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     }
 }
 
-async fn get_vm(State(ops): State<AppState>, Path(id): Path<String>) -> impl IntoResponse {
+async fn get_vm(
+    State(ops): State<AppState>,
+    _account_id: AccountId,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
     match ops.get_vm(&id).await {
         Ok(Some(vm)) => Json(VmResponse::from(vm)).into_response(),
         Ok(None) => StatusCode::NOT_FOUND.into_response(),
@@ -139,14 +149,22 @@ async fn get_vm(State(ops): State<AppState>, Path(id): Path<String>) -> impl Int
     }
 }
 
-async fn delete_vm(State(ops): State<AppState>, Path(id): Path<String>) -> impl IntoResponse {
+async fn delete_vm(
+    State(ops): State<AppState>,
+    _account_id: AccountId,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
     match ops.delete_vm(&id).await {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     }
 }
 
-async fn start_vm(State(ops): State<AppState>, Path(id): Path<String>) -> impl IntoResponse {
+async fn start_vm(
+    State(ops): State<AppState>,
+    _account_id: AccountId,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
     tokio::spawn(async move {
         if let Err(e) = ops.start_vm(&id).await {
             tracing::error!("start_vm {id} failed: {e:#}");
@@ -155,7 +173,11 @@ async fn start_vm(State(ops): State<AppState>, Path(id): Path<String>) -> impl I
     StatusCode::ACCEPTED
 }
 
-async fn stop_vm(State(ops): State<AppState>, Path(id): Path<String>) -> impl IntoResponse {
+async fn stop_vm(
+    State(ops): State<AppState>,
+    _account_id: AccountId,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
     tokio::spawn(async move {
         if let Err(e) = ops.stop_vm(&id).await {
             tracing::error!("stop_vm {id} failed: {e:#}");
@@ -166,6 +188,7 @@ async fn stop_vm(State(ops): State<AppState>, Path(id): Path<String>) -> impl In
 
 async fn take_snapshot(
     State(ops): State<AppState>,
+    _account_id: AccountId,
     Path(id): Path<String>,
     body: Option<Json<SnapshotRequest>>,
 ) -> impl IntoResponse {
@@ -176,7 +199,11 @@ async fn take_snapshot(
     }
 }
 
-async fn list_snapshots(State(ops): State<AppState>, Path(id): Path<String>) -> impl IntoResponse {
+async fn list_snapshots(
+    State(ops): State<AppState>,
+    _account_id: AccountId,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
     match ops.list_snapshots(&id).await {
         Ok(snaps) => Json(snaps.into_iter().map(SnapshotResponse::from).collect::<Vec<_>>()).into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
@@ -185,6 +212,7 @@ async fn list_snapshots(State(ops): State<AppState>, Path(id): Path<String>) -> 
 
 async fn delete_snapshot(
     State(ops): State<AppState>,
+    _account_id: AccountId,
     Path((id, snap_id)): Path<(String, String)>,
 ) -> impl IntoResponse {
     match ops.delete_snapshot(&id, &snap_id).await {
@@ -195,6 +223,7 @@ async fn delete_snapshot(
 
 async fn restore_snapshot(
     State(ops): State<AppState>,
+    _account_id: AccountId,
     Path((id, snap_id)): Path<(String, String)>,
 ) -> impl IntoResponse {
     tokio::spawn(async move {

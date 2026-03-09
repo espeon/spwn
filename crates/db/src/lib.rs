@@ -447,6 +447,258 @@ fn row_to_snapshot(r: sqlx::postgres::PgRow) -> SnapshotRow {
     }
 }
 
+// ── accounts ─────────────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone)]
+pub struct AccountRow {
+    pub id: String,
+    pub email: String,
+    pub password_hash: String,
+    pub vcpu_limit: i32,
+    pub mem_limit_mb: i32,
+    pub vm_limit: i32,
+    pub created_at: i64,
+}
+
+pub struct NewAccount {
+    pub id: String,
+    pub email: String,
+    pub password_hash: String,
+    pub created_at: i64,
+}
+
+#[derive(Debug, Clone)]
+pub struct SessionRow {
+    pub id: String,
+    pub account_id: String,
+    pub created_at: i64,
+    pub expires_at: i64,
+}
+
+pub struct NewSession {
+    pub id: String,
+    pub account_id: String,
+    pub created_at: i64,
+    pub expires_at: i64,
+}
+
+pub async fn create_account(pool: &PgPool, account: &NewAccount) -> Result<AccountRow> {
+    sqlx::query(
+        "INSERT INTO accounts (id, email, password_hash, created_at)
+         VALUES ($1, $2, $3, $4)",
+    )
+    .bind(&account.id)
+    .bind(&account.email)
+    .bind(&account.password_hash)
+    .bind(account.created_at)
+    .execute(pool)
+    .await?;
+    Ok(AccountRow {
+        id: account.id.clone(),
+        email: account.email.clone(),
+        password_hash: account.password_hash.clone(),
+        vcpu_limit: 8,
+        mem_limit_mb: 12288,
+        vm_limit: 5,
+        created_at: account.created_at,
+    })
+}
+
+pub async fn get_account_by_email(pool: &PgPool, email: &str) -> Result<Option<AccountRow>> {
+    let row = sqlx::query(
+        "SELECT id, email, password_hash, vcpu_limit, mem_limit_mb, vm_limit, created_at
+         FROM accounts WHERE email = $1",
+    )
+    .bind(email)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row.map(row_to_account))
+}
+
+pub async fn get_account(pool: &PgPool, id: &str) -> Result<Option<AccountRow>> {
+    let row = sqlx::query(
+        "SELECT id, email, password_hash, vcpu_limit, mem_limit_mb, vm_limit, created_at
+         FROM accounts WHERE id = $1",
+    )
+    .bind(id)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row.map(row_to_account))
+}
+
+fn row_to_account(r: sqlx::postgres::PgRow) -> AccountRow {
+    AccountRow {
+        id: r.get("id"),
+        email: r.get("email"),
+        password_hash: r.get("password_hash"),
+        vcpu_limit: r.get("vcpu_limit"),
+        mem_limit_mb: r.get("mem_limit_mb"),
+        vm_limit: r.get("vm_limit"),
+        created_at: r.get("created_at"),
+    }
+}
+
+// ── sessions ──────────────────────────────────────────────────────────────────
+
+pub async fn create_session(pool: &PgPool, session: &NewSession) -> Result<SessionRow> {
+    sqlx::query(
+        "INSERT INTO sessions (id, account_id, created_at, expires_at)
+         VALUES ($1, $2, $3, $4)",
+    )
+    .bind(&session.id)
+    .bind(&session.account_id)
+    .bind(session.created_at)
+    .bind(session.expires_at)
+    .execute(pool)
+    .await?;
+    Ok(SessionRow {
+        id: session.id.clone(),
+        account_id: session.account_id.clone(),
+        created_at: session.created_at,
+        expires_at: session.expires_at,
+    })
+}
+
+pub async fn get_session(pool: &PgPool, id: &str) -> Result<Option<SessionRow>> {
+    let row = sqlx::query(
+        "SELECT id, account_id, created_at, expires_at FROM sessions WHERE id = $1",
+    )
+    .bind(id)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row.map(|r| SessionRow {
+        id: r.get("id"),
+        account_id: r.get("account_id"),
+        created_at: r.get("created_at"),
+        expires_at: r.get("expires_at"),
+    }))
+}
+
+pub async fn delete_session(pool: &PgPool, id: &str) -> Result<()> {
+    sqlx::query("DELETE FROM sessions WHERE id = $1")
+        .bind(id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+pub async fn delete_expired_sessions(pool: &PgPool) -> Result<u64> {
+    let now = unix_now();
+    let result = sqlx::query("DELETE FROM sessions WHERE expires_at < $1")
+        .bind(now)
+        .execute(pool)
+        .await?;
+    Ok(result.rows_affected())
+}
+
+// ── quota ─────────────────────────────────────────────────────────────────────
+
+#[derive(Debug)]
+pub enum QuotaError {
+    Exceeded(String),
+    Db(DbError),
+    Serialization,
+}
+
+impl std::fmt::Display for QuotaError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            QuotaError::Exceeded(msg) => write!(f, "quota exceeded: {msg}"),
+            QuotaError::Db(e) => write!(f, "db error: {e}"),
+            QuotaError::Serialization => write!(f, "serialization conflict, retry"),
+        }
+    }
+}
+
+impl std::error::Error for QuotaError {}
+
+impl From<DbError> for QuotaError {
+    fn from(e: DbError) -> Self {
+        QuotaError::Db(e)
+    }
+}
+
+/// Check account quota and atomically set the VM to status='starting'.
+/// Runs in a SERIALIZABLE transaction to prevent concurrent starts from racing.
+/// Returns Err(QuotaError::Serialization) on conflict — caller should retry once.
+pub async fn check_quota_and_reserve(
+    pool: &PgPool,
+    account_id: &str,
+    vm_id: &str,
+    vcores: i32,
+    mem_mb: i32,
+) -> std::result::Result<(), QuotaError> {
+    let mut tx = pool.begin().await.map_err(DbError::from)?;
+
+    sqlx::query("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE")
+        .execute(&mut *tx)
+        .await
+        .map_err(DbError::from)?;
+
+    let account_row = sqlx::query(
+        "SELECT vcpu_limit, mem_limit_mb, vm_limit FROM accounts WHERE id = $1",
+    )
+    .bind(account_id)
+    .fetch_optional(&mut *tx)
+    .await
+    .map_err(DbError::from)?
+    .ok_or_else(|| QuotaError::Exceeded("account not found".into()))?;
+
+    let vcpu_limit: i32 = account_row.get("vcpu_limit");
+    let mem_limit: i32 = account_row.get("mem_limit_mb");
+    let vm_limit: i32 = account_row.get("vm_limit");
+
+    let usage_row = sqlx::query(
+        "SELECT COALESCE(SUM(vcores),0)::int AS used_vcores,
+                COALESCE(SUM(memory_mb),0)::int AS used_mem,
+                COUNT(*)::int AS used_vms
+         FROM vms
+         WHERE account_id = $1 AND status IN ('running','starting')",
+    )
+    .bind(account_id)
+    .fetch_one(&mut *tx)
+    .await
+    .map_err(DbError::from)?;
+
+    let used_vcores: i32 = usage_row.get("used_vcores");
+    let used_mem: i32 = usage_row.get("used_mem");
+    let used_vms: i32 = usage_row.get("used_vms");
+
+    if used_vms >= vm_limit {
+        return Err(QuotaError::Exceeded(format!(
+            "vm limit {vm_limit} reached ({used_vms} running/starting)"
+        )));
+    }
+    if used_vcores + vcores > vcpu_limit {
+        return Err(QuotaError::Exceeded(format!(
+            "vcpu limit {vcpu_limit} would be exceeded ({used_vcores} used + {vcores} requested)"
+        )));
+    }
+    if used_mem + mem_mb > mem_limit {
+        return Err(QuotaError::Exceeded(format!(
+            "memory limit {mem_limit}MB would be exceeded ({used_mem} used + {mem_mb} requested)"
+        )));
+    }
+
+    sqlx::query("UPDATE vms SET status='starting' WHERE id = $1")
+        .bind(vm_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(DbError::from)?;
+
+    tx.commit().await.map_err(|e| {
+        // sqlx wraps postgres errors; check for serialization failure (40001)
+        let msg = e.to_string();
+        if msg.contains("40001") || msg.contains("could not serialize") {
+            QuotaError::Serialization
+        } else {
+            QuotaError::Db(DbError::Sqlx(e))
+        }
+    })?;
+
+    Ok(())
+}
+
 fn unix_now() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

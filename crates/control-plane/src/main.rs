@@ -2,6 +2,7 @@ use std::{path::PathBuf, str::FromStr, sync::Arc};
 
 use anyhow::Context;
 use agent_proto::agent::control_plane_server::ControlPlaneServer;
+use axum::Extension;
 use router_sync::CaddyClient;
 use tracing::info;
 
@@ -35,6 +36,12 @@ async fn main() -> anyhow::Result<()> {
             .unwrap_or_else(|_| "/var/lib/spwn/static".into()),
     )
     .expect("STATIC_FILES_PATH must be a valid path");
+    let invite_code = std::env::var("INVITE_CODE")
+        .context("INVITE_CODE env var is required")?;
+    let session_ttl_secs: i64 = std::env::var("SESSION_TTL_SECS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(604800);
 
     info!("connecting to database");
     let pool = db::connect(&database_url).await?;
@@ -66,7 +73,17 @@ async fn main() -> anyhow::Result<()> {
         event_watcher,
     };
 
-    let http_app = api::router(ops as Arc<dyn api::VmOps>);
+    let auth_state = auth::routes::AuthState {
+        pool: pool.clone(),
+        invite_code,
+        session_ttl_secs,
+    };
+
+    let http_app = axum::Router::new()
+        .merge(auth::auth_router(auth_state))
+        .merge(api::router(ops as Arc<dyn api::VmOps>))
+        .layer(Extension(pool.clone()));
+
     let http_listener = tokio::net::TcpListener::bind(&listen_addr).await?;
     info!("control-plane HTTP listening on {listen_addr}");
 

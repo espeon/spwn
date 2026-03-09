@@ -44,6 +44,14 @@ pg:
 pg-stop:
     podman compose stop postgres
 
+# wipe and restart postgres, then run migrations via the control-plane binary
+pg-reset:
+    podman compose down -v
+    podman compose up -d postgres
+    @echo "waiting for postgres to accept connections..."
+    @until podman compose exec postgres pg_isready -U $POSTGRES_USER -d $POSTGRES_DB -q 2>/dev/null; do sleep 1; done
+    @echo "postgres ready — run 'just cp' to start the control-plane and apply migrations"
+
 # start caddy in the background (logs to /tmp/caddy-dev.log)
 caddy:
     caddy start --config config/caddy-dev.json
@@ -55,28 +63,27 @@ caddy-stop:
 
 # ── run ──────────────────────────────────────────────────────────────────────
 
-# run control-plane (HTTP :3000, gRPC :5000)
+# run control-plane (configure via .env: LISTEN_ADDR, GRPC_LISTEN_ADDR, STATIC_FILES_PATH, INVITE_CODE)
 cp: build-cp
-    LISTEN_ADDR=0.0.0.0:3000 \
-    GRPC_LISTEN_ADDR=0.0.0.0:5000 \
-    STATIC_FILES_PATH=/tmp/spwn-static \
     ./target/debug/spwn-control-plane
 
-# run host-agent (gRPC :4000) — needs root for TAP/iptables
+# run host-agent (configure via .env: AGENT_LISTEN_ADDR, AGENT_PUBLIC_ADDR, CONTROL_PLANE_URL)
 agent: build-agent
     @command -v sudo >/dev/null 2>&1 || { echo "error: sudo not found"; exit 1; }
     @sudo -v 2>/dev/null || { echo "error: sudo credentials required — run: sudo -v"; exit 1; }
-    sudo -E \
-    AGENT_LISTEN_ADDR=0.0.0.0:4000 \
-    AGENT_PUBLIC_ADDR=http://localhost:4000 \
-    CONTROL_PLANE_URL=http://localhost:5000 \
-    ./target/debug/spwn-host-agent
+    sudo -E ./target/debug/spwn-host-agent
 
 # ── dev setup ────────────────────────────────────────────────────────────────
 
 # full first-time setup: download kernel + rootfs, build squashfs image
 setup:
     scripts/spwn setup
+
+# run tests (sets DOCKER_HOST for testcontainers + podman)
+test:
+    DOCKER_HOST=unix:///run/user/$(id -u)/podman/podman.sock \
+    TESTCONTAINERS_RYUK_DISABLED=true \
+    cargo test -p db -p auth
 
 # check cargo workspace compiles cleanly
 check: check-protoc
