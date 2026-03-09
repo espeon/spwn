@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useParams, useNavigate } from "@tanstack/react-router";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
+import { trackVmToast } from "@/hooks/useVmEvents";
 import { getVm, startVm, stopVm, snapshotVm, deleteVm, ApiError } from "@/api";
 import { StatusBadge } from "@/components/StatusBadge";
 import { Button } from "@/components/ui/button";
@@ -39,7 +40,14 @@ export function VmDetailPage() {
     mutationFn: () => startVm(vmId),
     onSuccess: () => {
       invalidate();
-      toast.success("vm starting");
+      const toastId = toast.loading("starting vm...");
+      trackVmToast(
+        vmId,
+        toastId,
+        "running",
+        "vm started",
+        "vm failed to start",
+      );
     },
     onError: (err) => toast.error(`failed to start: ${err.message}`),
   });
@@ -47,7 +55,8 @@ export function VmDetailPage() {
     mutationFn: () => stopVm(vmId),
     onSuccess: () => {
       invalidate();
-      toast.success("vm stopping");
+      const toastId = toast.loading("stopping vm...");
+      trackVmToast(vmId, toastId, "stopped", "vm stopped", "vm failed to stop");
     },
     onError: (err) => toast.error(`failed to stop: ${err.message}`),
   });

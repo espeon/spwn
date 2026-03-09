@@ -2,6 +2,7 @@ import { useState, useEffect, type FormEvent } from "react";
 import { Link } from "@tanstack/react-router";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
+import { trackVmToast } from "@/hooks/useVmEvents";
 import {
   listVms,
   createVm,
@@ -291,7 +292,14 @@ function VmRow({ vm }: { vm: Vm }) {
     mutationFn: () => startVm(vm.id),
     onSuccess: () => {
       invalidate();
-      toast.success(`${vm.name} starting`);
+      const toastId = toast.loading(`starting ${vm.name}...`);
+      trackVmToast(
+        vm.id,
+        toastId,
+        "running",
+        `${vm.name} started`,
+        `${vm.name} failed to start`,
+      );
     },
     onError: (err) => toast.error(`failed to start ${vm.name}: ${err.message}`),
   });
@@ -299,7 +307,14 @@ function VmRow({ vm }: { vm: Vm }) {
     mutationFn: () => stopVm(vm.id),
     onSuccess: () => {
       invalidate();
-      toast.success(`${vm.name} stopping`);
+      const toastId = toast.loading(`stopping ${vm.name}...`);
+      trackVmToast(
+        vm.id,
+        toastId,
+        "stopped",
+        `${vm.name} stopped`,
+        `${vm.name} failed to stop`,
+      );
     },
     onError: (err) => toast.error(`failed to stop ${vm.name}: ${err.message}`),
   });
