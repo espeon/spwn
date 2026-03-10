@@ -15,6 +15,30 @@ import (
 	"github.com/spwn/spwn/services/client"
 )
 
+func loadDefaultSigners() []gossh.Signer {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return nil
+	}
+	candidates := []string{
+		home + "/.ssh/id_rsa",
+		home + "/.ssh/id_ed25519",
+	}
+	var signers []gossh.Signer
+	for _, path := range candidates {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		signer, err := gossh.ParsePrivateKey(data)
+		if err != nil {
+			continue
+		}
+		signers = append(signers, signer)
+	}
+	return signers
+}
+
 // ── ssh ───────────────────────────────────────────────────────────────────────
 
 func sshCmd() *cobra.Command {
@@ -54,11 +78,15 @@ func sshCmd() *cobra.Command {
 				return fmt.Errorf("host key: %w", err)
 			}
 
+			authMethods := []gossh.AuthMethod{}
+			if signers := loadDefaultSigners(); len(signers) > 0 {
+				authMethods = append(authMethods, gossh.PublicKeys(signers...))
+			}
+			authMethods = append(authMethods, gossh.Password(creds.Token))
+
 			sshCfg := &gossh.ClientConfig{
-				User: vm.ID,
-				Auth: []gossh.AuthMethod{
-					gossh.Password(creds.Token),
-				},
+				User:            vm.ID,
+				Auth:            authMethods,
 				HostKeyCallback: hkcb,
 			}
 
@@ -158,11 +186,15 @@ func tunnelCmd() *cobra.Command {
 				return fmt.Errorf("host key: %w", err)
 			}
 
+			authMethods := []gossh.AuthMethod{}
+			if signers := loadDefaultSigners(); len(signers) > 0 {
+				authMethods = append(authMethods, gossh.PublicKeys(signers...))
+			}
+			authMethods = append(authMethods, gossh.Password(creds.Token))
+
 			sshCfg := &gossh.ClientConfig{
-				User: vm.ID,
-				Auth: []gossh.AuthMethod{
-					gossh.Password(creds.Token),
-				},
+				User:            vm.ID,
+				Auth:            authMethods,
 				HostKeyCallback: hkcb,
 			}
 

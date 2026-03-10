@@ -9,8 +9,9 @@ set -euo pipefail
 #   download        download kernel, ubuntu rootfs, and ssh key to /tmp
 #   build-rootfs    convert ext4 rootfs → squashfs with overlay-init baked in
 #   setup           download + build-rootfs (full dev setup)
-#   images          list available squashfs images in IMAGES_DIR
-#   help            show this message
+#   images               list available squashfs images in IMAGES_DIR
+#   inject-platform-key  rebuild a squashfs image with the platform public key in authorized_keys
+#   help                 show this message
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
@@ -148,6 +149,62 @@ EOF
     info "  curl -X POST http://localhost:3000/api/vms -d '{\"name\":\"my-vm\",\"image\":\"$name\"}'"
 }
 
+cmd_inject_platform_key() {
+    require_root "inject-platform-key"
+    require_cmd mksquashfs "apt install squashfs-tools"
+    require_cmd unsquashfs "apt install squashfs-tools"
+
+    local name="${1:-ubuntu}"
+    local platform_key_path="${PLATFORM_KEY_PATH:-/var/lib/spwn/platform_key}"
+    local image="${IMAGES_DIR}/${name}.sqfs"
+    [[ -f "$image" ]] || error "image not found: $image (run: sudo scripts/spwn build-rootfs $name)"
+    [[ -f "$platform_key_path" ]] || error "platform key not found: $platform_key_path (run the agent once to generate it)"
+
+    local pubkey
+    pubkey="$(ssh-keygen -y -f "$platform_key_path")"
+    [[ -n "$pubkey" ]] || error "failed to read public key from $platform_key_path"
+
+    local tmpdir=""
+    tmpdir="$(mktemp -d)"
+
+    cleanup() {
+        [[ -n "$tmpdir" ]] && rm -rf "$tmpdir" 2>/dev/null || true
+    }
+
+    trap cleanup EXIT
+
+    info "extracting $image..."
+    unsquashfs -d "$tmpdir/rootfs" "$image"
+
+    info "injecting platform public key..."
+    mkdir -p "$tmpdir/rootfs/root/.ssh"
+    chmod 700 "$tmpdir/rootfs/root/.ssh"
+
+    local authorized_keys="$tmpdir/rootfs/root/.ssh/authorized_keys"
+    touch "$authorized_keys"
+
+    if grep -qF "$pubkey" "$authorized_keys" 2>/dev/null; then
+        info "platform key already present in authorized_keys, skipping"
+    else
+        echo "$pubkey" >> "$authorized_keys"
+        info "platform key added to authorized_keys"
+    fi
+    chmod 600 "$authorized_keys"
+
+    local backup="${image}.bak"
+    info "backing up original image to $backup..."
+    cp "$image" "$backup"
+
+    info "rebuilding squashfs (zstd) → $image..."
+    mksquashfs "$tmpdir/rootfs" "$image" -noappend -comp zstd
+
+    local size
+    size="$(du -h "$image" | cut -f1)"
+    info "done: $image ($size)"
+    info "platform key fingerprint: $(ssh-keygen -l -f "$platform_key_path" | awk '{print $2}')"
+    trap - EXIT
+}
+
 cmd_images() {
     if [[ ! -d "$IMAGES_DIR" ]]; then
         info "no images dir at $IMAGES_DIR"
@@ -188,8 +245,9 @@ cmd_help() {
 case "${1:-help}" in
     download)     cmd_download ;;
     build-rootfs) cmd_build_rootfs "${@:2}" ;;
-    setup)        cmd_setup ;;
-    images)       cmd_images ;;
-    help|--help)  cmd_help ;;
+    setup)                cmd_setup ;;
+    images)               cmd_images ;;
+    inject-platform-key)  cmd_inject_platform_key "${@:2}" ;;
+    help|--help)          cmd_help ;;
     *)            error "unknown command: $1. run 'scripts/spwn help'" ;;
 esac

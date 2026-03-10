@@ -8,6 +8,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	neturl "net/url"
 	"os"
 	"strings"
 	"time"
@@ -88,9 +89,9 @@ func (cfg *gatewayConfig) callAuth(path string, body map[string]string) (*authRe
 	return &out, nil
 }
 
-func (cfg *gatewayConfig) lookupVM(name, accountID string) (*vmLookupResponse, error) {
-	url := fmt.Sprintf("%s/internal/gateway/vm?name=%s&account_id=%s",
-		cfg.controlPlaneURL, name, accountID)
+func (cfg *gatewayConfig) lookupVM(vmID string) (*vmLookupResponse, error) {
+	url := fmt.Sprintf("%s/internal/gateway/vm?vm_id=%s",
+		cfg.controlPlaneURL, neturl.QueryEscape(vmID))
 	req, err := http.NewRequestWithContext(context.Background(), "GET", url, nil)
 	if err != nil {
 		return nil, err
@@ -114,6 +115,8 @@ func (cfg *gatewayConfig) lookupVM(name, accountID string) (*vmLookupResponse, e
 // ── gRPC console relay ────────────────────────────────────────────────────────
 
 func relayConsole(ctx context.Context, agentAddr, vmID string, s cssh.Session) error {
+	agentAddr = strings.TrimPrefix(agentAddr, "https://")
+	agentAddr = strings.TrimPrefix(agentAddr, "http://")
 	conn, err := grpc.NewClient(agentAddr,
 		grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
@@ -187,8 +190,27 @@ const accountIDKey contextKey = "account_id"
 func sessionMiddleware(cfg *gatewayConfig) wish.Middleware {
 	return func(_ cssh.Handler) cssh.Handler {
 		return func(s cssh.Session) {
-			accountID, _ := s.Context().Value(accountIDKey).(string)
-			vmName := s.User()
+			vmID := s.User()
+
+			// Prefer pubkey auth: re-resolve the account ID from the key that
+			// was actually used to authenticate this session. The pubkey handler
+			// runs twice (probe + real) and context values set during the probe
+			// are not visible here, so we look it up again.
+			var accountID string
+			if pk := s.PublicKey(); pk != nil {
+				fp := gossh.FingerprintSHA256(pk)
+				resp, err := cfg.callAuth("/internal/gateway/auth/pubkey", map[string]string{
+					"fingerprint": fp,
+				})
+				if err == nil && resp.OK {
+					accountID = resp.AccountID
+				}
+			}
+
+			// Fall back to the value set by password auth.
+			if accountID == "" {
+				accountID, _ = s.Context().Value(accountIDKey).(string)
+			}
 
 			if accountID == "" {
 				fmt.Fprintln(s.Stderr(), "error: authentication state missing")
@@ -196,14 +218,14 @@ func sessionMiddleware(cfg *gatewayConfig) wish.Middleware {
 				return
 			}
 
-			vm, err := cfg.lookupVM(vmName, accountID)
+			vm, err := cfg.lookupVM(vmID)
 			if err != nil {
 				fmt.Fprintf(s.Stderr(), "error: %v\r\n", err)
 				_ = s.Exit(1)
 				return
 			}
 			if vm.Status != "running" {
-				fmt.Fprintf(s.Stderr(), "vm '%s' is %s (must be running)\r\n", vmName, vm.Status)
+				fmt.Fprintf(s.Stderr(), "vm '%s' is %s (must be running)\r\n", vmID, vm.Status)
 				_ = s.Exit(1)
 				return
 			}

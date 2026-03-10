@@ -78,7 +78,10 @@ pub fn auth_router(state: AuthState) -> Router {
         .route("/auth/cli/deny", post(cli_deny))
         .route("/api/account/keys", get(list_ssh_keys).post(add_ssh_key))
         .route("/api/account/keys/{id}", delete(delete_ssh_key))
-        .route("/internal/gateway/auth/password", post(gateway_auth_password))
+        .route(
+            "/internal/gateway/auth/password",
+            post(gateway_auth_password),
+        )
         .route("/internal/gateway/auth/pubkey", post(gateway_auth_pubkey))
         .route("/internal/gateway/vm", get(gateway_lookup_vm))
         .with_state(state)
@@ -498,10 +501,7 @@ impl From<db::SshKeyRow> for SshKeyResponse {
     }
 }
 
-async fn list_ssh_keys(
-    State(state): State<AuthState>,
-    account_id: AccountId,
-) -> impl IntoResponse {
+async fn list_ssh_keys(State(state): State<AuthState>, account_id: AccountId) -> impl IntoResponse {
     match db::list_ssh_keys(&state.pool, &account_id.0).await {
         Ok(keys) => {
             let resp: Vec<SshKeyResponse> = keys.into_iter().map(Into::into).collect();
@@ -533,11 +533,17 @@ async fn add_ssh_key(
                 StatusCode::BAD_REQUEST,
                 Json(serde_json::json!({ "error": "invalid public key" })),
             )
-                .into_response()
+                .into_response();
         }
     };
-    match db::add_ssh_key(&state.pool, &account_id.0, &req.name, &req.public_key, &fingerprint)
-        .await
+    match db::add_ssh_key(
+        &state.pool,
+        &account_id.0,
+        &req.name,
+        &req.public_key,
+        &fingerprint,
+    )
+    .await
     {
         Ok(key) => (StatusCode::CREATED, Json(SshKeyResponse::from(key))).into_response(),
         Err(e) => {
@@ -581,10 +587,15 @@ async fn delete_ssh_key(
 fn ssh_key_fingerprint(public_key: &str) -> anyhow::Result<String> {
     use base64::Engine;
     let parts: Vec<&str> = public_key.split_whitespace().collect();
-    let b64 = parts.get(1).ok_or_else(|| anyhow::anyhow!("missing key data"))?;
+    let b64 = parts
+        .get(1)
+        .ok_or_else(|| anyhow::anyhow!("missing key data"))?;
     let bytes = base64::engine::general_purpose::STANDARD.decode(b64)?;
     let hash = Sha256::digest(&bytes);
-    Ok(format!("SHA256:{}", base64::engine::general_purpose::STANDARD_NO_PAD.encode(hash)))
+    Ok(format!(
+        "SHA256:{}",
+        base64::engine::general_purpose::STANDARD_NO_PAD.encode(hash)
+    ))
 }
 
 // ── Internal gateway endpoints ────────────────────────────────────────────────
@@ -627,11 +638,14 @@ async fn gateway_auth_password(
 
     // try bearer token first
     let token_hash = hex::encode(Sha256::digest(req.password.as_bytes()));
-    if let Ok(Some(account_id)) =
-        db::get_account_id_by_token_hash(&state.pool, &token_hash).await
-    {
+    if let Ok(Some(account_id)) = db::get_account_id_by_token_hash(&state.pool, &token_hash).await {
         let _ = db::touch_api_token(&state.pool, &token_hash, unix_now()).await;
-        return Json(GatewayAuthResponse { ok: true, account_id, error: None }).into_response();
+        return Json(GatewayAuthResponse {
+            ok: true,
+            account_id,
+            error: None,
+        })
+        .into_response();
     }
 
     // try account password (username is email)
@@ -643,15 +657,17 @@ async fn gateway_auth_password(
                 account_id: String::new(),
                 error: Some("invalid credentials".into()),
             })
-            .into_response()
+            .into_response();
         }
     };
 
     match password::verify_password(&req.password, &account.password_hash) {
-        Ok(true) => {
-            Json(GatewayAuthResponse { ok: true, account_id: account.id, error: None })
-                .into_response()
-        }
+        Ok(true) => Json(GatewayAuthResponse {
+            ok: true,
+            account_id: account.id,
+            error: None,
+        })
+        .into_response(),
         _ => Json(GatewayAuthResponse {
             ok: false,
             account_id: String::new(),
@@ -675,9 +691,12 @@ async fn gateway_auth_pubkey(
         return StatusCode::UNAUTHORIZED.into_response();
     }
     match db::get_account_id_by_key_fingerprint(&state.pool, &req.fingerprint).await {
-        Ok(Some(account_id)) => {
-            Json(GatewayAuthResponse { ok: true, account_id, error: None }).into_response()
-        }
+        Ok(Some(account_id)) => Json(GatewayAuthResponse {
+            ok: true,
+            account_id,
+            error: None,
+        })
+        .into_response(),
         _ => Json(GatewayAuthResponse {
             ok: false,
             account_id: String::new(),
@@ -689,8 +708,7 @@ async fn gateway_auth_pubkey(
 
 #[derive(Deserialize)]
 struct GatewayLookupVmQuery {
-    name: String,
-    account_id: String,
+    vm_id: String,
 }
 
 #[derive(Serialize)]
@@ -710,14 +728,14 @@ async fn gateway_lookup_vm(
     if !check_gateway_secret(&state, &headers) {
         return StatusCode::UNAUTHORIZED.into_response();
     }
-    let vm = match db::get_vm_by_name(&state.pool, &q.name, &q.account_id).await {
+    let vm = match db::get_vm(&state.pool, &q.vm_id).await {
         Ok(Some(v)) => v,
         _ => {
             return (
                 StatusCode::NOT_FOUND,
                 Json(serde_json::json!({ "error": "vm not found" })),
             )
-                .into_response()
+                .into_response();
         }
     };
     let host_id = match &vm.host_id {
@@ -727,7 +745,7 @@ async fn gateway_lookup_vm(
                 StatusCode::SERVICE_UNAVAILABLE,
                 Json(serde_json::json!({ "error": "vm has no host assigned" })),
             )
-                .into_response()
+                .into_response();
         }
     };
     let host = match db::get_host(&state.pool, &host_id).await {
@@ -737,7 +755,7 @@ async fn gateway_lookup_vm(
                 StatusCode::SERVICE_UNAVAILABLE,
                 Json(serde_json::json!({ "error": "host not found" })),
             )
-                .into_response()
+                .into_response();
         }
     };
     Json(GatewayVmResponse {
