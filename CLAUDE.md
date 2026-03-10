@@ -1,13 +1,10 @@
 # spwn
 
-firecracker-based hobbyist VM platform. users get a fixed resource pool (8 vcores, 12gb ram, 5 vms), persistent microVMs, and wildcard subdomain routing via caddy.
-
-full architecture plan: `.claude/plan-v3.md` (previous: `.claude/plan-v2.md`)
-phase plans: `.claude/phase-{1..5}.md` (completed), new phases in plan-v3
+firecracker-based hobbyist VM platform. users get a fixed resource pool, persistent microVMs, and wildcard subdomain routing via caddy.
 
 ---
 
-## crate layout
+## package/crate layout
 
 ```
 crates/common        shared types (VmId, etc.)
@@ -32,14 +29,17 @@ configure via `.env` (loaded automatically by `just`):
 ```bash
 just cp         # build + run control-plane (HTTP :3019, gRPC :5000)
 just agent      # build + run host-agent (gRPC :4000, prompts for sudo)
+
 just frontend   # vite dev server (:5173, proxies /auth + /api to :3019)
+
 just pg         # start postgres via podman compose
 just pg-reset   # wipe + restart postgres
+
 just test       # run db + auth integration tests (needs podman socket)
 just check      # cargo check across workspace
 ```
 
-**host-agent needs root** — it manages TAP devices and firecracker processes. `just agent` handles `sudo -E` automatically.
+**note: host-agent needs root** — it manages TAP devices and firecracker processes. `just agent` handles `sudo -E` automatically.
 
 **frontend dev**: `just frontend` proxies API requests to the control-plane. for production, build with `just frontend-build` and point `FRONTEND_PATH` at `frontend/dist`.
 
