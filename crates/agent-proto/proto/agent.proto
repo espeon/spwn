@@ -1,0 +1,91 @@
+syntax = "proto3";
+package agent;
+option go_package = "github.com/spwn/spwn/services/proto/agent";
+
+// Implemented by host-agent; called by control-plane for VM lifecycle
+service HostAgent {
+  rpc CreateVm(CreateVmRequest)          returns (CreateVmResponse);
+  rpc StartVm(StartVmRequest)            returns (StartVmResponse);
+  rpc StopVm(StopVmRequest)              returns (StopVmResponse);
+  rpc DeleteVm(DeleteVmRequest)          returns (DeleteVmResponse);
+  rpc TakeSnapshot(TakeSnapshotRequest)  returns (TakeSnapshotResponse);
+  rpc RestoreSnapshot(RestoreRequest)    returns (RestoreResponse);
+  rpc WatchEvents(WatchRequest)          returns (stream AgentEvent);
+
+  // bidirectional SSH console relay; first ConsoleInput frame carries vm_id
+  rpc StreamConsole(stream ConsoleInput) returns (stream ConsoleOutput);
+}
+
+// Implemented by control-plane; called by host-agent for registration
+service ControlPlane {
+  rpc Register(RegisterRequest)   returns (RegisterResponse);
+  rpc Heartbeat(HeartbeatRequest) returns (HeartbeatResponse);
+}
+
+// ── HostAgent messages ────────────────────────────────────────────────────────
+
+message CreateVmRequest {
+  string vm_id        = 1;
+  string account_id   = 2;
+  string name         = 3;
+  string subdomain    = 4;
+  string image        = 5;
+  double vcpus        = 6;
+  int32  memory_mb    = 7;
+  int32  exposed_port = 8;
+  string ip_address   = 9;
+}
+message CreateVmResponse { bool ok = 1; string error = 2; }
+
+message StartVmRequest  { string vm_id = 1; }
+message StartVmResponse { bool ok = 1; string error = 2; }
+
+message StopVmRequest   { string vm_id = 1; }
+message StopVmResponse  { bool ok = 1; string error = 2; }
+
+message DeleteVmRequest  { string vm_id = 1; }
+message DeleteVmResponse { bool ok = 1; string error = 2; }
+
+message TakeSnapshotRequest  { string vm_id = 1; string label = 2; }
+message TakeSnapshotResponse { bool ok = 1; string error = 2; string snap_id = 3; int64 size_bytes = 4; }
+
+message RestoreRequest  { string vm_id = 1; string snap_id = 2; }
+message RestoreResponse { bool ok = 1; string error = 2; }
+
+message WatchRequest {}
+
+message AgentEvent {
+  string vm_id      = 1;
+  string event      = 2; // "started" | "stopped" | "crashed" | "snapshot_taken"
+  string detail     = 3;
+  int64  timestamp  = 4;
+}
+
+message ConsoleInput {
+  string vm_id = 1;  // set only in the first frame to identify the target VM
+  bytes  data   = 2;
+}
+message ConsoleOutput { bytes data = 1; }
+
+// ── ControlPlane messages ─────────────────────────────────────────────────────
+
+message RegisterRequest {
+  string host_id      = 1;
+  string name         = 2;
+  string address      = 3; // gRPC address control-plane uses to reach this agent
+  uint32 vcpu_total   = 4;
+  uint32 mem_total_mb = 5;
+  string images_dir   = 6;
+  string overlay_dir  = 7;
+  string snapshot_dir = 8;
+  string kernel_path  = 9;
+}
+message RegisterResponse { bool ok = 1; }
+
+message HeartbeatRequest {
+  string          host_id        = 1;
+  repeated string running_vm_ids = 2;
+  uint32          vcpu_used      = 3;
+  uint32          mem_used_mb    = 4;
+}
+message HeartbeatResponse {}

@@ -1,0 +1,16 @@
+{
+  "admin": {
+    "listen": "localhost:2019"
+  },
+  "apps": {
+    "http": {
+      "servers": {
+        "main": {
+          "listen": [":8080"],
+          "automatic_https": {"disable": true},
+          "routes": []
+        }
+      }
+    }
+  }
+}

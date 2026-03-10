@@ -5,3 +5,13 @@ edition = "2024"
 
 [dependencies]
 common = { path = "../common" }
+db = { path = "../db" }
+auth = { path = "../auth" }
+axum = { version = "0.8", features = ["macros"] }
+tokio = { version = "1", features = ["full"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+anyhow = "1"
+async-trait = "0.1"
+tracing = "0.1"

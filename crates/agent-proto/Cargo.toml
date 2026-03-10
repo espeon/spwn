@@ -1,0 +1,11 @@
+[package]
+name = "agent-proto"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+tonic = { version = "0.12", features = ["transport"] }
+prost = "0.13"
+
+[build-dependencies]
+tonic-build = "0.12"

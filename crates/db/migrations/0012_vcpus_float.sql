@@ -1,0 +1,8 @@
+ALTER TABLE vms
+  RENAME COLUMN vcores TO vcpus;
+
+ALTER TABLE vms
+  ALTER COLUMN vcpus TYPE DOUBLE PRECISION USING vcpus::double precision;
+
+ALTER TABLE vms
+  ALTER COLUMN vcpus SET DEFAULT 1.0;

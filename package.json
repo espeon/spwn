@@ -1,0 +1,6 @@
+{
+	"dependencies": {
+		"@radix-ui/react-tooltip": "^1.2.8",
+		"@tabler/icons-react": "^3.40.0"
+	}
+}
