@@ -38,6 +38,7 @@ dotenvy = "0.15"
 sqlx = { version = "0.8", features = ["postgres", "runtime-tokio-native-tls"] }
 tokio-stream = { version = "0.1", features = ["sync"] }
 futures-core = "0.3"
+russh = "0.57"
 
 [dev-dependencies]
 uuid = { version = "1", features = ["v4"] }

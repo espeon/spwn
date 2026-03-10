@@ -9,6 +9,7 @@ import (
 
 type Config struct {
 	APIURL        string `json:"api_url"`
+	GatewayAddr   string `json:"gateway_addr"`
 	DefaultVcores int    `json:"default_vcores"`
 	DefaultMemMb  int    `json:"default_memory_mb"`
 }
@@ -50,9 +51,17 @@ func LoadConfig() (Config, error) {
 func defaultConfig() Config {
 	return Config{
 		APIURL:        "https://spwn.run",
+		GatewayAddr:   "spwn.run:2222",
 		DefaultVcores: 2,
 		DefaultMemMb:  512,
 	}
+}
+
+func (c Config) GatewayAddrOrDefault() string {
+	if c.GatewayAddr != "" {
+		return c.GatewayAddr
+	}
+	return "spwn.run:2222"
 }
 
 func SaveConfig(c Config) error {

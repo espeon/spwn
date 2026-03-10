@@ -1,8 +1,13 @@
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use russh::client::{self, Config as SshConfig};
+use russh::keys::{Algorithm, PrivateKey, PrivateKeyWithHashAlg, load_secret_key};
+use russh::keys::ssh_key::LineEnding;
+use russh::Disconnect;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio_stream::StreamExt;
-use tokio_stream::wrappers::BroadcastStream;
+use tokio_stream::wrappers::{BroadcastStream, ReceiverStream};
 use tonic::{Request, Response, Status, Streaming};
 
 use agent_proto::agent::{
@@ -13,6 +18,51 @@ use agent_proto::agent::{
 };
 
 use crate::manager::{VmEvent, VmManager};
+
+// ── Platform SSH key ──────────────────────────────────────────────────────────
+
+struct SshClientHandler;
+
+impl client::Handler for SshClientHandler {
+    type Error = russh::Error;
+
+    async fn check_server_key(
+        &mut self,
+        _server_public_key: &russh::keys::PublicKey,
+    ) -> Result<bool, Self::Error> {
+        Ok(true) // trust our own VMs; host key verified by network isolation
+    }
+}
+
+fn platform_key_path() -> std::path::PathBuf {
+    std::path::PathBuf::from(
+        std::env::var("PLATFORM_KEY_PATH")
+            .unwrap_or_else(|_| "/var/lib/spwn/platform_key".into()),
+    )
+}
+
+fn load_or_generate_platform_key() -> anyhow::Result<PrivateKey> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let path = platform_key_path();
+    if path.exists() {
+        return load_secret_key(&path, None).map_err(|e| anyhow::anyhow!("load key: {e}"));
+    }
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let key = PrivateKey::random(&mut rand::rngs::OsRng, Algorithm::Ed25519)
+        .map_err(|e| anyhow::anyhow!("generate key: {e}"))?;
+    key.write_openssh_file(&path, LineEnding::LF)
+        .map_err(|e| anyhow::anyhow!("write key: {e}"))?;
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
+    tracing::info!(
+        path = %path.display(),
+        pubkey = %key.public_key().to_openssh().unwrap_or_default(),
+        "generated platform SSH key — add the public key to rootfs /root/.ssh/authorized_keys"
+    );
+    Ok(key)
+}
 
 pub struct HostAgentService {
     pub manager: Arc<VmManager>,
@@ -198,10 +248,122 @@ impl HostAgent for HostAgentService {
 
     async fn stream_console(
         &self,
-        _req: Request<Streaming<ConsoleInput>>,
+        req: Request<Streaming<ConsoleInput>>,
     ) -> Result<Response<Self::StreamConsoleStream>, Status> {
-        Err(Status::unimplemented(
-            "StreamConsole is reserved for phase 6",
-        ))
+        let mut input_stream = req.into_inner();
+
+        // First frame carries vm_id; subsequent frames carry data.
+        let first = input_stream
+            .next()
+            .await
+            .ok_or_else(|| Status::invalid_argument("stream closed before first frame"))?
+            .map_err(|e| Status::internal(e.to_string()))?;
+
+        let vm_id = first.vm_id;
+        if vm_id.is_empty() {
+            return Err(Status::invalid_argument("first frame must set vm_id"));
+        }
+        let initial_data = first.data;
+
+        let vm = db::get_vm(&self.manager.pool, &vm_id)
+            .await
+            .map_err(|e| Status::internal(e.to_string()))?
+            .ok_or_else(|| Status::not_found("vm not found"))?;
+
+        if vm.status != "running" {
+            return Err(Status::failed_precondition(format!(
+                "vm is {} (must be running)",
+                vm.status
+            )));
+        }
+
+        let key = load_or_generate_platform_key()
+            .map_err(|e| Status::internal(format!("platform key: {e}")))?;
+
+        let config = Arc::new(SshConfig::default());
+        let mut handle = client::connect(config, (vm.ip_address.as_str(), 22u16), SshClientHandler)
+            .await
+            .map_err(|e| Status::unavailable(format!("ssh connect to vm: {e}")))?;
+
+        let hash_alg = match handle.best_supported_rsa_hash().await {
+            Ok(outer) => outer.flatten(),
+            Err(_) => None,
+        };
+
+        let auth_result = handle
+            .authenticate_publickey(
+                "root",
+                PrivateKeyWithHashAlg::new(Arc::new(key), hash_alg),
+            )
+            .await
+            .map_err(|e| Status::unauthenticated(format!("ssh auth: {e}")))?;
+
+        if !auth_result.success() {
+            return Err(Status::unauthenticated(
+                "ssh authentication failed — ensure platform public key is in vm's authorized_keys",
+            ));
+        }
+
+        let channel = handle
+            .channel_open_session()
+            .await
+            .map_err(|e| Status::internal(format!("open session: {e}")))?;
+
+        channel
+            .request_pty(false, "xterm-256color", 80, 24, 0, 0, &[])
+            .await
+            .map_err(|e| Status::internal(format!("pty request: {e}")))?;
+
+        channel
+            .request_shell(false)
+            .await
+            .map_err(|e| Status::internal(format!("shell request: {e}")))?;
+
+        let ssh_stream = channel.into_stream();
+        let (mut ssh_reader, mut ssh_writer) = tokio::io::split(ssh_stream);
+
+        let (out_tx, out_rx) = tokio::sync::mpsc::channel::<Result<ConsoleOutput, Status>>(64);
+        let out_stream = ReceiverStream::new(out_rx);
+
+        // SSH → gRPC output
+        tokio::spawn(async move {
+            let mut buf = vec![0u8; 4096];
+            loop {
+                match ssh_reader.read(&mut buf).await {
+                    Ok(0) | Err(_) => break,
+                    Ok(n) => {
+                        if out_tx
+                            .send(Ok(ConsoleOutput {
+                                data: buf[..n].to_vec(),
+                            }))
+                            .await
+                            .is_err()
+                        {
+                            break;
+                        }
+                    }
+                }
+            }
+            // keep handle alive until SSH reader closes; suppress warning
+            let _ = handle.disconnect(Disconnect::ByApplication, "", "").await;
+        });
+
+        // gRPC input → SSH
+        tokio::spawn(async move {
+            if !initial_data.is_empty() {
+                let _ = ssh_writer.write_all(&initial_data).await;
+            }
+            while let Some(Ok(frame)) = input_stream.next().await {
+                if frame.data.is_empty() {
+                    continue;
+                }
+                if ssh_writer.write_all(&frame.data).await.is_err() {
+                    break;
+                }
+            }
+            let _ = ssh_writer.shutdown().await;
+        });
+
+        Ok(Response::new(Box::pin(out_stream)))
     }
 }

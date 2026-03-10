@@ -4,7 +4,7 @@ use axum::{
     extract::{Path, Query, State},
     http::{HeaderMap, StatusCode, header},
     response::IntoResponse,
-    routing::{get, patch, post},
+    routing::{delete, get, patch, post},
 };
 use axum_extra::extract::cookie::{Cookie, CookieJar, SameSite};
 use hex;
@@ -22,6 +22,7 @@ pub struct AuthState {
     pub invite_code: String,
     pub session_ttl_secs: i64,
     pub public_url: String,
+    pub gateway_secret: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -75,6 +76,11 @@ pub fn auth_router(state: AuthState) -> Router {
         .route("/auth/cli/poll", get(cli_poll))
         .route("/auth/cli/authorize", post(cli_authorize))
         .route("/auth/cli/deny", post(cli_deny))
+        .route("/api/account/keys", get(list_ssh_keys).post(add_ssh_key))
+        .route("/api/account/keys/{id}", delete(delete_ssh_key))
+        .route("/internal/gateway/auth/password", post(gateway_auth_password))
+        .route("/internal/gateway/auth/pubkey", post(gateway_auth_pubkey))
+        .route("/internal/gateway/vm", get(gateway_lookup_vm))
         .with_state(state)
 }
 
@@ -469,6 +475,279 @@ fn unix_now() -> i64 {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
         .as_secs() as i64
+}
+
+// ── SSH keys ──────────────────────────────────────────────────────────────────
+
+#[derive(Serialize)]
+struct SshKeyResponse {
+    id: String,
+    name: String,
+    fingerprint: String,
+    created_at: i64,
+}
+
+impl From<db::SshKeyRow> for SshKeyResponse {
+    fn from(r: db::SshKeyRow) -> Self {
+        SshKeyResponse {
+            id: r.id,
+            name: r.name,
+            fingerprint: r.fingerprint,
+            created_at: r.created_at,
+        }
+    }
+}
+
+async fn list_ssh_keys(
+    State(state): State<AuthState>,
+    account_id: AccountId,
+) -> impl IntoResponse {
+    match db::list_ssh_keys(&state.pool, &account_id.0).await {
+        Ok(keys) => {
+            let resp: Vec<SshKeyResponse> = keys.into_iter().map(Into::into).collect();
+            (StatusCode::OK, Json(resp)).into_response()
+        }
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
+#[derive(Deserialize)]
+struct AddSshKeyRequest {
+    name: String,
+    public_key: String,
+}
+
+async fn add_ssh_key(
+    State(state): State<AuthState>,
+    account_id: AccountId,
+    Json(req): Json<AddSshKeyRequest>,
+) -> impl IntoResponse {
+    let fingerprint = match ssh_key_fingerprint(&req.public_key) {
+        Ok(fp) => fp,
+        Err(_) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "error": "invalid public key" })),
+            )
+                .into_response()
+        }
+    };
+    match db::add_ssh_key(&state.pool, &account_id.0, &req.name, &req.public_key, &fingerprint)
+        .await
+    {
+        Ok(key) => (StatusCode::CREATED, Json(SshKeyResponse::from(key))).into_response(),
+        Err(e) => {
+            let msg = e.to_string();
+            if msg.contains("unique") || msg.contains("duplicate") {
+                return (
+                    StatusCode::CONFLICT,
+                    Json(serde_json::json!({ "error": "key already added" })),
+                )
+                    .into_response();
+            }
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": msg })),
+            )
+                .into_response()
+        }
+    }
+}
+
+async fn delete_ssh_key(
+    State(state): State<AuthState>,
+    account_id: AccountId,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    match db::delete_ssh_key(&state.pool, &id, &account_id.0).await {
+        Ok(true) => StatusCode::NO_CONTENT.into_response(),
+        Ok(false) => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "error": "key not found" })),
+        )
+            .into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
+fn ssh_key_fingerprint(public_key: &str) -> anyhow::Result<String> {
+    use base64::Engine;
+    let parts: Vec<&str> = public_key.split_whitespace().collect();
+    let b64 = parts.get(1).ok_or_else(|| anyhow::anyhow!("missing key data"))?;
+    let bytes = base64::engine::general_purpose::STANDARD.decode(b64)?;
+    let hash = Sha256::digest(&bytes);
+    Ok(format!("SHA256:{}", base64::engine::general_purpose::STANDARD_NO_PAD.encode(hash)))
+}
+
+// ── Internal gateway endpoints ────────────────────────────────────────────────
+
+fn check_gateway_secret(state: &AuthState, headers: &HeaderMap) -> bool {
+    let secret = match &state.gateway_secret {
+        Some(s) => s,
+        None => return false,
+    };
+    let auth = match headers.get("authorization").and_then(|v| v.to_str().ok()) {
+        Some(v) => v,
+        None => return false,
+    };
+    let token = auth.strip_prefix("Bearer ").unwrap_or(auth);
+    token == secret
+}
+
+#[derive(Deserialize)]
+struct GatewayAuthPasswordRequest {
+    username: String,
+    password: String,
+}
+
+#[derive(Serialize)]
+struct GatewayAuthResponse {
+    ok: bool,
+    account_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+}
+
+async fn gateway_auth_password(
+    State(state): State<AuthState>,
+    headers: HeaderMap,
+    Json(req): Json<GatewayAuthPasswordRequest>,
+) -> impl IntoResponse {
+    if !check_gateway_secret(&state, &headers) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+
+    // try bearer token first
+    let token_hash = hex::encode(Sha256::digest(req.password.as_bytes()));
+    if let Ok(Some(account_id)) =
+        db::get_account_id_by_token_hash(&state.pool, &token_hash).await
+    {
+        let _ = db::touch_api_token(&state.pool, &token_hash, unix_now()).await;
+        return Json(GatewayAuthResponse { ok: true, account_id, error: None }).into_response();
+    }
+
+    // try account password (username is email)
+    let account = match db::get_account_by_email(&state.pool, &req.username).await {
+        Ok(Some(a)) => a,
+        _ => {
+            return Json(GatewayAuthResponse {
+                ok: false,
+                account_id: String::new(),
+                error: Some("invalid credentials".into()),
+            })
+            .into_response()
+        }
+    };
+
+    match password::verify_password(&req.password, &account.password_hash) {
+        Ok(true) => {
+            Json(GatewayAuthResponse { ok: true, account_id: account.id, error: None })
+                .into_response()
+        }
+        _ => Json(GatewayAuthResponse {
+            ok: false,
+            account_id: String::new(),
+            error: Some("invalid credentials".into()),
+        })
+        .into_response(),
+    }
+}
+
+#[derive(Deserialize)]
+struct GatewayAuthPubkeyRequest {
+    fingerprint: String,
+}
+
+async fn gateway_auth_pubkey(
+    State(state): State<AuthState>,
+    headers: HeaderMap,
+    Json(req): Json<GatewayAuthPubkeyRequest>,
+) -> impl IntoResponse {
+    if !check_gateway_secret(&state, &headers) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    match db::get_account_id_by_key_fingerprint(&state.pool, &req.fingerprint).await {
+        Ok(Some(account_id)) => {
+            Json(GatewayAuthResponse { ok: true, account_id, error: None }).into_response()
+        }
+        _ => Json(GatewayAuthResponse {
+            ok: false,
+            account_id: String::new(),
+            error: Some("unknown key".into()),
+        })
+        .into_response(),
+    }
+}
+
+#[derive(Deserialize)]
+struct GatewayLookupVmQuery {
+    name: String,
+    account_id: String,
+}
+
+#[derive(Serialize)]
+struct GatewayVmResponse {
+    vm_id: String,
+    host_agent_addr: String,
+    vm_ip: String,
+    status: String,
+    exposed_port: i32,
+}
+
+async fn gateway_lookup_vm(
+    State(state): State<AuthState>,
+    headers: HeaderMap,
+    Query(q): Query<GatewayLookupVmQuery>,
+) -> impl IntoResponse {
+    if !check_gateway_secret(&state, &headers) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    let vm = match db::get_vm_by_name(&state.pool, &q.name, &q.account_id).await {
+        Ok(Some(v)) => v,
+        _ => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({ "error": "vm not found" })),
+            )
+                .into_response()
+        }
+    };
+    let host_id = match &vm.host_id {
+        Some(id) => id.clone(),
+        None => {
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(serde_json::json!({ "error": "vm has no host assigned" })),
+            )
+                .into_response()
+        }
+    };
+    let host = match db::get_host(&state.pool, &host_id).await {
+        Ok(Some(h)) => h,
+        _ => {
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(serde_json::json!({ "error": "host not found" })),
+            )
+                .into_response()
+        }
+    };
+    Json(GatewayVmResponse {
+        vm_id: vm.id,
+        host_agent_addr: host.address,
+        vm_ip: vm.ip_address,
+        status: vm.status,
+        exposed_port: vm.exposed_port,
+    })
+    .into_response()
 }
 
 // exposed for tests only

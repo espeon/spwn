@@ -121,6 +121,10 @@ go-build: spwn-build ssh-gateway-build
 spwn: spwn-build
     ./target/spwn
 
+# run ssh-gateway (configure via .env: SSH_GATEWAY_LISTEN_ADDR, SSH_GATEWAY_HOST_KEY_PATH, GATEWAY_SECRET, CONTROL_PLANE_HTTP_URL)
+gateway: ssh-gateway-build
+    ./target/spwn-ssh-gateway
+
 # tidy Go deps
 go-tidy:
     cd services && go mod tidy

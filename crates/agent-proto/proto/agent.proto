@@ -1,5 +1,6 @@
 syntax = "proto3";
 package agent;
+option go_package = "github.com/spwn/spwn/services/proto/agent";
 
 // Implemented by host-agent; called by control-plane for VM lifecycle
 service HostAgent {
@@ -11,7 +12,7 @@ service HostAgent {
   rpc RestoreSnapshot(RestoreRequest)    returns (RestoreResponse);
   rpc WatchEvents(WatchRequest)          returns (stream AgentEvent);
 
-  // reserved for phase 6 — bidirectional console/SSH stream
+  // bidirectional SSH console relay; first ConsoleInput frame carries vm_id
   rpc StreamConsole(stream ConsoleInput) returns (stream ConsoleOutput);
 }
 
@@ -60,7 +61,10 @@ message AgentEvent {
   int64  timestamp  = 4;
 }
 
-message ConsoleInput  { bytes data = 1; }
+message ConsoleInput {
+  string vm_id = 1;  // set only in the first frame to identify the target VM
+  bytes  data   = 2;
+}
 message ConsoleOutput { bytes data = 1; }
 
 // ── ControlPlane messages ─────────────────────────────────────────────────────

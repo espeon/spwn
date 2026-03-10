@@ -16,6 +16,7 @@ import { VmDetailPage } from "./pages/VmDetailPage";
 import { AccountLayout } from "./pages/AccountPage";
 import { IdentityPage } from "./pages/IdentityPage";
 import { ThemesPage } from "./pages/ThemesPage";
+import { SshKeysPage } from "./pages/SshKeysPage";
 import { CliAuthPage } from "./pages/CliAuthPage";
 import HomePage from "./pages/HomePage";
 
@@ -122,6 +123,12 @@ const accountThemesRoute = createRoute({
   component: ThemesPage,
 });
 
+const accountSshKeysRoute = createRoute({
+  getParentRoute: () => accountRoute,
+  path: "/ssh-keys",
+  component: SshKeysPage,
+});
+
 const routeTree = rootRoute.addChildren([
   indexRoute,
   loginRoute,
@@ -134,6 +141,7 @@ const routeTree = rootRoute.addChildren([
       accountIndexRoute,
       accountIdentityRoute,
       accountThemesRoute,
+      accountSshKeysRoute,
     ]),
   ]),
 ]);

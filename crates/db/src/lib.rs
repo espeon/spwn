@@ -1039,6 +1039,94 @@ pub async fn touch_api_token(pool: &PgPool, token_hash: &str, now: i64) -> Resul
     Ok(())
 }
 
+// ── SSH keys ──────────────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone)]
+pub struct SshKeyRow {
+    pub id: String,
+    pub account_id: String,
+    pub name: String,
+    pub public_key: String,
+    pub fingerprint: String,
+    pub created_at: i64,
+}
+
+pub async fn add_ssh_key(
+    pool: &PgPool,
+    account_id: &str,
+    name: &str,
+    public_key: &str,
+    fingerprint: &str,
+) -> Result<SshKeyRow> {
+    let id = uuid::Uuid::new_v4().to_string();
+    let now = unix_now();
+    sqlx::query(
+        "INSERT INTO ssh_keys (id, account_id, name, public_key, fingerprint, created_at)
+         VALUES ($1, $2, $3, $4, $5, $6)",
+    )
+    .bind(&id)
+    .bind(account_id)
+    .bind(name)
+    .bind(public_key)
+    .bind(fingerprint)
+    .bind(now)
+    .execute(pool)
+    .await?;
+    Ok(SshKeyRow {
+        id,
+        account_id: account_id.to_string(),
+        name: name.to_string(),
+        public_key: public_key.to_string(),
+        fingerprint: fingerprint.to_string(),
+        created_at: now,
+    })
+}
+
+pub async fn list_ssh_keys(pool: &PgPool, account_id: &str) -> Result<Vec<SshKeyRow>> {
+    let rows = sqlx::query(
+        "SELECT id, account_id, name, public_key, fingerprint, created_at
+         FROM ssh_keys WHERE account_id = $1 ORDER BY created_at ASC",
+    )
+    .bind(account_id)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(|r| SshKeyRow {
+            id: r.get("id"),
+            account_id: r.get("account_id"),
+            name: r.get("name"),
+            public_key: r.get("public_key"),
+            fingerprint: r.get("fingerprint"),
+            created_at: r.get("created_at"),
+        })
+        .collect())
+}
+
+pub async fn delete_ssh_key(pool: &PgPool, id: &str, account_id: &str) -> Result<bool> {
+    let res = sqlx::query(
+        "DELETE FROM ssh_keys WHERE id = $1 AND account_id = $2",
+    )
+    .bind(id)
+    .bind(account_id)
+    .execute(pool)
+    .await?;
+    Ok(res.rows_affected() > 0)
+}
+
+pub async fn get_account_id_by_key_fingerprint(
+    pool: &PgPool,
+    fingerprint: &str,
+) -> Result<Option<String>> {
+    let row = sqlx::query(
+        "SELECT account_id FROM ssh_keys WHERE fingerprint = $1",
+    )
+    .bind(fingerprint)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row.map(|r| r.get("account_id")))
+}
+
 fn unix_now() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

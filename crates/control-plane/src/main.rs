@@ -43,6 +43,7 @@ async fn main() -> anyhow::Result<()> {
         .and_then(|s| s.parse().ok())
         .unwrap_or(604800);
     let public_url = std::env::var("PUBLIC_URL").unwrap_or_else(|_| "https://spwn.run".into());
+    let gateway_secret = std::env::var("GATEWAY_SECRET").ok();
 
     info!("connecting to database");
     let pool = db::connect(&database_url).await?;
@@ -77,6 +78,7 @@ async fn main() -> anyhow::Result<()> {
         invite_code,
         session_ttl_secs,
         public_url,
+        gateway_secret,
     };
 
     let http_app = axum::Router::new()

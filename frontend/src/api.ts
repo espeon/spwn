@@ -180,4 +180,28 @@ export function cliDeny(code: string): Promise<void> {
   });
 }
 
+// ── SSH keys ──────────────────────────────────────────────────────────────────
+
+export interface SshKey {
+  id: string;
+  name: string;
+  fingerprint: string;
+  created_at: number;
+}
+
+export function listSshKeys(): Promise<SshKey[]> {
+  return request("/api/account/keys");
+}
+
+export function addSshKey(name: string, public_key: string): Promise<SshKey> {
+  return request("/api/account/keys", {
+    method: "POST",
+    body: JSON.stringify({ name, public_key }),
+  });
+}
+
+export function deleteSshKey(id: string): Promise<void> {
+  return request(`/api/account/keys/${id}`, { method: "DELETE" });
+}
+
 export { ApiError };

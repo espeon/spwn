@@ -296,3 +296,39 @@ func (c *Client) RestoreSnapshot(vmID, snapID string) error {
 	}
 	return drain(resp)
 }
+
+// ── SSH keys ──────────────────────────────────────────────────────────────────
+
+type SSHKey struct {
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Fingerprint string `json:"fingerprint"`
+	CreatedAt   int64  `json:"created_at"`
+}
+
+func (c *Client) ListSSHKeys() ([]SSHKey, error) {
+	resp, err := c.do("GET", "/api/account/keys", nil)
+	if err != nil {
+		return nil, err
+	}
+	return decode[[]SSHKey](resp)
+}
+
+func (c *Client) AddSSHKey(name, publicKey string) (SSHKey, error) {
+	resp, err := c.do("POST", "/api/account/keys", map[string]string{
+		"name":       name,
+		"public_key": publicKey,
+	})
+	if err != nil {
+		return SSHKey{}, err
+	}
+	return decode[SSHKey](resp)
+}
+
+func (c *Client) DeleteSSHKey(id string) error {
+	resp, err := c.do("DELETE", "/api/account/keys/"+id, nil)
+	if err != nil {
+		return err
+	}
+	return drain(resp)
+}

@@ -1,11 +1,12 @@
 import { Outlet } from "@tanstack/react-router";
 import { Link } from "@tanstack/react-router";
 import { cn } from "@/lib/utils";
-import { IconPalette, IconUserCircle } from "@tabler/icons-react";
+import { IconKey, IconPalette, IconUserCircle } from "@tabler/icons-react";
 
 const NAV_ITEMS = [
   { to: "/account/identity", label: "identity", icon: IconUserCircle },
   { to: "/account/themes", label: "themes", icon: IconPalette },
+  { to: "/account/ssh-keys", label: "SSH keys", icon: IconKey },
 ] as const;
 
 export function AccountLayout() {

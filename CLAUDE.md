@@ -67,6 +67,11 @@ just check      # cargo check across workspace
 | `JAILER_UID`         | agent     | uid of `spwn-vm` user (auto-resolved)   |
 | `JAILER_GID`         | agent     | gid of `spwn-vm` group (auto-resolved)  |
 | `JAILER_CHROOT_BASE` | agent     | /srv/jailer                             |
+| `GATEWAY_SECRET`     | cp, gw    | _(required)_                            |
+| `SSH_GATEWAY_LISTEN_ADDR` | gw   | 0.0.0.0:2222                            |
+| `SSH_GATEWAY_HOST_KEY_PATH` | gw | /var/lib/spwn/gateway_host_key          |
+| `CONTROL_PLANE_HTTP_URL` | gw    | http://localhost:3019                   |
+| `PLATFORM_KEY_PATH`  | agent     | /var/lib/spwn/platform_key              |
 
 ---
 
@@ -99,6 +104,9 @@ tests live in:
 - **caddy admin API must bind to 127.0.0.1:2019** — VMs must not reach it (iptables DROP rule)
 - **quota check uses SERIALIZABLE transaction** — prevents race on concurrent start requests; caller retries once on serialization failure
 - **migrations embed at compile time** — `crates/db/build.rs` triggers recompile when `migrations/` changes; still need to `touch` or rebuild after adding new migration files if sqlx doesn't pick them up
+- **platform SSH key bootstrap** — on first `just agent` run the agent generates an Ed25519 key at `PLATFORM_KEY_PATH` and logs its public key. add that public key to `/root/.ssh/authorized_keys` in the rootfs (or rebuild the squashfs) before VMs can use `StreamConsole`
+- **gateway TOFU known_hosts** — CLI stores gateway host key at `~/.config/spwn/known_hosts` on first connect; key mismatch hard-fails to prevent MITM
+- **`GATEWAY_SECRET` must match** — control-plane and ssh-gateway must share the same value; gateway calls `/internal/gateway/auth/*` endpoints protected by `Bearer <GATEWAY_SECRET>`
 - **Rust 2024 edition**: `gen` is reserved — use `gen_range` etc.
 - **`thread_rng()` is not `Send`** — drop before any `.await`
 - **fish shell** — use zsh or inline env for sudo commands
@@ -123,8 +131,8 @@ tests live in:
 - phase 4b (control plane + host agent split): **done**
 - phase 5 (auth + accounts): **done**
 - phase 6 (frontend): **done**
-- phase 7 (CLI): not started
-- phase 8 (SSH gateway — Go/charm): not started
+- phase 7 (CLI): **done**
+- phase 8 (SSH gateway — Go/charm): **done**
 - phase 9 (VM cloning): not started
 - phase 10 (proper multi-node): not started
 - phase 11 (proper testing + cargo-nextest): not started
