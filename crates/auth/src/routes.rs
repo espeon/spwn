@@ -23,6 +23,7 @@ pub struct AuthState {
     pub session_ttl_secs: i64,
     pub public_url: String,
     pub gateway_secret: Option<String>,
+    pub ssh_gateway_addr: String,
 }
 
 #[derive(Deserialize)]
@@ -64,6 +65,7 @@ struct MeResponse {
 
 pub fn auth_router(state: AuthState) -> Router {
     Router::new()
+        .route("/api/config", get(server_config))
         .route("/auth/signup", post(signup))
         .route("/auth/login", post(login))
         .route("/auth/logout", post(logout))
@@ -85,6 +87,17 @@ pub fn auth_router(state: AuthState) -> Router {
         .route("/internal/gateway/auth/pubkey", post(gateway_auth_pubkey))
         .route("/internal/gateway/vm", get(gateway_lookup_vm))
         .with_state(state)
+}
+
+#[derive(Serialize)]
+struct ServerConfig {
+    ssh_gateway_addr: String,
+}
+
+async fn server_config(State(state): State<AuthState>) -> impl IntoResponse {
+    Json(ServerConfig {
+        ssh_gateway_addr: state.ssh_gateway_addr.clone(),
+    })
 }
 
 // ── CLI device auth ────────────────────────────────────────────────────────────

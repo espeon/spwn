@@ -44,6 +44,8 @@ async fn main() -> anyhow::Result<()> {
         .unwrap_or(604800);
     let public_url = std::env::var("PUBLIC_URL").unwrap_or_else(|_| "https://spwn.run".into());
     let gateway_secret = std::env::var("GATEWAY_SECRET").ok();
+    let ssh_gateway_addr =
+        std::env::var("SSH_GATEWAY_ADDR").unwrap_or_else(|_| "localhost:2222".into());
 
     info!("connecting to database");
     let pool = db::connect(&database_url).await?;
@@ -79,6 +81,7 @@ async fn main() -> anyhow::Result<()> {
         session_ttl_secs,
         public_url,
         gateway_secret,
+        ssh_gateway_addr,
     };
 
     let http_app = axum::Router::new()

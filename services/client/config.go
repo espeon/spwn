@@ -51,7 +51,7 @@ func LoadConfig() (Config, error) {
 func defaultConfig() Config {
 	return Config{
 		APIURL:        "https://spwn.run",
-		GatewayAddr:   "spwn.run:2222",
+		GatewayAddr:   "localhost:2222",
 		DefaultVcores: 2,
 		DefaultMemMb:  512,
 	}
@@ -61,7 +61,7 @@ func (c Config) GatewayAddrOrDefault() string {
 	if c.GatewayAddr != "" {
 		return c.GatewayAddr
 	}
-	return "spwn.run:2222"
+	return "localhost:2222"
 }
 
 func SaveConfig(c Config) error {

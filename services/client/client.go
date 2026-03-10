@@ -332,3 +332,15 @@ func (c *Client) DeleteSSHKey(id string) error {
 	}
 	return drain(resp)
 }
+
+type ServerConfig struct {
+	SSHGatewayAddr string `json:"ssh_gateway_addr"`
+}
+
+func (c *Client) GetServerConfig() (ServerConfig, error) {
+	resp, err := c.do("GET", "/api/config", nil)
+	if err != nil {
+		return ServerConfig{}, err
+	}
+	return decode[ServerConfig](resp)
+}

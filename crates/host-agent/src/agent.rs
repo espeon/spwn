@@ -1,10 +1,10 @@
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use russh::client::{self, Config as SshConfig};
-use russh::keys::{Algorithm, PrivateKey, PrivateKeyWithHashAlg, load_secret_key};
-use russh::keys::ssh_key::LineEnding;
 use russh::Disconnect;
+use russh::client::{self, Config as SshConfig};
+use russh::keys::ssh_key::LineEnding;
+use russh::keys::{Algorithm, PrivateKey, PrivateKeyWithHashAlg, load_secret_key};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio_stream::StreamExt;
 use tokio_stream::wrappers::{BroadcastStream, ReceiverStream};
@@ -36,8 +36,7 @@ impl client::Handler for SshClientHandler {
 
 fn platform_key_path() -> std::path::PathBuf {
     std::path::PathBuf::from(
-        std::env::var("PLATFORM_KEY_PATH")
-            .unwrap_or_else(|_| "/var/lib/spwn/platform_key".into()),
+        std::env::var("PLATFORM_KEY_PATH").unwrap_or_else(|_| "/var/lib/spwn/platform_key".into()),
     )
 }
 
@@ -291,10 +290,7 @@ impl HostAgent for HostAgentService {
         };
 
         let auth_result = handle
-            .authenticate_publickey(
-                "root",
-                PrivateKeyWithHashAlg::new(Arc::new(key), hash_alg),
-            )
+            .authenticate_publickey("root", PrivateKeyWithHashAlg::new(Arc::new(key), hash_alg))
             .await
             .map_err(|e| Status::unauthenticated(format!("ssh auth: {e}")))?;
 

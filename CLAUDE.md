@@ -47,31 +47,32 @@ just check      # cargo check across workspace
 
 ## key env vars
 
-| var                  | used by   | default                                 |
-| -------------------- | --------- | --------------------------------------- |
-| `DATABASE_URL`       | cp, agent | postgres://postgres:spwn@localhost/spwn |
-| `LISTEN_ADDR`        | cp        | 0.0.0.0:3019                            |
-| `GRPC_LISTEN_ADDR`   | cp        | 0.0.0.0:5000                            |
-| `INVITE_CODE`        | cp        | _(required)_                            |
-| `PUBLIC_URL`         | cp        | https://spwn.run                        |
-| `FRONTEND_PATH`      | cp        | frontend/dist                           |
-| `CADDY_URL`          | cp        | http://localhost:2019                   |
-| `STATIC_FILES_PATH`  | cp        | /var/lib/spwn/static                    |
-| `AGENT_LISTEN_ADDR`  | agent     | 0.0.0.0:4000                            |
-| `AGENT_PUBLIC_ADDR`  | agent     | http://localhost:4000                   |
-| `CONTROL_PLANE_URL`  | agent     | http://localhost:5000                   |
-| `KERNEL_PATH`        | agent     | /tmp/vmlinux                            |
-| `ROOTFS_PATH`        | agent     | /tmp/rootfs.sqfs                        |
-| `FIRECRACKER_BIN`    | agent     | ~/.local/bin/firecracker                |
-| `JAILER_BIN`         | agent     | /usr/local/bin/jailer                   |
-| `JAILER_UID`         | agent     | uid of `spwn-vm` user (auto-resolved)   |
-| `JAILER_GID`         | agent     | gid of `spwn-vm` group (auto-resolved)  |
-| `JAILER_CHROOT_BASE` | agent     | /srv/jailer                             |
-| `GATEWAY_SECRET`     | cp, gw    | _(required)_                            |
-| `SSH_GATEWAY_LISTEN_ADDR` | gw   | 0.0.0.0:2222                            |
-| `SSH_GATEWAY_HOST_KEY_PATH` | gw | /var/lib/spwn/gateway_host_key          |
-| `CONTROL_PLANE_HTTP_URL` | gw    | http://localhost:3019                   |
-| `PLATFORM_KEY_PATH`  | agent     | /var/lib/spwn/platform_key              |
+| var                         | used by   | default                                 |
+| --------------------------- | --------- | --------------------------------------- |
+| `DATABASE_URL`              | cp, agent | postgres://postgres:spwn@localhost/spwn |
+| `LISTEN_ADDR`               | cp        | 0.0.0.0:3019                            |
+| `GRPC_LISTEN_ADDR`          | cp        | 0.0.0.0:5000                            |
+| `INVITE_CODE`               | cp        | _(required)_                            |
+| `PUBLIC_URL`                | cp        | https://spwn.run                        |
+| `FRONTEND_PATH`             | cp        | frontend/dist                           |
+| `CADDY_URL`                 | cp        | http://localhost:2019                   |
+| `STATIC_FILES_PATH`         | cp        | /var/lib/spwn/static                    |
+| `AGENT_LISTEN_ADDR`         | agent     | 0.0.0.0:4000                            |
+| `AGENT_PUBLIC_ADDR`         | agent     | http://localhost:4000                   |
+| `CONTROL_PLANE_URL`         | agent     | http://localhost:5000                   |
+| `KERNEL_PATH`               | agent     | /tmp/vmlinux                            |
+| `ROOTFS_PATH`               | agent     | /tmp/rootfs.sqfs                        |
+| `FIRECRACKER_BIN`           | agent     | ~/.local/bin/firecracker                |
+| `JAILER_BIN`                | agent     | /usr/local/bin/jailer                   |
+| `JAILER_UID`                | agent     | uid of `spwn-vm` user (auto-resolved)   |
+| `JAILER_GID`                | agent     | gid of `spwn-vm` group (auto-resolved)  |
+| `JAILER_CHROOT_BASE`        | agent     | /srv/jailer                             |
+| `SSH_GATEWAY_ADDR`          | cp        | localhost:2222                          |
+| `GATEWAY_SECRET`            | cp, gw    | _(required)_                            |
+| `SSH_GATEWAY_LISTEN_ADDR`   | gw        | 0.0.0.0:2222                            |
+| `SSH_GATEWAY_HOST_KEY_PATH` | gw        | /var/lib/spwn/gateway_host_key          |
+| `CONTROL_PLANE_HTTP_URL`    | gw        | http://localhost:3019                   |
+| `PLATFORM_KEY_PATH`         | agent     | /var/lib/spwn/platform_key              |
 
 ---
 
@@ -104,9 +105,12 @@ tests live in:
 - **caddy admin API must bind to 127.0.0.1:2019** — VMs must not reach it (iptables DROP rule)
 - **quota check uses SERIALIZABLE transaction** — prevents race on concurrent start requests; caller retries once on serialization failure
 - **migrations embed at compile time** — `crates/db/build.rs` triggers recompile when `migrations/` changes; still need to `touch` or rebuild after adding new migration files if sqlx doesn't pick them up
-- **platform SSH key bootstrap** — on first `just agent` run the agent generates an Ed25519 key at `PLATFORM_KEY_PATH` and logs its public key. add that public key to `/root/.ssh/authorized_keys` in the rootfs (or rebuild the squashfs) before VMs can use `StreamConsole`
+- **platform SSH key bootstrap** — the platform key is generated lazily on the first `StreamConsole` call, not at agent startup. if `/var/lib/spwn/platform_key` already exists it loads silently. get the public key with `ssh-keygen -y -f /var/lib/spwn/platform_key` and add it to the rootfs, or use `sudo scripts/spwn inject-platform-key <image>` to rebuild the squashfs with it injected automatically
 - **gateway TOFU known_hosts** — CLI stores gateway host key at `~/.config/spwn/known_hosts` on first connect; key mismatch hard-fails to prevent MITM
-- **`GATEWAY_SECRET` must match** — control-plane and ssh-gateway must share the same value; gateway calls `/internal/gateway/auth/*` endpoints protected by `Bearer <GATEWAY_SECRET>`
+- **`GATEWAY_SECRET` must match** — control-plane and ssh-gateway must share the same value; gateway calls `/internal/gateway/auth/*` endpoints protected by `Bearer <GATEWAY_SECRET>`. running the gateway with `sudo` strips env vars — use `sudo -E` and make sure the calling shell has already sourced `.env`, or pass vars explicitly: `sudo GATEWAY_SECRET=x CONTROL_PLANE_HTTP_URL=y ./spwn-ssh-gateway`
+- **gateway uses VM ID as SSH username** — the CLI sends `vm.ID` (UUID) as the SSH username, not the name. the gateway looks up `/internal/gateway/vm?vm_id=<uuid>` which calls `db::get_vm` by ID. don't change this to name — names can contain spaces and other characters that break SSH usernames
+- **pubkey auth context is ephemeral** — `gliderlabs/ssh` calls the `PublicKeyHandler` twice (probe + real auth). `ctx.SetValue` in the handler does not survive to the session handler. instead, re-resolve the account ID inside the session handler using `s.PublicKey()` and a second call to the auth endpoint
+- **host agent address includes scheme** — `host_agent_addr` stored in the DB is a full URL (`http://localhost:4000`). strip the scheme before passing to `grpc.NewClient` which expects `host:port`
 - **Rust 2024 edition**: `gen` is reserved — use `gen_range` etc.
 - **`thread_rng()` is not `Send`** — drop before any `.await`
 - **fish shell** — use zsh or inline env for sudo commands
@@ -137,7 +141,7 @@ tests live in:
 - phase 10 (proper multi-node): not started
 - phase 11 (proper testing + cargo-nextest): not started
 - phase 12 (playful features — templates, dotfiles, sharing): not started
-- phase 13 (billing — lemonsqueezy): not started
+- phase 13 (billing, lemonsqueezy): not started
 - phase 14 (hardening): not started
 
 ---

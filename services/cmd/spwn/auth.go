@@ -52,6 +52,12 @@ func loginCmd() *cobra.Command {
 					if err := client.SaveCredentials(client.Credentials{Token: *poll.Token}); err != nil {
 						return fmt.Errorf("could not save credentials: %w", err)
 					}
+					if serverCfg, err := c.GetServerConfig(); err == nil && serverCfg.SSHGatewayAddr != "" {
+						if localCfg, err := client.LoadConfig(); err == nil {
+							localCfg.GatewayAddr = serverCfg.SSHGatewayAddr
+							_ = client.SaveConfig(localCfg)
+						}
+					}
 					fmt.Println("logged in successfully")
 					return nil
 				case "denied":
