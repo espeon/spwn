@@ -32,6 +32,9 @@ pub struct VmRow {
     pub pid: Option<i64>,
     pub socket_path: Option<String>,
     pub host_id: Option<String>,
+    pub base_image: String,
+    pub cloned_from: Option<String>,
+    pub disk_usage_mb: i32,
     pub created_at: i64,
     pub last_started_at: Option<i64>,
 }
@@ -75,6 +78,8 @@ pub struct NewVm {
     pub real_init: String,
     pub ip_address: String,
     pub exposed_port: i32,
+    pub base_image: String,
+    pub cloned_from: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -110,8 +115,9 @@ pub async fn create_vm(pool: &PgPool, vm: &NewVm) -> Result<()> {
     let now = unix_now();
     sqlx::query(
         "INSERT INTO vms (id, account_id, name, status, subdomain, vcpus, memory_mb,
-         kernel_path, rootfs_path, overlay_path, real_init, ip_address, exposed_port, created_at)
-         VALUES ($1,$2,$3,'stopped',$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)",
+         kernel_path, rootfs_path, overlay_path, real_init, ip_address, exposed_port,
+         base_image, cloned_from, created_at)
+         VALUES ($1,$2,$3,'stopped',$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)",
     )
     .bind(&vm.id)
     .bind(&vm.account_id)
@@ -125,6 +131,8 @@ pub async fn create_vm(pool: &PgPool, vm: &NewVm) -> Result<()> {
     .bind(&vm.real_init)
     .bind(&vm.ip_address)
     .bind(vm.exposed_port)
+    .bind(&vm.base_image)
+    .bind(&vm.cloned_from)
     .bind(now)
     .execute(pool)
     .await?;
@@ -135,9 +143,21 @@ pub async fn get_vm(pool: &PgPool, id: &str) -> Result<Option<VmRow>> {
     let row = sqlx::query(
         "SELECT id, account_id, name, status, subdomain, vcpus, memory_mb,
          kernel_path, rootfs_path, overlay_path, real_init, ip_address, exposed_port, tap_device, pid,
-         socket_path, host_id, created_at, last_started_at FROM vms WHERE id = $1",
+         socket_path, host_id, base_image, cloned_from, disk_usage_mb, created_at, last_started_at FROM vms WHERE id = $1",
     )
     .bind(id)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row.map(row_to_vm))
+}
+
+pub async fn get_vm_by_subdomain(pool: &PgPool, subdomain: &str) -> Result<Option<VmRow>> {
+    let row = sqlx::query(
+        "SELECT id, account_id, name, status, subdomain, vcpus, memory_mb,
+         kernel_path, rootfs_path, overlay_path, real_init, ip_address, exposed_port, tap_device, pid,
+         socket_path, host_id, base_image, cloned_from, disk_usage_mb, created_at, last_started_at FROM vms WHERE subdomain = $1",
+    )
+    .bind(subdomain)
     .fetch_optional(pool)
     .await?;
     Ok(row.map(row_to_vm))
@@ -147,7 +167,7 @@ pub async fn list_vms(pool: &PgPool, account_id: &str) -> Result<Vec<VmRow>> {
     let rows = sqlx::query(
         "SELECT id, account_id, name, status, subdomain, vcpus, memory_mb,
          kernel_path, rootfs_path, overlay_path, real_init, ip_address, exposed_port, tap_device, pid,
-         socket_path, host_id, created_at, last_started_at FROM vms WHERE account_id = $1
+         socket_path, host_id, base_image, cloned_from, disk_usage_mb, created_at, last_started_at FROM vms WHERE account_id = $1
          ORDER BY created_at DESC",
     )
     .bind(account_id)
@@ -160,7 +180,7 @@ pub async fn get_vms_by_status(pool: &PgPool, status: &str) -> Result<Vec<VmRow>
     let rows = sqlx::query(
         "SELECT id, account_id, name, status, subdomain, vcpus, memory_mb,
          kernel_path, rootfs_path, overlay_path, real_init, ip_address, exposed_port, tap_device, pid,
-         socket_path, host_id, created_at, last_started_at FROM vms WHERE status = $1",
+         socket_path, host_id, base_image, cloned_from, disk_usage_mb, created_at, last_started_at FROM vms WHERE status = $1",
     )
     .bind(status)
     .fetch_all(pool)
@@ -172,7 +192,7 @@ pub async fn get_all_vms(pool: &PgPool) -> Result<Vec<VmRow>> {
     let rows = sqlx::query(
         "SELECT id, account_id, name, status, subdomain, vcpus, memory_mb,
          kernel_path, rootfs_path, overlay_path, real_init, ip_address, exposed_port, tap_device, pid,
-         socket_path, host_id, created_at, last_started_at FROM vms",
+         socket_path, host_id, base_image, cloned_from, disk_usage_mb, created_at, last_started_at FROM vms",
     )
     .fetch_all(pool)
     .await?;
@@ -183,7 +203,7 @@ pub async fn get_vms_by_host(pool: &PgPool, host_id: &str) -> Result<Vec<VmRow>>
     let rows = sqlx::query(
         "SELECT id, account_id, name, status, subdomain, vcpus, memory_mb,
          kernel_path, rootfs_path, overlay_path, real_init, ip_address, exposed_port, tap_device, pid,
-         socket_path, host_id, created_at, last_started_at FROM vms WHERE host_id = $1",
+         socket_path, host_id, base_image, cloned_from, disk_usage_mb, created_at, last_started_at FROM vms WHERE host_id = $1",
     )
     .bind(host_id)
     .fetch_all(pool)
@@ -305,9 +325,21 @@ fn row_to_vm(r: sqlx::postgres::PgRow) -> VmRow {
         pid: r.get("pid"),
         socket_path: r.get("socket_path"),
         host_id: r.get("host_id"),
+        base_image: r.get("base_image"),
+        cloned_from: r.get("cloned_from"),
+        disk_usage_mb: r.get("disk_usage_mb"),
         created_at: r.get("created_at"),
         last_started_at: r.get("last_started_at"),
     }
+}
+
+pub async fn update_disk_usage_mb(pool: &PgPool, vm_id: &str, disk_usage_mb: i32) -> Result<()> {
+    sqlx::query("UPDATE vms SET disk_usage_mb = $1 WHERE id = $2")
+        .bind(disk_usage_mb)
+        .bind(vm_id)
+        .execute(pool)
+        .await?;
+    Ok(())
 }
 
 pub async fn upsert_host(pool: &PgPool, host: &NewHost) -> Result<HostRow> {
@@ -1104,13 +1136,11 @@ pub async fn list_ssh_keys(pool: &PgPool, account_id: &str) -> Result<Vec<SshKey
 }
 
 pub async fn delete_ssh_key(pool: &PgPool, id: &str, account_id: &str) -> Result<bool> {
-    let res = sqlx::query(
-        "DELETE FROM ssh_keys WHERE id = $1 AND account_id = $2",
-    )
-    .bind(id)
-    .bind(account_id)
-    .execute(pool)
-    .await?;
+    let res = sqlx::query("DELETE FROM ssh_keys WHERE id = $1 AND account_id = $2")
+        .bind(id)
+        .bind(account_id)
+        .execute(pool)
+        .await?;
     Ok(res.rows_affected() > 0)
 }
 
@@ -1118,12 +1148,10 @@ pub async fn get_account_id_by_key_fingerprint(
     pool: &PgPool,
     fingerprint: &str,
 ) -> Result<Option<String>> {
-    let row = sqlx::query(
-        "SELECT account_id FROM ssh_keys WHERE fingerprint = $1",
-    )
-    .bind(fingerprint)
-    .fetch_optional(pool)
-    .await?;
+    let row = sqlx::query("SELECT account_id FROM ssh_keys WHERE fingerprint = $1")
+        .bind(fingerprint)
+        .fetch_optional(pool)
+        .await?;
     Ok(row.map(|r| r.get("account_id")))
 }
 

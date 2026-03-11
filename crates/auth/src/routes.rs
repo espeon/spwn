@@ -637,6 +637,8 @@ struct GatewayAuthResponse {
     ok: bool,
     account_id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
+    username: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     error: Option<String>,
 }
 
@@ -653,9 +655,15 @@ async fn gateway_auth_password(
     let token_hash = hex::encode(Sha256::digest(req.password.as_bytes()));
     if let Ok(Some(account_id)) = db::get_account_id_by_token_hash(&state.pool, &token_hash).await {
         let _ = db::touch_api_token(&state.pool, &token_hash, unix_now()).await;
+        let username = db::get_account(&state.pool, &account_id)
+            .await
+            .ok()
+            .flatten()
+            .map(|a| a.username);
         return Json(GatewayAuthResponse {
             ok: true,
             account_id,
+            username,
             error: None,
         })
         .into_response();
@@ -668,6 +676,7 @@ async fn gateway_auth_password(
             return Json(GatewayAuthResponse {
                 ok: false,
                 account_id: String::new(),
+                username: None,
                 error: Some("invalid credentials".into()),
             })
             .into_response();
@@ -678,12 +687,14 @@ async fn gateway_auth_password(
         Ok(true) => Json(GatewayAuthResponse {
             ok: true,
             account_id: account.id,
+            username: Some(account.username),
             error: None,
         })
         .into_response(),
         _ => Json(GatewayAuthResponse {
             ok: false,
             account_id: String::new(),
+            username: None,
             error: Some("invalid credentials".into()),
         })
         .into_response(),
@@ -704,15 +715,24 @@ async fn gateway_auth_pubkey(
         return StatusCode::UNAUTHORIZED.into_response();
     }
     match db::get_account_id_by_key_fingerprint(&state.pool, &req.fingerprint).await {
-        Ok(Some(account_id)) => Json(GatewayAuthResponse {
-            ok: true,
-            account_id,
-            error: None,
-        })
-        .into_response(),
+        Ok(Some(account_id)) => {
+            let username = db::get_account(&state.pool, &account_id)
+                .await
+                .ok()
+                .flatten()
+                .map(|a| a.username);
+            Json(GatewayAuthResponse {
+                ok: true,
+                account_id,
+                username,
+                error: None,
+            })
+            .into_response()
+        }
         _ => Json(GatewayAuthResponse {
             ok: false,
             account_id: String::new(),
+            username: None,
             error: Some("unknown key".into()),
         })
         .into_response(),
@@ -721,7 +741,8 @@ async fn gateway_auth_pubkey(
 
 #[derive(Deserialize)]
 struct GatewayLookupVmQuery {
-    vm_id: String,
+    vm_id: Option<String>,
+    subdomain: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -741,7 +762,18 @@ async fn gateway_lookup_vm(
     if !check_gateway_secret(&state, &headers) {
         return StatusCode::UNAUTHORIZED.into_response();
     }
-    let vm = match db::get_vm(&state.pool, &q.vm_id).await {
+    let vm_result = match (&q.vm_id, &q.subdomain) {
+        (Some(id), _) => db::get_vm(&state.pool, id).await,
+        (_, Some(sub)) => db::get_vm_by_subdomain(&state.pool, sub).await,
+        _ => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "error": "vm_id or subdomain required" })),
+            )
+                .into_response();
+        }
+    };
+    let vm = match vm_result {
         Ok(Some(v)) => v,
         _ => {
             return (

@@ -54,6 +54,7 @@ func envOr(key, def string) string {
 type authResponse struct {
 	OK        bool   `json:"ok"`
 	AccountID string `json:"account_id"`
+	Username  string `json:"username,omitempty"`
 	Error     string `json:"error,omitempty"`
 }
 
@@ -89,9 +90,16 @@ func (cfg *gatewayConfig) callAuth(path string, body map[string]string) (*authRe
 	return &out, nil
 }
 
-func (cfg *gatewayConfig) lookupVM(vmID string) (*vmLookupResponse, error) {
-	url := fmt.Sprintf("%s/internal/gateway/vm?vm_id=%s",
-		cfg.controlPlaneURL, neturl.QueryEscape(vmID))
+func (cfg *gatewayConfig) lookupVM(username, accountUsername string) (*vmLookupResponse, error) {
+	var query string
+	if strings.Contains(username, ".") {
+		query = "subdomain=" + neturl.QueryEscape(username)
+	} else if accountUsername != "" {
+		query = "subdomain=" + neturl.QueryEscape(username+"."+accountUsername)
+	} else {
+		query = "vm_id=" + neturl.QueryEscape(username)
+	}
+	url := fmt.Sprintf("%s/internal/gateway/vm?%s", cfg.controlPlaneURL, query)
 	req, err := http.NewRequestWithContext(context.Background(), "GET", url, nil)
 	if err != nil {
 		return nil, err
@@ -186,17 +194,18 @@ func relayConsole(ctx context.Context, agentAddr, vmID string, s cssh.Session) e
 type contextKey string
 
 const accountIDKey contextKey = "account_id"
+const usernameKey contextKey = "username"
 
 func sessionMiddleware(cfg *gatewayConfig) wish.Middleware {
 	return func(_ cssh.Handler) cssh.Handler {
 		return func(s cssh.Session) {
-			vmID := s.User()
+			username := s.User()
 
 			// Prefer pubkey auth: re-resolve the account ID from the key that
 			// was actually used to authenticate this session. The pubkey handler
 			// runs twice (probe + real) and context values set during the probe
 			// are not visible here, so we look it up again.
-			var accountID string
+			var accountID, accountUsername string
 			if pk := s.PublicKey(); pk != nil {
 				fp := gossh.FingerprintSHA256(pk)
 				resp, err := cfg.callAuth("/internal/gateway/auth/pubkey", map[string]string{
@@ -204,12 +213,14 @@ func sessionMiddleware(cfg *gatewayConfig) wish.Middleware {
 				})
 				if err == nil && resp.OK {
 					accountID = resp.AccountID
+					accountUsername = resp.Username
 				}
 			}
 
 			// Fall back to the value set by password auth.
 			if accountID == "" {
 				accountID, _ = s.Context().Value(accountIDKey).(string)
+				accountUsername, _ = s.Context().Value(usernameKey).(string)
 			}
 
 			if accountID == "" {
@@ -218,14 +229,14 @@ func sessionMiddleware(cfg *gatewayConfig) wish.Middleware {
 				return
 			}
 
-			vm, err := cfg.lookupVM(vmID)
+			vm, err := cfg.lookupVM(username, accountUsername)
 			if err != nil {
 				fmt.Fprintf(s.Stderr(), "error: %v\r\n", err)
 				_ = s.Exit(1)
 				return
 			}
 			if vm.Status != "running" {
-				fmt.Fprintf(s.Stderr(), "vm '%s' is %s (must be running)\r\n", vmID, vm.Status)
+				fmt.Fprintf(s.Stderr(), "vm '%s' is %s (must be running)\r\n", username, vm.Status)
 				_ = s.Exit(1)
 				return
 			}
@@ -249,6 +260,7 @@ func passwordAuth(cfg *gatewayConfig) cssh.PasswordHandler {
 			return false
 		}
 		ctx.SetValue(accountIDKey, resp.AccountID)
+		ctx.SetValue(usernameKey, resp.Username)
 		return true
 	}
 }
@@ -263,6 +275,7 @@ func pubkeyAuth(cfg *gatewayConfig) cssh.PublicKeyHandler {
 			return false
 		}
 		ctx.SetValue(accountIDKey, resp.AccountID)
+		ctx.SetValue(usernameKey, resp.Username)
 		return true
 	}
 }
