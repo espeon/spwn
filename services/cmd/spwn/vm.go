@@ -93,7 +93,7 @@ func vmListCmd() *cobra.Command {
 					vm.Name,
 					vm.Status,
 					vm.Subdomain,
-					fmt.Sprintf("%g / %dMB", vm.Vcpus, vm.MemoryMb),
+					fmt.Sprintf("%d / %dMB", vm.Vcpus, vm.MemoryMb),
 				)
 			}
 			fmt.Println(t.Render())

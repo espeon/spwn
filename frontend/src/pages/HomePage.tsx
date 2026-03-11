@@ -129,7 +129,7 @@ export default function HomePage() {
       <div
         ref={cursorRef}
         aria-hidden="true"
-        className="fixed w-2 h-2 rounded-full bg-foreground pointer-events-none z-[9999] opacity-0 -translate-x-1/2 -translate-y-1/2 transition-[transform,background] duration-200 mix-blend-difference"
+        className="fixed w-2 h-2 rounded-full bg-foreground pointer-events-none z-9999 opacity-0 -translate-x-1/2 -translate-y-1/2 transition-[transform,background] duration-200 mix-blend-difference"
       />
 
       {/* subtle radial glow at top */}
@@ -168,7 +168,7 @@ export default function HomePage() {
       </div>
 
       {/* page shell */}
-      <div className="relative z-10 flex flex-col min-h-screen min-h-dvh">
+      <div className="relative z-10 flex flex-col min-h-dvh">
         {/* ── header ── */}
         <header className="flex justify-between items-center px-[5vw] pt-6 z-20">
           <Link
@@ -191,7 +191,7 @@ export default function HomePage() {
           <div
             ref={diagonalRef}
             aria-hidden="true"
-            className="absolute left-0 top-[20%] w-[3px] h-[30vh] opacity-0 origin-top transition-[transform,opacity] duration-1000 [transition-timing-function:cubic-bezier(0.16,1,0.3,1)] scale-y-0"
+            className="absolute left-0 top-[20%] w-0.75 h-[30vh] opacity-0 origin-top transition-[transform,opacity] duration-1000 [transition-timing-function:cubic-bezier(0.16,1,0.3,1)] scale-y-0"
             style={{
               background:
                 "linear-gradient(to bottom, var(--destructive), transparent)",
@@ -202,7 +202,7 @@ export default function HomePage() {
           <div
             ref={geoRectRef}
             aria-hidden="true"
-            className="absolute right-[6%] top-1/2 -translate-y-1/2 pointer-events-none z-0 origin-left transition-[transform,opacity] duration-[1200ms] [transition-timing-function:cubic-bezier(0.16,1,0.3,1)]"
+            className="absolute right-[6%] top-1/2 -translate-y-1/2 pointer-events-none z-0 origin-left transition-[transform,opacity] duration-1200 [transition-timing-function:cubic-bezier(0.16,1,0.3,1)]"
             style={{
               width: "clamp(180px,30vw,400px)",
               height: "clamp(180px,30vw,400px)",
@@ -237,7 +237,7 @@ export default function HomePage() {
               <span className="block overflow-hidden">
                 <span
                   ref={line1Ref}
-                  className="block translate-y-full opacity-0 transition-[transform,opacity] duration-[1s] [transition-timing-function:cubic-bezier(0.16,1,0.3,1)] [&.visible]:translate-y-0 [&.visible]:opacity-100"
+                  className="block translate-y-full opacity-0 transition-[transform,opacity] duration-1000 [transition-timing-function:cubic-bezier(0.16,1,0.3,1)] [&.visible]:translate-y-0 [&.visible]:opacity-100"
                 >
                   Compute you
                 </span>
@@ -245,7 +245,7 @@ export default function HomePage() {
               <span className="block overflow-hidden">
                 <span
                   ref={line2Ref}
-                  className="block translate-y-full opacity-0 transition-[transform,opacity] duration-[1s] [transition-delay:100ms] [transition-timing-function:cubic-bezier(0.16,1,0.3,1)] [&.visible]:translate-y-0 [&.visible]:opacity-100"
+                  className="block translate-y-full opacity-0 transition-[transform,opacity] duration-1000 [transition-delay:100ms] [transition-timing-function:cubic-bezier(0.16,1,0.3,1)] [&.visible]:translate-y-0 [&.visible]:opacity-100"
                 >
                   can just <span className="text-[#9ccfd8]">do</span>
                 </span>
@@ -253,7 +253,7 @@ export default function HomePage() {
               <span className="block overflow-hidden">
                 <span
                   ref={line3Ref}
-                  className="block translate-y-full opacity-0 transition-[transform,opacity] duration-[1s] [transition-delay:200ms] [transition-timing-function:cubic-bezier(0.16,1,0.3,1)] [&.visible]:translate-y-0 [&.visible]:opacity-100"
+                  className="block translate-y-full opacity-0 transition-[transform,opacity] duration-1000 [transition-delay:200ms] [transition-timing-function:cubic-bezier(0.16,1,0.3,1)] [&.visible]:translate-y-0 [&.visible]:opacity-100"
                 >
                   things with
                 </span>

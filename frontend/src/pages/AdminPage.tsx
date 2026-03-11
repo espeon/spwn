@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   listHosts,
@@ -139,13 +139,20 @@ function HostCard({
   });
 
   const action = STATUS_CYCLE[host.status];
-  const timeSince = Math.floor(Date.now() / 1000 - host.last_seen_at);
-  const lastSeen =
-    timeSince < 60
-      ? `${timeSince}s ago`
-      : timeSince < 3600
-        ? `${Math.floor(timeSince / 60)}m ago`
-        : `${Math.floor(timeSince / 3600)}h ago`;
+  const lastSeen = useMemo(() => {
+    const now = new Date();
+    const lastSeenAt = new Date(host.last_seen_at * 1000);
+    const diffSeconds = Math.max(
+      0,
+      Math.floor((now.getTime() - lastSeenAt.getTime()) / 1000),
+    );
+
+    return diffSeconds < 60
+      ? `${diffSeconds}s ago`
+      : diffSeconds < 3600
+        ? `${Math.floor(diffSeconds / 60)}m ago`
+        : `${Math.floor(diffSeconds / 3600)}h ago`;
+  }, [host.last_seen_at]);
 
   const provisionedVcpus = vms.reduce((s, v) => s + v.vcpus, 0);
   const provisionedMem = vms.reduce((s, v) => s + v.memory_mb, 0);

@@ -28,6 +28,9 @@ fn test_app(pool: db::PgPool) -> Router {
         pool: pool.clone(),
         invite_code: "testcode".into(),
         session_ttl_secs: 604800,
+        public_url: "http://localhost:3019".into(),
+        gateway_secret: None,
+        ssh_gateway_addr: "localhost:2222".into(),
     };
     auth::auth_router(state).layer(Extension(pool))
 }
