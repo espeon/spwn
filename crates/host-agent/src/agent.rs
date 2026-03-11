@@ -11,9 +11,11 @@ use tokio_stream::wrappers::{BroadcastStream, ReceiverStream};
 use tonic::{Request, Response, Status, Streaming};
 
 use agent_proto::agent::{
-    AgentEvent, ConsoleInput, ConsoleOutput, CreateVmRequest, CreateVmResponse, DeleteVmRequest,
-    DeleteVmResponse, RestoreRequest, RestoreResponse, StartVmRequest, StartVmResponse,
-    StopVmRequest, StopVmResponse, TakeSnapshotRequest, TakeSnapshotResponse, WatchRequest,
+    AgentEvent, CloneVmRequest, CloneVmResponse, ConsoleInput, ConsoleOutput, CreateVmRequest,
+    CreateVmResponse, DeleteVmRequest, DeleteVmResponse, MigrateVmRequest, MigrateVmResponse,
+    ResizeBandwidthRequest, ResizeBandwidthResponse, ResizeCpuRequest, ResizeCpuResponse,
+    RestoreRequest, RestoreResponse, StartVmRequest, StartVmResponse, StopVmRequest,
+    StopVmResponse, TakeSnapshotRequest, TakeSnapshotResponse, WatchRequest,
     host_agent_server::HostAgent,
 };
 
@@ -65,6 +67,7 @@ fn load_or_generate_platform_key() -> anyhow::Result<PrivateKey> {
 
 pub struct HostAgentService {
     pub manager: Arc<VmManager>,
+    pub agent_secret: String,
 }
 
 #[tonic::async_trait]
@@ -84,6 +87,8 @@ impl HostAgent for HostAgentService {
                 &r.image,
                 r.vcpus,
                 r.memory_mb,
+                r.disk_mb,
+                r.bandwidth_mbps,
                 r.exposed_port,
                 &r.ip_address,
             )
@@ -188,6 +193,110 @@ impl HostAgent for HostAgentService {
                 error: String::new(),
             })),
             Err(e) => Ok(Response::new(RestoreResponse {
+                ok: false,
+                error: e.to_string(),
+            })),
+        }
+    }
+
+    async fn clone_vm(
+        &self,
+        req: Request<CloneVmRequest>,
+    ) -> Result<Response<CloneVmResponse>, Status> {
+        let r = req.into_inner();
+        match self
+            .manager
+            .clone_vm(
+                &r.source_vm_id,
+                &r.new_vm_id,
+                &r.account_id,
+                &r.name,
+                &r.subdomain,
+                &r.ip_address,
+                r.exposed_port,
+                r.include_memory,
+            )
+            .await
+        {
+            Ok(()) => Ok(Response::new(CloneVmResponse {
+                ok: true,
+                error: String::new(),
+            })),
+            Err(e) => Ok(Response::new(CloneVmResponse {
+                ok: false,
+                error: e.to_string(),
+            })),
+        }
+    }
+
+    async fn migrate_vm(
+        &self,
+        req: Request<MigrateVmRequest>,
+    ) -> Result<Response<MigrateVmResponse>, Status> {
+        let r = req.into_inner();
+        let secret = self.agent_secret.clone();
+        match self
+            .manager
+            .migrate_vm(
+                &r.vm_id,
+                &r.source_snapshot_url,
+                &r.account_id,
+                &r.name,
+                &r.subdomain,
+                r.vcpus,
+                r.memory_mb,
+                r.disk_mb,
+                r.bandwidth_mbps,
+                &r.ip_address,
+                r.exposed_port,
+                &r.image,
+                &secret,
+            )
+            .await
+        {
+            Ok(()) => Ok(Response::new(MigrateVmResponse {
+                ok: true,
+                error: String::new(),
+            })),
+            Err(e) => Ok(Response::new(MigrateVmResponse {
+                ok: false,
+                error: e.to_string(),
+            })),
+        }
+    }
+
+    async fn resize_cpu(
+        &self,
+        req: Request<ResizeCpuRequest>,
+    ) -> Result<Response<ResizeCpuResponse>, Status> {
+        let r = req.into_inner();
+        match self.manager.resize_cpu(&r.vm_id, r.vcpus).await {
+            Ok(()) => Ok(Response::new(ResizeCpuResponse {
+                ok: true,
+                error: String::new(),
+            })),
+            Err(e) => Ok(Response::new(ResizeCpuResponse {
+                ok: false,
+                error: e.to_string(),
+            })),
+        }
+    }
+
+    async fn resize_bandwidth(
+        &self,
+        req: Request<ResizeBandwidthRequest>,
+    ) -> Result<Response<ResizeBandwidthResponse>, Status> {
+        let r = req.into_inner();
+        match self
+            .manager
+            .resize_bandwidth(&r.vm_id, r.bandwidth_mbps)
+            .await
+        {
+            Ok(()) => Ok(Response::new(ResizeBandwidthResponse {
+                ok: true,
+                error: String::new(),
+            })),
+            Err(e) => Ok(Response::new(ResizeBandwidthResponse {
                 ok: false,
                 error: e.to_string(),
             })),

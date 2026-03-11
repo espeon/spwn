@@ -24,7 +24,7 @@ impl std::fmt::Display for VmId {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VmConfig {
     pub id: VmId,
-    pub vcpus: f64,
+    pub vcpus: i64,
     pub memory_mb: u32,
     pub kernel_path: PathBuf,
     pub rootfs_path: PathBuf,
@@ -33,7 +33,7 @@ pub struct VmConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VmResources {
-    pub vcpus: f64,
+    pub vcpus: i64,
     pub memory_mb: u32,
 }
 

@@ -20,8 +20,10 @@ pub struct VmRow {
     pub name: String,
     pub status: String,
     pub subdomain: String,
-    pub vcpus: f64,
+    pub vcpus: i64,
     pub memory_mb: i32,
+    pub disk_mb: i32,
+    pub bandwidth_mbps: i32,
     pub kernel_path: String,
     pub rootfs_path: String,
     pub overlay_path: Option<String>,
@@ -32,8 +34,13 @@ pub struct VmRow {
     pub pid: Option<i64>,
     pub socket_path: Option<String>,
     pub host_id: Option<String>,
+    pub base_image: String,
+    pub cloned_from: Option<String>,
+    pub disk_usage_mb: i32,
     pub created_at: i64,
     pub last_started_at: Option<i64>,
+    pub placement_strategy: String,
+    pub required_labels: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone)]
@@ -41,25 +48,31 @@ pub struct HostRow {
     pub id: String,
     pub name: String,
     pub address: String,
-    pub vcpu_total: i32,
+    pub vcpu_total: i64,
     pub mem_total_mb: i32,
     pub images_dir: String,
     pub overlay_dir: String,
     pub snapshot_dir: String,
     pub kernel_path: String,
     pub last_seen_at: i64,
+    pub status: String,
+    pub vcpu_used: i64,
+    pub mem_used_mb: i32,
+    pub labels: serde_json::Value,
+    pub snapshot_addr: String,
 }
 
 pub struct NewHost {
     pub id: String,
     pub name: String,
     pub address: String,
-    pub vcpu_total: i32,
+    pub vcpu_total: i64,
     pub mem_total_mb: i32,
     pub images_dir: String,
     pub overlay_dir: String,
     pub snapshot_dir: String,
     pub kernel_path: String,
+    pub snapshot_addr: String,
 }
 
 pub struct NewVm {
@@ -67,14 +80,52 @@ pub struct NewVm {
     pub account_id: String,
     pub name: String,
     pub subdomain: String,
-    pub vcpus: f64,
+    pub vcpus: i64,
     pub memory_mb: i32,
+    pub disk_mb: i32,
+    pub bandwidth_mbps: i32,
     pub kernel_path: String,
     pub rootfs_path: String,
     pub overlay_path: String,
     pub real_init: String,
     pub ip_address: String,
     pub exposed_port: i32,
+    pub base_image: String,
+    pub cloned_from: Option<String>,
+    pub placement_strategy: String,
+    pub required_labels: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Clone)]
+pub struct AdminVmRecord {
+    pub id: String,
+    pub name: String,
+    pub status: String,
+    pub host_id: Option<String>,
+    pub account_id: String,
+    pub username: String,
+    pub vcpus: i64,
+    pub memory_mb: i32,
+    pub disk_usage_mb: i32,
+    pub subdomain: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct VmMigrationRow {
+    pub id: String,
+    pub vm_id: String,
+    pub from_host: String,
+    pub to_host: String,
+    pub status: String,
+    pub started_at: i64,
+    pub finished_at: Option<i64>,
+}
+
+pub struct NewVmMigration {
+    pub id: String,
+    pub vm_id: String,
+    pub from_host: String,
+    pub to_host: String,
 }
 
 #[derive(Debug, Clone)]
@@ -110,8 +161,10 @@ pub async fn create_vm(pool: &PgPool, vm: &NewVm) -> Result<()> {
     let now = unix_now();
     sqlx::query(
         "INSERT INTO vms (id, account_id, name, status, subdomain, vcpus, memory_mb,
-         kernel_path, rootfs_path, overlay_path, real_init, ip_address, exposed_port, created_at)
-         VALUES ($1,$2,$3,'stopped',$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)",
+         disk_mb, bandwidth_mbps, kernel_path, rootfs_path, overlay_path, real_init,
+         ip_address, exposed_port, base_image, cloned_from, placement_strategy,
+         required_labels, created_at)
+         VALUES ($1,$2,$3,'stopped',$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)",
     )
     .bind(&vm.id)
     .bind(&vm.account_id)
@@ -119,12 +172,18 @@ pub async fn create_vm(pool: &PgPool, vm: &NewVm) -> Result<()> {
     .bind(&vm.subdomain)
     .bind(vm.vcpus)
     .bind(vm.memory_mb)
+    .bind(vm.disk_mb)
+    .bind(vm.bandwidth_mbps)
     .bind(&vm.kernel_path)
     .bind(&vm.rootfs_path)
     .bind(&vm.overlay_path)
     .bind(&vm.real_init)
     .bind(&vm.ip_address)
     .bind(vm.exposed_port)
+    .bind(&vm.base_image)
+    .bind(&vm.cloned_from)
+    .bind(&vm.placement_strategy)
+    .bind(vm.required_labels.as_ref().map(sqlx::types::Json))
     .bind(now)
     .execute(pool)
     .await?;
@@ -133,9 +192,10 @@ pub async fn create_vm(pool: &PgPool, vm: &NewVm) -> Result<()> {
 
 pub async fn get_vm(pool: &PgPool, id: &str) -> Result<Option<VmRow>> {
     let row = sqlx::query(
-        "SELECT id, account_id, name, status, subdomain, vcpus, memory_mb,
+        "SELECT id, account_id, name, status, subdomain, vcpus, memory_mb, disk_mb, bandwidth_mbps,
          kernel_path, rootfs_path, overlay_path, real_init, ip_address, exposed_port, tap_device, pid,
-         socket_path, host_id, created_at, last_started_at FROM vms WHERE id = $1",
+         socket_path, host_id, base_image, cloned_from, disk_usage_mb, created_at, last_started_at,
+         placement_strategy, required_labels FROM vms WHERE id = $1",
     )
     .bind(id)
     .fetch_optional(pool)
@@ -143,11 +203,25 @@ pub async fn get_vm(pool: &PgPool, id: &str) -> Result<Option<VmRow>> {
     Ok(row.map(row_to_vm))
 }
 
+pub async fn get_vm_by_subdomain(pool: &PgPool, subdomain: &str) -> Result<Option<VmRow>> {
+    let row = sqlx::query(
+        "SELECT id, account_id, name, status, subdomain, vcpus, memory_mb, disk_mb, bandwidth_mbps,
+         kernel_path, rootfs_path, overlay_path, real_init, ip_address, exposed_port, tap_device, pid,
+         socket_path, host_id, base_image, cloned_from, disk_usage_mb, created_at, last_started_at,
+         placement_strategy, required_labels FROM vms WHERE subdomain = $1",
+    )
+    .bind(subdomain)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row.map(row_to_vm))
+}
+
 pub async fn list_vms(pool: &PgPool, account_id: &str) -> Result<Vec<VmRow>> {
     let rows = sqlx::query(
-        "SELECT id, account_id, name, status, subdomain, vcpus, memory_mb,
+        "SELECT id, account_id, name, status, subdomain, vcpus, memory_mb, disk_mb, bandwidth_mbps,
          kernel_path, rootfs_path, overlay_path, real_init, ip_address, exposed_port, tap_device, pid,
-         socket_path, host_id, created_at, last_started_at FROM vms WHERE account_id = $1
+         socket_path, host_id, base_image, cloned_from, disk_usage_mb, created_at, last_started_at,
+         placement_strategy, required_labels FROM vms WHERE account_id = $1
          ORDER BY created_at DESC",
     )
     .bind(account_id)
@@ -156,11 +230,40 @@ pub async fn list_vms(pool: &PgPool, account_id: &str) -> Result<Vec<VmRow>> {
     Ok(rows.into_iter().map(row_to_vm).collect())
 }
 
+pub async fn list_all_vms_admin(pool: &PgPool) -> Result<Vec<AdminVmRecord>> {
+    let rows = sqlx::query(
+        "SELECT v.id, v.name, v.status, v.host_id, v.account_id, a.username,
+         v.vcpus, v.memory_mb, v.disk_usage_mb, v.subdomain
+         FROM vms v
+         JOIN accounts a ON v.account_id = a.id
+         ORDER BY v.host_id NULLS LAST, v.name",
+    )
+    .fetch_all(pool)
+    .await?;
+
+    Ok(rows
+        .into_iter()
+        .map(|r| AdminVmRecord {
+            id: r.get("id"),
+            name: r.get("name"),
+            status: r.get("status"),
+            host_id: r.get("host_id"),
+            account_id: r.get("account_id"),
+            username: r.get("username"),
+            vcpus: r.get("vcpus"),
+            memory_mb: r.get("memory_mb"),
+            disk_usage_mb: r.get("disk_usage_mb"),
+            subdomain: r.get("subdomain"),
+        })
+        .collect())
+}
+
 pub async fn get_vms_by_status(pool: &PgPool, status: &str) -> Result<Vec<VmRow>> {
     let rows = sqlx::query(
-        "SELECT id, account_id, name, status, subdomain, vcpus, memory_mb,
+        "SELECT id, account_id, name, status, subdomain, vcpus, memory_mb, disk_mb, bandwidth_mbps,
          kernel_path, rootfs_path, overlay_path, real_init, ip_address, exposed_port, tap_device, pid,
-         socket_path, host_id, created_at, last_started_at FROM vms WHERE status = $1",
+         socket_path, host_id, base_image, cloned_from, disk_usage_mb, created_at, last_started_at,
+         placement_strategy, required_labels FROM vms WHERE status = $1",
     )
     .bind(status)
     .fetch_all(pool)
@@ -170,9 +273,10 @@ pub async fn get_vms_by_status(pool: &PgPool, status: &str) -> Result<Vec<VmRow>
 
 pub async fn get_all_vms(pool: &PgPool) -> Result<Vec<VmRow>> {
     let rows = sqlx::query(
-        "SELECT id, account_id, name, status, subdomain, vcpus, memory_mb,
+        "SELECT id, account_id, name, status, subdomain, vcpus, memory_mb, disk_mb, bandwidth_mbps,
          kernel_path, rootfs_path, overlay_path, real_init, ip_address, exposed_port, tap_device, pid,
-         socket_path, host_id, created_at, last_started_at FROM vms",
+         socket_path, host_id, base_image, cloned_from, disk_usage_mb, created_at, last_started_at,
+         placement_strategy, required_labels FROM vms",
     )
     .fetch_all(pool)
     .await?;
@@ -181,9 +285,10 @@ pub async fn get_all_vms(pool: &PgPool) -> Result<Vec<VmRow>> {
 
 pub async fn get_vms_by_host(pool: &PgPool, host_id: &str) -> Result<Vec<VmRow>> {
     let rows = sqlx::query(
-        "SELECT id, account_id, name, status, subdomain, vcpus, memory_mb,
+        "SELECT id, account_id, name, status, subdomain, vcpus, memory_mb, disk_mb, bandwidth_mbps,
          kernel_path, rootfs_path, overlay_path, real_init, ip_address, exposed_port, tap_device, pid,
-         socket_path, host_id, created_at, last_started_at FROM vms WHERE host_id = $1",
+         socket_path, host_id, base_image, cloned_from, disk_usage_mb, created_at, last_started_at,
+         placement_strategy, required_labels FROM vms WHERE host_id = $1",
     )
     .bind(host_id)
     .fetch_all(pool)
@@ -295,6 +400,8 @@ fn row_to_vm(r: sqlx::postgres::PgRow) -> VmRow {
         subdomain: r.get("subdomain"),
         vcpus: r.get("vcpus"),
         memory_mb: r.get("memory_mb"),
+        disk_mb: r.get("disk_mb"),
+        bandwidth_mbps: r.get("bandwidth_mbps"),
         kernel_path: r.get("kernel_path"),
         rootfs_path: r.get("rootfs_path"),
         overlay_path: r.get("overlay_path"),
@@ -305,19 +412,35 @@ fn row_to_vm(r: sqlx::postgres::PgRow) -> VmRow {
         pid: r.get("pid"),
         socket_path: r.get("socket_path"),
         host_id: r.get("host_id"),
+        base_image: r.get("base_image"),
+        cloned_from: r.get("cloned_from"),
+        disk_usage_mb: r.get("disk_usage_mb"),
         created_at: r.get("created_at"),
         last_started_at: r.get("last_started_at"),
+        placement_strategy: r.get("placement_strategy"),
+        required_labels: r.get("required_labels"),
     }
+}
+
+pub async fn update_disk_usage_mb(pool: &PgPool, vm_id: &str, disk_usage_mb: i32) -> Result<()> {
+    sqlx::query("UPDATE vms SET disk_usage_mb = $1 WHERE id = $2")
+        .bind(disk_usage_mb)
+        .bind(vm_id)
+        .execute(pool)
+        .await?;
+    Ok(())
 }
 
 pub async fn upsert_host(pool: &PgPool, host: &NewHost) -> Result<HostRow> {
     let now = unix_now();
     sqlx::query(
-        "INSERT INTO hosts (id, name, address, vcpu_total, mem_total_mb, images_dir, overlay_dir, snapshot_dir, kernel_path, last_seen_at)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+        "INSERT INTO hosts (id, name, address, vcpu_total, mem_total_mb, images_dir, overlay_dir,
+           snapshot_dir, kernel_path, snapshot_addr, last_seen_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
          ON CONFLICT (id) DO UPDATE SET
            name=$2, address=$3, vcpu_total=$4, mem_total_mb=$5,
-           images_dir=$6, overlay_dir=$7, snapshot_dir=$8, kernel_path=$9, last_seen_at=$10",
+           images_dir=$6, overlay_dir=$7, snapshot_dir=$8, kernel_path=$9,
+           snapshot_addr=$10, last_seen_at=$11",
     )
     .bind(&host.id)
     .bind(&host.name)
@@ -328,6 +451,7 @@ pub async fn upsert_host(pool: &PgPool, host: &NewHost) -> Result<HostRow> {
     .bind(&host.overlay_dir)
     .bind(&host.snapshot_dir)
     .bind(&host.kernel_path)
+    .bind(&host.snapshot_addr)
     .bind(now)
     .execute(pool)
     .await?;
@@ -342,22 +466,42 @@ pub async fn upsert_host(pool: &PgPool, host: &NewHost) -> Result<HostRow> {
         snapshot_dir: host.snapshot_dir.clone(),
         kernel_path: host.kernel_path.clone(),
         last_seen_at: now,
+        status: "active".into(),
+        vcpu_used: 0,
+        mem_used_mb: 0,
+        labels: serde_json::Value::Object(Default::default()),
+        snapshot_addr: host.snapshot_addr.clone(),
     })
 }
 
-pub async fn update_host_heartbeat(pool: &PgPool, host_id: &str, now: i64) -> Result<()> {
-    sqlx::query("UPDATE hosts SET last_seen_at=$1 WHERE id=$2")
-        .bind(now)
-        .bind(host_id)
-        .execute(pool)
-        .await?;
+pub async fn update_host_heartbeat(
+    pool: &PgPool,
+    host_id: &str,
+    vcpu_used: i64,
+    mem_used_mb: i32,
+) -> Result<()> {
+    let now = unix_now();
+    sqlx::query(
+        "UPDATE hosts SET
+            last_seen_at = $1,
+            vcpu_used    = $2,
+            mem_used_mb  = $3,
+            status = CASE WHEN status = 'draining' THEN 'draining' ELSE 'active' END
+         WHERE id = $4",
+    )
+    .bind(now)
+    .bind(vcpu_used)
+    .bind(mem_used_mb)
+    .bind(host_id)
+    .execute(pool)
+    .await?;
     Ok(())
 }
 
 pub async fn list_hosts(pool: &PgPool) -> Result<Vec<HostRow>> {
     let rows = sqlx::query(
         "SELECT id, name, address, vcpu_total, mem_total_mb, images_dir, overlay_dir,
-         snapshot_dir, kernel_path, last_seen_at FROM hosts",
+         snapshot_dir, kernel_path, last_seen_at, status, vcpu_used, mem_used_mb, labels, snapshot_addr FROM hosts",
     )
     .fetch_all(pool)
     .await?;
@@ -367,7 +511,7 @@ pub async fn list_hosts(pool: &PgPool) -> Result<Vec<HostRow>> {
 pub async fn get_host(pool: &PgPool, id: &str) -> Result<Option<HostRow>> {
     let row = sqlx::query(
         "SELECT id, name, address, vcpu_total, mem_total_mb, images_dir, overlay_dir,
-         snapshot_dir, kernel_path, last_seen_at FROM hosts WHERE id = $1",
+         snapshot_dir, kernel_path, last_seen_at, status, vcpu_used, mem_used_mb, labels, snapshot_addr FROM hosts WHERE id = $1",
     )
     .bind(id)
     .fetch_optional(pool)
@@ -387,7 +531,93 @@ fn row_to_host(r: sqlx::postgres::PgRow) -> HostRow {
         snapshot_dir: r.get("snapshot_dir"),
         kernel_path: r.get("kernel_path"),
         last_seen_at: r.get("last_seen_at"),
+        status: r.get("status"),
+        vcpu_used: r.get("vcpu_used"),
+        mem_used_mb: r.get("mem_used_mb"),
+        labels: r.get("labels"),
+        snapshot_addr: r.get("snapshot_addr"),
     }
+}
+
+pub async fn set_host_status(pool: &PgPool, host_id: &str, status: &str) -> Result<()> {
+    sqlx::query("UPDATE hosts SET status = $1 WHERE id = $2")
+        .bind(status)
+        .bind(host_id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+pub async fn list_active_hosts(pool: &PgPool) -> Result<Vec<HostRow>> {
+    let rows = sqlx::query(
+        "SELECT id, name, address, vcpu_total, mem_total_mb, images_dir, overlay_dir,
+         snapshot_dir, kernel_path, last_seen_at, status, vcpu_used, mem_used_mb, labels, snapshot_addr
+         FROM hosts WHERE status = 'active'",
+    )
+    .fetch_all(pool)
+    .await?;
+    Ok(rows.into_iter().map(row_to_host).collect())
+}
+
+pub async fn create_vm_migration(pool: &PgPool, m: &NewVmMigration) -> Result<VmMigrationRow> {
+    let now = unix_now();
+    sqlx::query(
+        "INSERT INTO vm_migrations (id, vm_id, from_host, to_host, status, started_at)
+         VALUES ($1, $2, $3, $4, 'pending', $5)",
+    )
+    .bind(&m.id)
+    .bind(&m.vm_id)
+    .bind(&m.from_host)
+    .bind(&m.to_host)
+    .bind(now)
+    .execute(pool)
+    .await?;
+    Ok(VmMigrationRow {
+        id: m.id.clone(),
+        vm_id: m.vm_id.clone(),
+        from_host: m.from_host.clone(),
+        to_host: m.to_host.clone(),
+        status: "pending".into(),
+        started_at: now,
+        finished_at: None,
+    })
+}
+
+pub async fn update_migration_status(
+    pool: &PgPool,
+    id: &str,
+    status: &str,
+    finished_at: Option<i64>,
+) -> Result<()> {
+    sqlx::query("UPDATE vm_migrations SET status = $1, finished_at = $2 WHERE id = $3")
+        .bind(status)
+        .bind(finished_at)
+        .bind(id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+pub async fn list_vm_migrations(pool: &PgPool, vm_id: &str) -> Result<Vec<VmMigrationRow>> {
+    let rows = sqlx::query(
+        "SELECT id, vm_id, from_host, to_host, status, started_at, finished_at
+         FROM vm_migrations WHERE vm_id = $1 ORDER BY started_at DESC",
+    )
+    .bind(vm_id)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(|r| VmMigrationRow {
+            id: r.get("id"),
+            vm_id: r.get("vm_id"),
+            from_host: r.get("from_host"),
+            to_host: r.get("to_host"),
+            status: r.get("status"),
+            started_at: r.get("started_at"),
+            finished_at: r.get("finished_at"),
+        })
+        .collect())
 }
 
 pub async fn create_snapshot(pool: &PgPool, snap: &NewSnapshot) -> Result<SnapshotRow> {
@@ -477,10 +707,11 @@ pub struct AccountRow {
     pub display_name: Option<String>,
     pub avatar_bytes: Option<Vec<u8>>,
     pub theme: String,
-    pub vcpu_limit: i32,
+    pub vcpu_limit: i64,
     pub mem_limit_mb: i32,
     pub vm_limit: i32,
     pub created_at: i64,
+    pub role: String,
 }
 
 pub struct NewAccount {
@@ -535,17 +766,18 @@ pub async fn create_account(pool: &PgPool, account: &NewAccount) -> Result<Accou
         display_name: None,
         avatar_bytes: None,
         theme: "catppuccin-latte".into(),
-        vcpu_limit: 8,
+        vcpu_limit: 8000,
         mem_limit_mb: 12288,
         vm_limit: 5,
         created_at: account.created_at,
+        role: "user".into(),
     })
 }
 
 pub async fn get_account_by_email(pool: &PgPool, email: &str) -> Result<Option<AccountRow>> {
     let row = sqlx::query(
         "SELECT id, email, password_hash, username, display_name, avatar_bytes, theme,
-         vcpu_limit, mem_limit_mb, vm_limit, created_at
+         vcpu_limit, mem_limit_mb, vm_limit, created_at, role
          FROM accounts WHERE email = $1",
     )
     .bind(email)
@@ -557,7 +789,7 @@ pub async fn get_account_by_email(pool: &PgPool, email: &str) -> Result<Option<A
 pub async fn get_account_by_username(pool: &PgPool, username: &str) -> Result<Option<AccountRow>> {
     let row = sqlx::query(
         "SELECT id, email, password_hash, username, display_name, avatar_bytes, theme,
-         vcpu_limit, mem_limit_mb, vm_limit, created_at
+         vcpu_limit, mem_limit_mb, vm_limit, created_at, role
          FROM accounts WHERE username = $1",
     )
     .bind(username)
@@ -569,7 +801,7 @@ pub async fn get_account_by_username(pool: &PgPool, username: &str) -> Result<Op
 pub async fn get_account(pool: &PgPool, id: &str) -> Result<Option<AccountRow>> {
     let row = sqlx::query(
         "SELECT id, email, password_hash, username, display_name, avatar_bytes, theme,
-         vcpu_limit, mem_limit_mb, vm_limit, created_at
+         vcpu_limit, mem_limit_mb, vm_limit, created_at, role
          FROM accounts WHERE id = $1",
     )
     .bind(id)
@@ -677,6 +909,7 @@ fn row_to_account(r: sqlx::postgres::PgRow) -> AccountRow {
         mem_limit_mb: r.get("mem_limit_mb"),
         vm_limit: r.get("vm_limit"),
         created_at: r.get("created_at"),
+        role: r.get("role"),
     }
 }
 
@@ -766,7 +999,7 @@ pub async fn check_quota_and_reserve(
     pool: &PgPool,
     account_id: &str,
     vm_id: &str,
-    vcpus: f64,
+    vcpus: i64,
     mem_mb: i32,
 ) -> std::result::Result<(), QuotaError> {
     let mut tx = pool.begin().await.map_err(DbError::from)?;
@@ -784,12 +1017,12 @@ pub async fn check_quota_and_reserve(
             .map_err(DbError::from)?
             .ok_or_else(|| QuotaError::Exceeded("account not found".into()))?;
 
-    let vcpu_limit: f64 = account_row.get::<i32, _>("vcpu_limit") as f64;
+    let vcpu_limit: i64 = account_row.get("vcpu_limit");
     let mem_limit: i32 = account_row.get("mem_limit_mb");
     let vm_limit: i32 = account_row.get("vm_limit");
 
     let usage_row = sqlx::query(
-        "SELECT COALESCE(SUM(vcpus),0)::float8 AS used_vcpus,
+        "SELECT COALESCE(SUM(vcpus),0)::bigint AS used_vcpus,
                 COALESCE(SUM(memory_mb),0)::int AS used_mem,
                 COUNT(*)::int AS used_vms
          FROM vms
@@ -800,7 +1033,7 @@ pub async fn check_quota_and_reserve(
     .await
     .map_err(DbError::from)?;
 
-    let used_vcpus: f64 = usage_row.get("used_vcpus");
+    let used_vcpus: i64 = usage_row.get("used_vcpus");
     let used_mem: i32 = usage_row.get("used_mem");
     let used_vms: i32 = usage_row.get("used_vms");
 
@@ -852,10 +1085,10 @@ pub struct VmEventRow {
 
 pub async fn get_vm_by_name(pool: &PgPool, account_id: &str, name: &str) -> Result<Option<VmRow>> {
     let row = sqlx::query(
-        "SELECT id, account_id, name, status, subdomain, vcpus, memory_mb,
+        "SELECT id, account_id, name, status, subdomain, vcpus, memory_mb, disk_mb, bandwidth_mbps,
          kernel_path, rootfs_path, overlay_path, real_init, ip_address, exposed_port, tap_device, pid,
-         socket_path, host_id, created_at, last_started_at
-         FROM vms WHERE account_id = $1 AND name = $2",
+         socket_path, host_id, base_image, cloned_from, disk_usage_mb, created_at, last_started_at,
+         placement_strategy, required_labels FROM vms WHERE account_id = $1 AND name = $2",
     )
     .bind(account_id)
     .bind(name)
@@ -920,6 +1153,23 @@ pub async fn rename_vm(
 pub async fn update_vm_port(pool: &PgPool, vm_id: &str, exposed_port: i32) -> Result<()> {
     sqlx::query("UPDATE vms SET exposed_port = $1 WHERE id = $2")
         .bind(exposed_port)
+        .bind(vm_id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+pub async fn update_vm_resources(
+    pool: &PgPool,
+    vm_id: &str,
+    vcpus: i64,
+    memory_mb: i32,
+    bandwidth_mbps: i32,
+) -> Result<()> {
+    sqlx::query("UPDATE vms SET vcpus = $1, memory_mb = $2, bandwidth_mbps = $3 WHERE id = $4")
+        .bind(vcpus)
+        .bind(memory_mb)
+        .bind(bandwidth_mbps)
         .bind(vm_id)
         .execute(pool)
         .await?;
@@ -1104,13 +1354,11 @@ pub async fn list_ssh_keys(pool: &PgPool, account_id: &str) -> Result<Vec<SshKey
 }
 
 pub async fn delete_ssh_key(pool: &PgPool, id: &str, account_id: &str) -> Result<bool> {
-    let res = sqlx::query(
-        "DELETE FROM ssh_keys WHERE id = $1 AND account_id = $2",
-    )
-    .bind(id)
-    .bind(account_id)
-    .execute(pool)
-    .await?;
+    let res = sqlx::query("DELETE FROM ssh_keys WHERE id = $1 AND account_id = $2")
+        .bind(id)
+        .bind(account_id)
+        .execute(pool)
+        .await?;
     Ok(res.rows_affected() > 0)
 }
 
@@ -1118,12 +1366,10 @@ pub async fn get_account_id_by_key_fingerprint(
     pool: &PgPool,
     fingerprint: &str,
 ) -> Result<Option<String>> {
-    let row = sqlx::query(
-        "SELECT account_id FROM ssh_keys WHERE fingerprint = $1",
-    )
-    .bind(fingerprint)
-    .fetch_optional(pool)
-    .await?;
+    let row = sqlx::query("SELECT account_id FROM ssh_keys WHERE fingerprint = $1")
+        .bind(fingerprint)
+        .fetch_optional(pool)
+        .await?;
     Ok(row.map(|r| r.get("account_id")))
 }
 

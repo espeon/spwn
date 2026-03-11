@@ -276,7 +276,7 @@ func (a *App) accountView() string {
 	} else {
 		acc := *a.account
 		b.WriteString("  " + styleTitle.Render(acc.Email) + "\n\n")
-		b.WriteString("  " + progressBar("vcpus", 0, acc.VcpuLimit, a.width-4) + "\n")
+		b.WriteString("  " + progressBar("vcpus", 0, int(acc.VcpuLimit/1000), a.width-4) + "\n")
 		b.WriteString("  " + progressBar("ram", 0, acc.MemLimitMb/1024, a.width-4) + "\n")
 		b.WriteString("  " + progressBar("vms", 0, acc.VmLimit, a.width-4) + "\n")
 	}
@@ -338,8 +338,7 @@ func (a *App) updateNewVM(msg tea.Msg) (tea.Model, tea.Cmd) {
 				case 0:
 					a.newVMName += ch
 				case 1:
-					// allow digits and one decimal point
-					if (ch >= "0" && ch <= "9") || (ch == "." && !strings.Contains(a.newVMVcpus, ".")) {
+					if ch >= "0" && ch <= "9" {
 						a.newVMVcpus += ch
 					}
 				case 2:
@@ -355,7 +354,7 @@ func (a *App) updateNewVM(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (a *App) submitNewVM() tea.Cmd {
 	name := a.newVMName
-	vcpus := parseFloat(a.newVMVcpus, 2)
+	vcpus := int64(parseInt(a.newVMVcpus, 1000))
 	memMb := parseInt(a.newVMMemMb, 512)
 	return func() tea.Msg {
 		vm, err := a.client.CreateVM(client.CreateVMRequest{
@@ -381,7 +380,7 @@ func (a *App) newVMView() string {
 		idx   int
 	}{
 		{"Name:   ", &a.newVMName, 0},
-		{"vCPUs:  ", &a.newVMVcpus, 1},
+		{"vCPUs(m):", &a.newVMVcpus, 1},
 		{"Memory: ", &a.newVMMemMb, 2},
 	}
 

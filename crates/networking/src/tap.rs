@@ -3,6 +3,38 @@ use std::process::Command;
 
 use crate::{NetworkError, Result, ip};
 
+// Apply tc tbf (token bucket filter) shaping to a TAP device.
+// Sets an egress rate cap (host→VM direction) which is the primary
+// noisy-neighbour vector. burst is set to 1.5x the per-10ms quota,
+// giving headroom for short bursts without allowing sustained overuse.
+// latency is 50ms — packets queued beyond this are dropped.
+pub fn apply_tc_shaping(tap: &str, mbps: u32) -> Result<()> {
+    let rate = format!("{mbps}mbit");
+    let burst_bytes = (mbps as u64 * 1_000_000 / 8 / 100) * 3 / 2;
+    let burst = format!("{burst_bytes}b");
+
+    // Clear any existing qdisc first (idempotent).
+    let _ = Command::new("tc")
+        .args(["qdisc", "del", "dev", tap, "root"])
+        .output();
+
+    let output = Command::new("tc")
+        .args([
+            "qdisc", "add", "dev", tap, "root", "tbf", "rate", &rate, "burst", &burst, "latency",
+            "50ms",
+        ])
+        .output()?;
+
+    if !output.status.success() {
+        return Err(NetworkError::CommandFailed {
+            cmd: format!("tc qdisc add dev {tap} root tbf rate {rate}"),
+            stderr: String::from_utf8_lossy(&output.stderr).into(),
+        });
+    }
+
+    Ok(())
+}
+
 #[derive(Debug, Clone)]
 pub struct TapDevice {
     pub name: String,
@@ -31,18 +63,27 @@ impl NetworkManager {
             .map(|o| o.status.success())
             .unwrap_or(false);
         if already_exists {
-            run("ip", &["tuntap", "del", "dev", &name, "mode", "tap"])
-                .map_err(|e| NetworkError::CommandFailed {
+            run("ip", &["tuntap", "del", "dev", &name, "mode", "tap"]).map_err(|e| {
+                NetworkError::CommandFailed {
                     cmd: format!("remove stale tap {name}"),
                     stderr: e.to_string(),
-                })?;
+                }
+            })?;
         }
 
         run("ip", &["tuntap", "add", "dev", &name, "mode", "tap"])?;
-        run("ip", &["addr", "add", &format!("{}/30", host_ip), "dev", &name])?;
+        run(
+            "ip",
+            &["addr", "add", &format!("{}/30", host_ip), "dev", &name],
+        )?;
         run("ip", &["link", "set", &name, "up"])?;
 
-        Ok(TapDevice { name, host_ip, guest_ip, slot })
+        Ok(TapDevice {
+            name,
+            host_ip,
+            guest_ip,
+            slot,
+        })
     }
 
     /// Tear down the TAP device for a VM.
@@ -53,9 +94,7 @@ impl NetworkManager {
 
     /// List all TAP devices matching the `fc-tap-` prefix.
     pub fn list_tap_devices(&self) -> Result<Vec<String>> {
-        let output = Command::new("ip")
-            .args(["tuntap", "show"])
-            .output()?;
+        let output = Command::new("ip").args(["tuntap", "show"]).output()?;
 
         if !output.status.success() {
             return Err(NetworkError::CommandFailed {

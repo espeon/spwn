@@ -364,8 +364,9 @@ export function IdentityPage() {
             label="vms"
           />
           <QuotaBar
-            used={usedVcpus}
-            limit={me?.vcpu_limit ?? 0}
+            used={usedVcpus / 1000}
+            limit={(me?.vcpu_limit ?? 0) / 1000}
+            limitLabel={`${(me?.vcpu_limit ?? 0) / 1000} vCPU${(me?.vcpu_limit ?? 0) / 1000 !== 1 ? "s" : ""}`}
             label="vcpus"
           />
           <QuotaBar

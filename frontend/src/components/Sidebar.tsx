@@ -1,4 +1,4 @@
-import { Server } from "lucide-react";
+import { Server, ShieldCheck } from "lucide-react";
 import {
   Sidebar,
   SidebarHeader,
@@ -12,13 +12,15 @@ import {
 import { IconGalaxy } from "@tabler/icons-react";
 import { Link } from "@tanstack/react-router";
 import { NavUser } from "@/components/NavUser";
-
-const navItems = [{ to: "/vms", icon: Server, label: "vms" }] as const;
+import { useQuery } from "@tanstack/react-query";
+import { getMe } from "@/api";
 
 const navLinkClass =
   "flex items-center gap-2 text-sidebar-foreground/70 hover:text-sidebar-foreground hover:bg-sidebar-accent data-[status=active]:bg-sidebar-accent data-[status=active]:text-sidebar-foreground duration-200 rounded-md px-2 py-2";
 
 export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
+  const { data: me } = useQuery({ queryKey: ["me"], queryFn: getMe });
+
   return (
     <Sidebar collapsible="offcanvas" {...props}>
       <SidebarHeader>
@@ -37,14 +39,20 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
       <SidebarContent>
         <SidebarGroup>
           <SidebarGroupContent className="flex flex-col gap-2">
-            {navItems.map(({ to, icon: Icon, label }) => (
-              <SidebarMenuItem key={to} className="text-white/0">
-                <Link to={to} className={navLinkClass}>
-                  <Icon className="size-5!" />
-                  <span className="text-sm font-medium">{label}</span>
+            <SidebarMenuItem className="text-white/0">
+              <Link to="/vms" className={navLinkClass}>
+                <Server className="size-5!" />
+                <span className="text-sm font-medium">vms</span>
+              </Link>
+            </SidebarMenuItem>
+            {me?.role === "superadmin" && (
+              <SidebarMenuItem className="text-white/0">
+                <Link to="/admin" className={navLinkClass}>
+                  <ShieldCheck className="size-5!" />
+                  <span className="text-sm font-medium">admin</span>
                 </Link>
               </SidebarMenuItem>
-            ))}
+            )}
           </SidebarGroupContent>
         </SidebarGroup>
       </SidebarContent>

@@ -1,5 +1,6 @@
 use std::{convert::Infallible, path::PathBuf, str::FromStr, sync::Arc};
 
+use crate::caddy_router::CaddyRouter;
 use agent_proto::agent::control_plane_server::ControlPlaneServer;
 use anyhow::Context;
 use axum::response::sse::{Event, KeepAlive, Sse};
@@ -9,7 +10,10 @@ use tokio_stream::{StreamExt, wrappers::BroadcastStream};
 use tower_http::services::{ServeDir, ServeFile};
 use tracing::info;
 
+mod admin;
+mod caddy_router;
 mod events;
+mod migration;
 mod ops;
 mod registration;
 mod scheduler;
@@ -46,7 +50,6 @@ async fn main() -> anyhow::Result<()> {
     let gateway_secret = std::env::var("GATEWAY_SECRET").ok();
     let ssh_gateway_addr =
         std::env::var("SSH_GATEWAY_ADDR").unwrap_or_else(|_| "localhost:2222".into());
-
     info!("connecting to database");
     let pool = db::connect(&database_url).await?;
     db::migrate(&pool).await?;
@@ -67,7 +70,7 @@ async fn main() -> anyhow::Result<()> {
 
     let ops = Arc::new(ops::ControlPlaneOps {
         pool: pool.clone(),
-        caddy,
+        caddy: CaddyRouter::new(caddy.clone(), Default::default()),
     });
 
     let grpc_svc = registration::ControlPlaneService {
@@ -84,9 +87,18 @@ async fn main() -> anyhow::Result<()> {
         ssh_gateway_addr,
     };
 
+    let admin_state = admin::AdminState {
+        pool: pool.clone(),
+        caddy: caddy.clone(),
+    };
+
+    // Background drain watcher.
+    tokio::spawn(migration::run_drain_watcher(pool.clone(), caddy.clone()));
+
     let http_app = axum::Router::new()
         .merge(auth::auth_router(auth_state))
         .merge(api::router(ops as Arc<dyn api::VmOps>))
+        .merge(admin::router(admin_state))
         .route("/api/events", get(vm_events_sse))
         .fallback_service(
             ServeDir::new(&frontend_path)

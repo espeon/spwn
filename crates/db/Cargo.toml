@@ -5,7 +5,7 @@ edition = "2024"
 
 [dependencies]
 common = { path = "../common" }
-sqlx = { version = "0.8", features = ["postgres", "runtime-tokio-native-tls", "migrate", "macros"] }
+sqlx = { version = "0.8", features = ["postgres", "runtime-tokio-native-tls", "migrate", "macros", "json"] }
 tokio = { version = "1", features = ["full"] }
 thiserror = "2"
 serde = { version = "1", features = ["derive"] }

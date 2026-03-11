@@ -3,7 +3,7 @@ pub mod routes;
 mod session;
 
 pub use routes::auth_router;
-pub use session::AccountId;
+pub use session::{AccountId, AdminId};
 
 pub fn validate_username(username: &str) -> Result<(), &'static str> {
     if username.len() < 3 {

@@ -101,8 +101,10 @@ impl VmManager {
         name: &str,
         subdomain: &str,
         image: &str,
-        vcpus: f64,
+        vcpus: i64,
         memory_mb: i32,
+        disk_mb: i32,
+        bandwidth_mbps: i32,
         exposed_port: i32,
         ip_address: &str,
     ) -> anyhow::Result<()> {
@@ -118,7 +120,7 @@ impl VmManager {
         let real_init = read_image_init(&self.images_dir, image);
 
         let overlay_path = self.overlay_dir.join(format!("{vm_id}.ext4"));
-        overlay::provision_overlay(&overlay_path, overlay::DEFAULT_OVERLAY_SIZE_MB)
+        overlay::provision_overlay(&overlay_path, disk_mb as u64)
             .with_context(|| format!("provision overlay for vm {vm_id}"))?;
 
         db::create_vm(
@@ -130,17 +132,29 @@ impl VmManager {
                 subdomain: subdomain.to_string(),
                 vcpus,
                 memory_mb,
+                disk_mb,
+                bandwidth_mbps,
                 kernel_path: self.kernel_path.to_string_lossy().into(),
                 rootfs_path: rootfs_path.to_string_lossy().into(),
                 overlay_path: overlay_path.to_string_lossy().into(),
                 real_init,
                 ip_address: ip_address.to_string(),
                 exposed_port,
+                base_image: image.to_string(),
+                cloned_from: None,
+                placement_strategy: "best_fit".into(),
+                required_labels: None,
             },
         )
         .await?;
 
         db::set_vm_host(&self.pool, vm_id, &self.host_id).await?;
+
+        let usage = overlay::measure_overlay_usage_mb(&overlay_path);
+        db::update_disk_usage_mb(&self.pool, vm_id, usage)
+            .await
+            .ok();
+
         Ok(())
     }
 
@@ -170,7 +184,7 @@ impl VmManager {
 
         let overlay_p = std::path::Path::new(overlay_path);
         if !overlay_p.exists() {
-            overlay::provision_overlay(overlay_p, overlay::DEFAULT_OVERLAY_SIZE_MB)
+            overlay::provision_overlay(overlay_p, vm.disk_mb as u64)
                 .with_context(|| format!("provision overlay for vm {vm_id}"))?;
         }
 
@@ -179,6 +193,8 @@ impl VmManager {
             .networking
             .allocate_tap(slot)
             .context("allocate TAP device")?;
+        networking::tap::apply_tc_shaping(&tap.name, vm.bandwidth_mbps as u32)
+            .with_context(|| format!("apply tc shaping to {}", tap.name))?;
 
         let jail_id = make_jail_id(vm_id)?;
 
@@ -187,7 +203,11 @@ impl VmManager {
             .chroot_base_dir(&self.chroot_base_dir)
             .exec_in_new_pid_ns()
             .daemonize()
-            .cgroup_version(fctools::vmm::arguments::jailer::JailerCgroupVersion::V2);
+            .cgroup_version(fctools::vmm::arguments::jailer::JailerCgroupVersion::V2)
+            .cgroup("cpu.weight", format!("{}", cpu_weight(vm.vcpus)))
+            .cgroup("cpu.max", cpu_max(vm.vcpus))
+            .cgroup("memory.max", memory_max(vm.memory_mb))
+            .cgroup("memory.swap.max", "0");
         let executor = JailedVmmExecutor::new(vmm_args, jailer_args, FlatVirtualPathResolver);
 
         let ownership = VmmOwnershipModel::Downgraded {
@@ -260,7 +280,7 @@ impl VmManager {
                 ],
                 pmem_devices: vec![],
                 machine_configuration: MachineConfiguration {
-                    vcpu_count: vm.vcpus.ceil() as u8,
+                    vcpu_count: ((vm.vcpus + 999) / 1000).clamp(1, 255) as u8,
                     mem_size_mib: vm.memory_mb as usize,
                     smt: None,
                     track_dirty_pages: Some(true),
@@ -300,9 +320,6 @@ impl VmManager {
                 0
             },
         );
-
-        apply_cpu_quota(vm_id, vm.vcpus)
-            .unwrap_or_else(|e| warn!("could not apply cpu quota for vm {vm_id}: {e}"));
 
         db::set_vm_running(
             &self.pool,
@@ -364,6 +381,18 @@ impl VmManager {
                     },
                 ])
                 .await;
+
+            if let Some(ref overlay_path) = vm.overlay_path {
+                if let Err(e) = persist_overlay_from_jail(
+                    &self.jail_root_path(vm_id),
+                    std::path::Path::new(overlay_path),
+                )
+                .await
+                {
+                    warn!("failed to persist overlay for vm {vm_id}: {e}");
+                }
+            }
+
             let _ = fc_vm.cleanup().await;
         } else {
             if let Some(pid) = vm.pid {
@@ -446,41 +475,85 @@ impl VmManager {
         let mem_path = jail_root.join(&mem_filename);
 
         let mut running = self.running.lock().await;
-        let mut fc_vm = running
-            .remove(vm_id)
-            .ok_or_else(|| anyhow!("vm {vm_id} is not in running set"))?;
-        drop(running);
+        let result = if let Some(mut fc_vm) = running.remove(vm_id) {
+            drop(running);
 
-        let result = async {
-            fc_vm.pause().await.map_err(|e| anyhow!("pause VM: {e}"))?;
+            let r = async {
+                fc_vm.pause().await.map_err(|e| anyhow!("pause VM: {e}"))?;
 
-            let snap_res = fc_vm
-                .get_resource_system_mut()
-                .create_resource(&snap_virtual, ResourceType::Produced)
-                .context("create snapshot resource")?;
-            let mem_res = fc_vm
-                .get_resource_system_mut()
-                .create_resource(&mem_virtual, ResourceType::Produced)
-                .context("create mem resource")?;
+                let snap_res = fc_vm
+                    .get_resource_system_mut()
+                    .create_resource(&snap_virtual, ResourceType::Produced)
+                    .context("create snapshot resource")?;
+                let mem_res = fc_vm
+                    .get_resource_system_mut()
+                    .create_resource(&mem_virtual, ResourceType::Produced)
+                    .context("create mem resource")?;
 
-            fc_vm
-                .create_snapshot(CreateSnapshot {
-                    snapshot_type: Some(SnapshotType::Full),
-                    snapshot: snap_res,
-                    mem_file: mem_res,
-                })
+                fc_vm
+                    .create_snapshot(CreateSnapshot {
+                        snapshot_type: Some(SnapshotType::Full),
+                        snapshot: snap_res,
+                        mem_file: mem_res,
+                    })
+                    .await
+                    .map_err(|e| anyhow!("create snapshot: {e}"))?;
+
+                fc_vm
+                    .resume()
+                    .await
+                    .map_err(|e| anyhow!("resume VM: {e}"))?;
+                Ok::<(), anyhow::Error>(())
+            }
+            .await;
+
+            self.running.lock().await.insert(vm_id.to_string(), fc_vm);
+            r
+        } else {
+            drop(running);
+            // Fallback: VM not in running set (agent was restarted). Drive the
+            // firecracker API directly over the unix socket.
+            let socket = vm
+                .socket_path
+                .as_deref()
+                .ok_or_else(|| anyhow!("vm {vm_id} has no socket path (was agent restarted?)"))?;
+            let snap_str = snap_virtual.to_string_lossy().into_owned();
+            let mem_str = mem_virtual.to_string_lossy().into_owned();
+
+            let r = async {
+                fc_api_call(
+                    socket,
+                    "PATCH",
+                    "/vm",
+                    serde_json::json!({"state": "Paused"}),
+                )
                 .await
-                .map_err(|e| anyhow!("create snapshot: {e}"))?;
-
-            fc_vm
-                .resume()
+                .context("pause VM")?;
+                fc_api_call(
+                    socket,
+                    "PUT",
+                    "/snapshot/create",
+                    serde_json::json!({
+                        "snapshot_type": "Full",
+                        "snapshot_path": snap_str,
+                        "mem_file_path": mem_str,
+                    }),
+                )
                 .await
-                .map_err(|e| anyhow!("resume VM: {e}"))?;
-            Ok::<(), anyhow::Error>(())
-        }
-        .await;
+                .context("create snapshot")?;
+                Ok::<(), anyhow::Error>(())
+            }
+            .await;
 
-        self.running.lock().await.insert(vm_id.to_string(), fc_vm);
+            let _ = fc_api_call(
+                socket,
+                "PATCH",
+                "/vm",
+                serde_json::json!({"state": "Resumed"}),
+            )
+            .await;
+            r
+        };
 
         result?;
 
@@ -545,6 +618,8 @@ impl VmManager {
             .networking
             .allocate_tap(slot)
             .context("allocate TAP device")?;
+        networking::tap::apply_tc_shaping(&tap.name, vm.bandwidth_mbps as u32)
+            .with_context(|| format!("apply tc shaping to {}", tap.name))?;
 
         let jail_id = make_jail_id(&vm.id)?;
 
@@ -553,7 +628,11 @@ impl VmManager {
             .chroot_base_dir(&self.chroot_base_dir)
             .exec_in_new_pid_ns()
             .daemonize()
-            .cgroup_version(fctools::vmm::arguments::jailer::JailerCgroupVersion::V2);
+            .cgroup_version(fctools::vmm::arguments::jailer::JailerCgroupVersion::V2)
+            .cgroup("cpu.weight", format!("{}", cpu_weight(vm.vcpus)))
+            .cgroup("cpu.max", cpu_max(vm.vcpus))
+            .cgroup("memory.max", memory_max(vm.memory_mb))
+            .cgroup("memory.swap.max", "0");
         let executor = JailedVmmExecutor::new(vmm_args, jailer_args, FlatVirtualPathResolver);
 
         let ownership = VmmOwnershipModel::Downgraded {
@@ -627,7 +706,7 @@ impl VmManager {
                 drives: vec![],
                 pmem_devices: vec![],
                 machine_configuration: MachineConfiguration {
-                    vcpu_count: vm.vcpus.ceil() as u8,
+                    vcpu_count: ((vm.vcpus + 999) / 1000).clamp(1, 255) as u8,
                     mem_size_mib: vm.memory_mb as usize,
                     smt: None,
                     track_dirty_pages: Some(true),
@@ -664,9 +743,6 @@ impl VmManager {
                 0
             });
 
-        apply_cpu_quota(&vm.id, vm.vcpus)
-            .unwrap_or_else(|e| warn!("could not apply cpu quota for vm {}: {e}", vm.id));
-
         db::set_vm_running(
             &self.pool,
             &vm.id,
@@ -689,12 +765,236 @@ impl VmManager {
         Ok(())
     }
 
+    pub async fn clone_vm(
+        &self,
+        source_vm_id: &str,
+        new_vm_id: &str,
+        account_id: &str,
+        name: &str,
+        subdomain: &str,
+        ip_address: &str,
+        exposed_port: i32,
+        include_memory: bool,
+    ) -> anyhow::Result<()> {
+        let source = db::get_vm(&self.pool, source_vm_id)
+            .await?
+            .ok_or_else(|| anyhow!("source vm not found: {source_vm_id}"))?;
+
+        if matches!(
+            source.status.as_str(),
+            "starting" | "stopping" | "snapshotting"
+        ) {
+            return Err(anyhow!(
+                "source vm is in transitional state: {}",
+                source.status
+            ));
+        }
+        if include_memory && source.status != "running" {
+            return Err(anyhow!(
+                "include_memory requires source vm to be running (status: {})",
+                source.status
+            ));
+        }
+
+        // 1. If include_memory, take a snapshot of the source VM first.
+        //    Note: the clone's guest kernel retains the source's IP/ARP state;
+        //    users may need to reconfigure networking inside the guest.
+        let source_snap = if include_memory {
+            Some(
+                self.take_snapshot(source_vm_id, Some(format!("clone-source-{new_vm_id}")))
+                    .await
+                    .context("take snapshot of source before clone")?,
+            )
+        } else {
+            None
+        };
+
+        // 2. Copy the source overlay to the new VM's overlay path.
+        let source_overlay = source
+            .overlay_path
+            .as_deref()
+            .ok_or_else(|| anyhow!("source vm {source_vm_id} has no overlay"))?;
+        let new_overlay_path = self.overlay_dir.join(format!("{new_vm_id}.ext4"));
+        copy_sparse(source_overlay, &new_overlay_path)
+            .await
+            .context("copy overlay")?;
+
+        // 3. Create the new VM DB record, sharing rootfs/real_init with the source.
+        db::create_vm(
+            &self.pool,
+            &db::NewVm {
+                id: new_vm_id.to_string(),
+                account_id: account_id.to_string(),
+                name: name.to_string(),
+                subdomain: subdomain.to_string(),
+                vcpus: source.vcpus,
+                memory_mb: source.memory_mb,
+                disk_mb: source.disk_mb,
+                bandwidth_mbps: source.bandwidth_mbps,
+                kernel_path: self.kernel_path.to_string_lossy().into(),
+                rootfs_path: source.rootfs_path.clone(),
+                overlay_path: new_overlay_path.to_string_lossy().into(),
+                real_init: source.real_init.clone(),
+                ip_address: ip_address.to_string(),
+                exposed_port,
+                base_image: source.base_image.clone(),
+                cloned_from: Some(source_vm_id.to_string()),
+                placement_strategy: source.placement_strategy.clone(),
+                required_labels: source.required_labels.clone(),
+            },
+        )
+        .await?;
+        db::set_vm_host(&self.pool, new_vm_id, &self.host_id).await?;
+
+        let usage = overlay::measure_overlay_usage_mb(&new_overlay_path);
+        db::update_disk_usage_mb(&self.pool, new_vm_id, usage)
+            .await
+            .ok();
+
+        // 4. If include_memory, copy the snapshot files and restore the clone.
+        if let Some(snap) = source_snap {
+            let new_snap_id = uuid::Uuid::new_v4().to_string();
+            let new_snap_path = self.snapshot_dir.join(format!("{new_snap_id}.snap"));
+            let new_mem_path = self.snapshot_dir.join(format!("{new_snap_id}.mem"));
+
+            tokio::fs::copy(&snap.snapshot_path, &new_snap_path)
+                .await
+                .context("copy snapshot file")?;
+            tokio::fs::copy(&snap.mem_path, &new_mem_path)
+                .await
+                .context("copy mem file")?;
+
+            let size_bytes = new_snap_path.metadata().map(|m| m.len()).unwrap_or(0)
+                + new_mem_path.metadata().map(|m| m.len()).unwrap_or(0);
+
+            db::create_snapshot(
+                &self.pool,
+                &db::NewSnapshot {
+                    id: new_snap_id.clone(),
+                    vm_id: new_vm_id.to_string(),
+                    label: Some("cloned".into()),
+                    snapshot_path: new_snap_path.to_string_lossy().into(),
+                    mem_path: new_mem_path.to_string_lossy().into(),
+                    size_bytes: size_bytes as i64,
+                },
+            )
+            .await?;
+
+            self.restore_snapshot(new_vm_id, &new_snap_id).await?;
+        }
+
+        info!("cloned vm {source_vm_id} → {new_vm_id} (include_memory={include_memory})");
+        Ok(())
+    }
+
+    /// Migrate a VM to this host from another agent.
+    ///
+    /// Downloads the overlay file from the source agent's snapshot HTTP server,
+    /// then creates the VM record pointing to the local overlay copy.
+    /// The VM starts in `stopped` state; the caller can start it afterwards.
+    pub async fn migrate_vm(
+        &self,
+        vm_id: &str,
+        source_snapshot_url: &str,
+        account_id: &str,
+        name: &str,
+        subdomain: &str,
+        vcpus: i64,
+        memory_mb: i32,
+        disk_mb: i32,
+        bandwidth_mbps: i32,
+        ip_address: &str,
+        exposed_port: i32,
+        image: &str,
+        agent_secret: &str,
+    ) -> anyhow::Result<()> {
+        let rootfs_path = self.images_dir.join(format!("{image}.sqfs"));
+        if !rootfs_path.exists() {
+            return Err(anyhow!(
+                "image '{image}' not found on target host (expected {})",
+                rootfs_path.display()
+            ));
+        }
+
+        let real_init = read_image_init(&self.images_dir, image);
+
+        let local_overlay = self.overlay_dir.join(format!("{vm_id}.ext4"));
+        download_file(
+            &format!("{source_snapshot_url}/overlay/{vm_id}"),
+            &local_overlay,
+            agent_secret,
+        )
+        .await
+        .context("download overlay from source agent")?;
+
+        db::create_vm(
+            &self.pool,
+            &db::NewVm {
+                id: vm_id.to_string(),
+                account_id: account_id.to_string(),
+                name: name.to_string(),
+                subdomain: subdomain.to_string(),
+                vcpus,
+                memory_mb,
+                disk_mb,
+                bandwidth_mbps,
+                kernel_path: self.kernel_path.to_string_lossy().into(),
+                rootfs_path: rootfs_path.to_string_lossy().into(),
+                overlay_path: local_overlay.to_string_lossy().into(),
+                real_init,
+                ip_address: ip_address.to_string(),
+                exposed_port,
+                base_image: image.to_string(),
+                cloned_from: None,
+                placement_strategy: "best_fit".into(),
+                required_labels: None,
+            },
+        )
+        .await?;
+
+        db::set_vm_host(&self.pool, vm_id, &self.host_id).await?;
+
+        let usage = overlay::measure_overlay_usage_mb(&local_overlay);
+        db::update_disk_usage_mb(&self.pool, vm_id, usage)
+            .await
+            .ok();
+
+        info!("migrated vm {vm_id} to this host from {source_snapshot_url}");
+        Ok(())
+    }
+
     fn jail_root_path(&self, vm_id: &str) -> PathBuf {
         jail_root_path(&self.chroot_base_dir, &self.installation, vm_id)
     }
 
     fn jail_socket_path(&self, vm_id: &str) -> PathBuf {
         self.jail_root_path(vm_id).join("fc.sock")
+    }
+
+    pub async fn resize_cpu(&self, vm_id: &str, vcpus: i64) -> anyhow::Result<()> {
+        let weight = cpu_weight(vcpus);
+        let path = format!("/sys/fs/cgroup/firecracker/{vm_id}/cpu.weight");
+        tokio::fs::write(&path, format!("{weight}\n"))
+            .await
+            .with_context(|| format!("write {path}"))?;
+        Ok(())
+    }
+
+    pub async fn resize_bandwidth(&self, vm_id: &str, bandwidth_mbps: i32) -> anyhow::Result<()> {
+        let vm = db::get_vm(&self.pool, vm_id)
+            .await?
+            .ok_or_else(|| anyhow!("vm not found: {vm_id}"))?;
+
+        if vm.status != "running" {
+            return Err(anyhow!("vm {vm_id} is not running"));
+        }
+
+        let slot = ip_to_slot(&vm.ip_address)?;
+        let tap = networking::tap::tap_name(slot);
+        networking::tap::apply_tc_shaping(&tap, bandwidth_mbps as u32)
+            .with_context(|| format!("apply tc shaping to {tap}"))?;
+
+        Ok(())
     }
 }
 
@@ -713,19 +1013,24 @@ fn jail_root_path(
     chroot_base_dir.join(fc_name).join(vm_id).join("root")
 }
 
-// Write the cgroup v2 cpu.max throttle for a VM.
-// cpu.max format: "$quota $period" where quota/period are in microseconds.
-fn apply_cpu_quota(vm_id: &str, vcpus: f64) -> anyhow::Result<()> {
-    let cgroup_cpu_max = format!("/sys/fs/cgroup/firecracker/{vm_id}/cpu.max");
-    std::fs::write(&cgroup_cpu_max, cpu_max_value(vcpus))
-        .with_context(|| format!("write {cgroup_cpu_max}"))?;
-    Ok(())
+fn cpu_weight(millis: i64) -> u64 {
+    (millis / 10).clamp(1, 10000) as u64
 }
 
-fn cpu_max_value(vcpus: f64) -> String {
-    let period_us: u64 = 100_000;
-    let quota_us = (vcpus * period_us as f64).round() as u64;
-    format!("{quota_us} {period_us}")
+// CFS period in microseconds (100ms — the kernel default).
+const CPU_PERIOD_US: i64 = 100_000;
+
+// Produces a `cpu.max` value for cgroupv2.
+// Format: "<quota_us> <period_us>"
+// quota = millis * period / 1000, clamped to at least 1000µs so the kernel
+// never rejects the value as too small.
+fn cpu_max(millis: i64) -> String {
+    let quota = (millis * CPU_PERIOD_US / 1000).max(1000);
+    format!("{quota} {CPU_PERIOD_US}")
+}
+
+fn memory_max(memory_mb: i32) -> String {
+    ((memory_mb as i64) * 1024 * 1024).max(0).to_string()
 }
 
 fn ip_to_slot(guest_ip: &str) -> anyhow::Result<u32> {
@@ -781,11 +1086,149 @@ fn kill_pid(pid: i32) {
     let _ = signal::kill(Pid::from_raw(pid), signal::Signal::SIGKILL);
 }
 
+async fn copy_sparse(src: &str, dst: &std::path::Path) -> anyhow::Result<()> {
+    if let Some(parent) = dst.parent() {
+        tokio::fs::create_dir_all(parent).await?;
+    }
+    let status = tokio::process::Command::new("cp")
+        .args(["--sparse=always", src, &dst.to_string_lossy()])
+        .status()
+        .await
+        .context("run cp --sparse=always")?;
+    if !status.success() {
+        anyhow::bail!("cp --sparse=always failed: {src} -> {}", dst.display());
+    }
+    Ok(())
+}
+
+async fn fc_api_call(
+    socket_path: &str,
+    method: &str,
+    route: &str,
+    body: serde_json::Value,
+) -> anyhow::Result<()> {
+    use bytes::Bytes;
+    use http::Uri;
+    use http_body_util::{BodyExt, Full};
+    use hyper::Request;
+    use hyper_client_sockets::{connector::UnixConnector, tokio::TokioBackend, uri::UnixUri};
+    use hyper_util::client::legacy::Client;
+    use hyper_util::rt::TokioExecutor;
+
+    let client = Client::builder(TokioExecutor::new())
+        .build::<_, Full<Bytes>>(UnixConnector::<TokioBackend>::new());
+    let uri = Uri::unix(socket_path, route).map_err(|e| anyhow!("uri: {e}"))?;
+    let body_bytes = Bytes::from(serde_json::to_vec(&body)?);
+    let req = Request::builder()
+        .method(method)
+        .uri(uri)
+        .header("content-type", "application/json")
+        .body(Full::new(body_bytes))
+        .map_err(|e| anyhow!("build request: {e}"))?;
+
+    let resp = client
+        .request(req)
+        .await
+        .map_err(|e| anyhow!("request: {e}"))?;
+    let status = resp.status();
+    if !status.is_success() && status.as_u16() != 204 {
+        let bytes = resp.into_body().collect().await?.to_bytes();
+        return Err(anyhow!(
+            "firecracker API {} {}: {}",
+            method,
+            route,
+            String::from_utf8_lossy(&bytes)
+        ));
+    }
+    Ok(())
+}
+
+// Copy the overlay ext4 from the jailer chroot back to the canonical overlay
+// path so that changes made inside the VM survive across stop/start cycles and
+// are visible to clone operations.
+//
+// fctools uses HardLinkedOrCopied when moving resources into the jail. On the
+// same filesystem the file is hard-linked (same inode, writes are shared
+// automatically). On different filesystems it falls back to a full copy, making
+// the jail file the only place where writes land. This function handles the
+// cross-filesystem case by copying the jail file back before cleanup removes it.
+async fn persist_overlay_from_jail(
+    jail_root: &std::path::Path,
+    canonical: &std::path::Path,
+) -> anyhow::Result<()> {
+    let filename = canonical
+        .file_name()
+        .ok_or_else(|| anyhow!("overlay path has no filename"))?;
+    let jail_overlay = jail_root.join(filename);
+
+    if !jail_overlay.exists() {
+        return Ok(());
+    }
+
+    let jail_meta = std::fs::metadata(&jail_overlay).context("stat jail overlay")?;
+    let canon_meta = std::fs::metadata(canonical).context("stat canonical overlay")?;
+
+    use std::os::unix::fs::MetadataExt;
+    if jail_meta.ino() == canon_meta.ino() && jail_meta.dev() == canon_meta.dev() {
+        // Same inode — hard-linked, already in sync.
+        return Ok(());
+    }
+
+    tokio::fs::copy(&jail_overlay, canonical)
+        .await
+        .with_context(|| {
+            format!(
+                "copy overlay {} -> {}",
+                jail_overlay.display(),
+                canonical.display()
+            )
+        })?;
+
+    Ok(())
+}
+
 fn read_image_init(images_dir: &std::path::Path, name: &str) -> String {
     let sidecar = images_dir.join(format!("{name}.init"));
     std::fs::read_to_string(&sidecar)
         .map(|s| s.trim().to_string())
         .unwrap_or_else(|_| "/sbin/init".into())
+}
+
+/// Download a remote file to `dest` using a bearer token for auth.
+async fn download_file(
+    url: &str,
+    dest: &std::path::Path,
+    bearer_token: &str,
+) -> anyhow::Result<()> {
+    use tokio::io::AsyncWriteExt;
+
+    if let Some(parent) = dest.parent() {
+        tokio::fs::create_dir_all(parent).await?;
+    }
+
+    let resp = reqwest::Client::new()
+        .get(url)
+        .bearer_auth(bearer_token)
+        .send()
+        .await
+        .with_context(|| format!("GET {url}"))?;
+
+    if !resp.status().is_success() {
+        return Err(anyhow!("GET {url}: HTTP {}", resp.status()));
+    }
+
+    let body = resp
+        .bytes()
+        .await
+        .with_context(|| format!("read body from {url}"))?;
+
+    tokio::fs::File::create(dest)
+        .await
+        .with_context(|| format!("create {}", dest.display()))?
+        .write_all(&body)
+        .await?;
+
+    Ok(())
 }
 
 #[cfg(test)]
@@ -795,7 +1238,8 @@ mod tests {
     use fctools::vmm::installation::VmmInstallation;
 
     use super::{
-        cpu_max_value, ip_to_slot, jail_root_path, make_jail_id, read_image_init, read_jailer_pid,
+        cpu_max, cpu_weight, ip_to_slot, jail_root_path, make_jail_id, memory_max, read_image_init,
+        read_jailer_pid,
     };
 
     fn installation(fc_bin: &str) -> VmmInstallation {
@@ -955,27 +1399,73 @@ mod tests {
 
     // ── read_image_init ───────────────────────────────────────────────────────
 
-    // ── cpu_max_value ─────────────────────────────────────────────────────────
+    // ── cpu_weight / cpu_max ──────────────────────────────────────────────────
 
     #[test]
-    fn cpu_max_value_full_core() {
-        assert_eq!(cpu_max_value(1.0), "100000 100000");
+    fn cpu_weight_one_full_core() {
+        assert_eq!(cpu_weight(1000), 100);
     }
 
     #[test]
-    fn cpu_max_value_half_core() {
-        assert_eq!(cpu_max_value(0.5), "50000 100000");
+    fn cpu_weight_half_core() {
+        assert_eq!(cpu_weight(500), 50);
     }
 
     #[test]
-    fn cpu_max_value_two_cores() {
-        assert_eq!(cpu_max_value(2.0), "200000 100000");
+    fn cpu_weight_two_cores() {
+        assert_eq!(cpu_weight(2000), 200);
     }
 
     #[test]
-    fn cpu_max_value_rounds_to_nearest_microsecond() {
-        // 0.333... * 100_000 = 33_333.3 -> rounds to 33_333
-        assert_eq!(cpu_max_value(1.0 / 3.0), "33333 100000");
+    fn cpu_weight_clamps_to_minimum() {
+        assert_eq!(cpu_weight(0), 1);
+        assert_eq!(cpu_weight(5), 1);
+    }
+
+    #[test]
+    fn cpu_weight_clamps_to_maximum() {
+        assert_eq!(cpu_weight(200_000), 10000);
+    }
+
+    // ── memory_max ────────────────────────────────────────────────────────────
+
+    #[test]
+    fn memory_max_512mb() {
+        assert_eq!(memory_max(512), format!("{}", 512 * 1024 * 1024));
+    }
+
+    #[test]
+    fn memory_max_1gb() {
+        assert_eq!(memory_max(1024), format!("{}", 1024 * 1024 * 1024));
+    }
+
+    #[test]
+    fn memory_max_zero_clamps() {
+        assert_eq!(memory_max(0), "0");
+    }
+
+    #[test]
+    fn cpu_max_one_full_core() {
+        // 1000 millicpus → 100ms quota per 100ms period = 1 full core
+        assert_eq!(cpu_max(1000), "100000 100000");
+    }
+
+    #[test]
+    fn cpu_max_half_core() {
+        assert_eq!(cpu_max(500), "50000 100000");
+    }
+
+    #[test]
+    fn cpu_max_two_cores() {
+        // 2000 millicpus → 200ms quota per 100ms period = 2 cores
+        assert_eq!(cpu_max(2000), "200000 100000");
+    }
+
+    #[test]
+    fn cpu_max_clamps_to_minimum_quota() {
+        // very small allocations must still produce a kernel-acceptable value
+        assert_eq!(cpu_max(0), "1000 100000");
+        assert_eq!(cpu_max(5), "1000 100000");
     }
 
     // ── read_image_init ───────────────────────────────────────────────────────
