@@ -193,7 +193,9 @@ impl VmManager {
             .daemonize()
             .cgroup_version(fctools::vmm::arguments::jailer::JailerCgroupVersion::V2)
             .cgroup("cpu.weight", format!("{}", cpu_weight(vm.vcpus)))
-            .cgroup("cpu.max", cpu_max(vm.vcpus));
+            .cgroup("cpu.max", cpu_max(vm.vcpus))
+            .cgroup("memory.max", memory_max(vm.memory_mb))
+            .cgroup("memory.swap.max", "0");
         let executor = JailedVmmExecutor::new(vmm_args, jailer_args, FlatVirtualPathResolver);
 
         let ownership = VmmOwnershipModel::Downgraded {
@@ -614,7 +616,9 @@ impl VmManager {
             .daemonize()
             .cgroup_version(fctools::vmm::arguments::jailer::JailerCgroupVersion::V2)
             .cgroup("cpu.weight", format!("{}", cpu_weight(vm.vcpus)))
-            .cgroup("cpu.max", cpu_max(vm.vcpus));
+            .cgroup("cpu.max", cpu_max(vm.vcpus))
+            .cgroup("memory.max", memory_max(vm.memory_mb))
+            .cgroup("memory.swap.max", "0");
         let executor = JailedVmmExecutor::new(vmm_args, jailer_args, FlatVirtualPathResolver);
 
         let ownership = VmmOwnershipModel::Downgraded {
@@ -984,6 +988,10 @@ fn cpu_max(millis: i64) -> String {
     format!("{quota} {CPU_PERIOD_US}")
 }
 
+fn memory_max(memory_mb: i32) -> String {
+    ((memory_mb as i64) * 1024 * 1024).max(0).to_string()
+}
+
 fn ip_to_slot(guest_ip: &str) -> anyhow::Result<u32> {
     let parts: Vec<&str> = guest_ip.split('.').collect();
     if parts.len() != 4 {
@@ -1189,7 +1197,7 @@ mod tests {
     use fctools::vmm::installation::VmmInstallation;
 
     use super::{
-        cpu_max, cpu_weight, ip_to_slot, jail_root_path, make_jail_id, read_image_init,
+        cpu_max, cpu_weight, ip_to_slot, jail_root_path, make_jail_id, memory_max, read_image_init,
         read_jailer_pid,
     };
 
@@ -1376,6 +1384,23 @@ mod tests {
     #[test]
     fn cpu_weight_clamps_to_maximum() {
         assert_eq!(cpu_weight(200_000), 10000);
+    }
+
+    // ── memory_max ────────────────────────────────────────────────────────────
+
+    #[test]
+    fn memory_max_512mb() {
+        assert_eq!(memory_max(512), format!("{}", 512 * 1024 * 1024));
+    }
+
+    #[test]
+    fn memory_max_1gb() {
+        assert_eq!(memory_max(1024), format!("{}", 1024 * 1024 * 1024));
+    }
+
+    #[test]
+    fn memory_max_zero_clamps() {
+        assert_eq!(memory_max(0), "0");
     }
 
     #[test]

@@ -4,6 +4,13 @@ use agent_proto::agent::{
     HeartbeatRequest, RegisterRequest, control_plane_client::ControlPlaneClient,
 };
 use anyhow::Context;
+use axum::{
+    Router,
+    extract::{Path, State},
+    http::{HeaderMap, StatusCode},
+    response::IntoResponse,
+    routing::get,
+};
 use fctools::vmm::installation::VmmInstallation;
 use networking::NetworkManager;
 use tonic::transport::Channel;
@@ -98,6 +105,45 @@ fn load_or_create_host_id() -> anyhow::Result<String> {
     Ok(id)
 }
 
+#[derive(Clone)]
+struct SnapshotServerState {
+    overlay_dir: PathBuf,
+    agent_secret: String,
+}
+
+async fn serve_overlay(
+    State(state): State<SnapshotServerState>,
+    Path(vm_id): Path<String>,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    let authed = headers
+        .get("authorization")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "))
+        .map(|t| t == state.agent_secret)
+        .unwrap_or(false);
+
+    if !authed {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+
+    // Sanitize: vm_id must be a UUID (no path traversal).
+    if vm_id.contains('/') || vm_id.contains("..") {
+        return StatusCode::BAD_REQUEST.into_response();
+    }
+
+    let path = state.overlay_dir.join(format!("{vm_id}.ext4"));
+    match tokio::fs::read(&path).await {
+        Ok(bytes) => (
+            StatusCode::OK,
+            [("content-type", "application/octet-stream")],
+            bytes,
+        )
+            .into_response(),
+        Err(_) => StatusCode::NOT_FOUND.into_response(),
+    }
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     dotenvy::dotenv().ok();
@@ -120,6 +166,11 @@ async fn main() -> anyhow::Result<()> {
         .expect("AGENT_PUBLIC_ADDR must be set (e.g. http://localhost:4000)");
     let control_plane_url = std::env::var("CONTROL_PLANE_URL")
         .expect("CONTROL_PLANE_URL must be set (e.g. http://localhost:5000)");
+    let snapshot_listen_addr =
+        std::env::var("SNAPSHOT_LISTEN_ADDR").unwrap_or_else(|_| "0.0.0.0:4001".into());
+    let snapshot_public_addr =
+        std::env::var("SNAPSHOT_PUBLIC_ADDR").unwrap_or_else(|_| "http://localhost:4001".into());
+    let agent_secret = std::env::var("AGENT_SECRET").unwrap_or_default();
 
     let kernel_path: PathBuf = std::env::var("KERNEL_PATH")
         .expect("KERNEL_PATH must be set")
@@ -156,6 +207,7 @@ async fn main() -> anyhow::Result<()> {
 
     networking::iptables::enable_ip_forwarding()?;
     networking::iptables::setup(&external_iface)?;
+    setup_cgroup_controllers()?;
 
     for dir in [&overlay_dir, &images_dir, &snapshot_dir] {
         std::fs::create_dir_all(dir).with_context(|| format!("create dir: {}", dir.display()))?;
@@ -188,7 +240,23 @@ async fn main() -> anyhow::Result<()> {
     tokio::spawn(reconcile::run_reconciliation(manager.clone()));
     tokio::spawn(health::run_health_checks(manager.clone()));
 
-    // register with control plane
+    // Snapshot HTTP server — serves overlay files to peer agents for migration.
+    let snap_state = SnapshotServerState {
+        overlay_dir: overlay_dir.clone(),
+        agent_secret: agent_secret.clone(),
+    };
+    let snap_app = Router::new()
+        .route("/overlay/{vm_id}", get(serve_overlay))
+        .with_state(snap_state);
+    let snap_listener = tokio::net::TcpListener::bind(&snapshot_listen_addr).await?;
+    info!("snapshot HTTP server listening on {snapshot_listen_addr}");
+    tokio::spawn(async move {
+        if let Err(e) = axum::serve(snap_listener, snap_app).await {
+            tracing::error!("snapshot HTTP server error: {e}");
+        }
+    });
+
+    // Register with control plane.
     let cp_channel = Channel::from_shared(control_plane_url.clone())
         .context("parse control plane URL")?
         .connect_lazy();
@@ -199,19 +267,20 @@ async fn main() -> anyhow::Result<()> {
             host_id: host_id.clone(),
             name: host_name.clone(),
             address: agent_public_addr.clone(),
-            vcpu_total: num_cpus(),
+            vcpu_total: num_cpus() as u64 * 1000,
             mem_total_mb: total_mem_mb(),
             images_dir: images_dir.to_string_lossy().into(),
             overlay_dir: overlay_dir.to_string_lossy().into(),
             snapshot_dir: snapshot_dir.to_string_lossy().into(),
             kernel_path: kernel_path.to_string_lossy().into(),
+            snapshot_addr: snapshot_public_addr.clone(),
         })
         .await
         .context("register with control plane")?;
 
     info!("registered with control plane at {control_plane_url}");
 
-    // heartbeat loop
+    // Heartbeat loop — reports real resource usage.
     let hb_manager = manager.clone();
     let hb_host_id = host_id.clone();
     let hb_cp_url = control_plane_url.clone();
@@ -222,29 +291,29 @@ async fn main() -> anyhow::Result<()> {
         let mut client = ControlPlaneClient::new(channel);
         loop {
             tokio::time::sleep(Duration::from_secs(10)).await;
-            let running_ids = match db::get_vms_by_host(&hb_manager.pool, &hb_host_id).await {
-                Ok(vms) => vms
-                    .into_iter()
-                    .filter(|v| v.status == "running")
-                    .map(|v| v.id)
-                    .collect(),
-                Err(_) => vec![],
-            };
+            let vms = db::get_vms_by_host(&hb_manager.pool, &hb_host_id)
+                .await
+                .unwrap_or_default();
+            let running: Vec<_> = vms.into_iter().filter(|v| v.status == "running").collect();
+            let vcpu_used: u64 = running.iter().map(|v| v.vcpus as u64).sum();
+            let mem_used_mb: u32 = running.iter().map(|v| v.memory_mb as u32).sum();
+            let running_ids = running.into_iter().map(|v| v.id).collect();
             let _ = client
                 .heartbeat(HeartbeatRequest {
                     host_id: hb_host_id.clone(),
                     running_vm_ids: running_ids,
-                    vcpu_used: 0,
-                    mem_used_mb: 0,
+                    vcpu_used,
+                    mem_used_mb,
                 })
                 .await;
         }
     });
 
-    // gRPC server
+    // gRPC server.
     use agent_proto::agent::host_agent_server::HostAgentServer;
     let svc = agent::HostAgentService {
         manager: manager.clone(),
+        agent_secret,
     };
     let listen: std::net::SocketAddr = agent_listen_addr
         .parse()
@@ -262,6 +331,23 @@ async fn main() -> anyhow::Result<()> {
     }
 
     manager.shutdown().await;
+    Ok(())
+}
+
+// Enable cpu and memory controllers in the jailer cgroup hierarchy.
+// cgroupv2 requires the controllers to be listed in cgroup.subtree_control
+// of every ancestor before child cgroups can use them.
+fn setup_cgroup_controllers() -> anyhow::Result<()> {
+    let cgroup_dir = std::path::Path::new("/sys/fs/cgroup/firecracker");
+    std::fs::create_dir_all(cgroup_dir)
+        .with_context(|| format!("create cgroup dir {}", cgroup_dir.display()))?;
+    let subtree_control = cgroup_dir.join("cgroup.subtree_control");
+    std::fs::write(&subtree_control, "+cpu +memory").with_context(|| {
+        format!(
+            "enable cpu+memory controllers in {}",
+            subtree_control.display()
+        )
+    })?;
     Ok(())
 }
 
