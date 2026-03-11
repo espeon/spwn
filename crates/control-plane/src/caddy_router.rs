@@ -37,13 +37,12 @@ impl CaddyRouter {
             .clone()
     }
 
-    pub fn default_client(&self) -> &CaddyClient {
-        &self.default
-    }
-
     /// All distinct `(region, client)` pairs: `(None, default)` first, then named regions.
     pub fn all_regions(&self) -> impl Iterator<Item = (Option<&str>, &CaddyClient)> {
-        std::iter::once((None, &self.default))
-            .chain(self.region_clients.iter().map(|(r, c)| (Some(r.as_str()), c)))
+        std::iter::once((None, &self.default)).chain(
+            self.region_clients
+                .iter()
+                .map(|(r, c)| (Some(r.as_str()), c)),
+        )
     }
 }

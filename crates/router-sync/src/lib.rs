@@ -44,6 +44,10 @@ impl CaddyClient {
         }
     }
 
+    pub fn base_url(&self) -> &str {
+        &self.base
+    }
+
     /// Write the stopped page template to disk. Call once at startup before any routes are set.
     pub fn write_static_files(&self) -> Result<()> {
         std::fs::create_dir_all(&self.static_files_path)?;

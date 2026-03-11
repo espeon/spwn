@@ -2,10 +2,10 @@ use anyhow::anyhow;
 use tonic::transport::Channel;
 use tracing::{error, info};
 
+use crate::caddy_router::CaddyRouter;
 use agent_proto::agent::{
     MigrateVmRequest, StopVmRequest, TakeSnapshotRequest, host_agent_client::HostAgentClient,
 };
-use router_sync::CaddyClient;
 
 use crate::scheduler;
 
@@ -26,7 +26,7 @@ async fn agent_client_for_host(host: &db::HostRow) -> anyhow::Result<HostAgentCl
 /// 5. Rebuild caddy route (VM is stopped after migration; caller starts it).
 pub async fn migrate_vm(
     pool: &db::PgPool,
-    _caddy: &CaddyClient,
+    _caddy: &CaddyRouter,
     vm_id: &str,
     target_host_id: &str,
 ) -> anyhow::Result<()> {
@@ -136,7 +136,7 @@ pub async fn migrate_vm(
 
 /// Background drain task: periodically checks for draining hosts and migrates
 /// their VMs to other active hosts.
-pub async fn run_drain_watcher(pool: db::PgPool, caddy: CaddyClient) {
+pub async fn run_drain_watcher(pool: db::PgPool, caddy: CaddyRouter) {
     let mut interval = tokio::time::interval(std::time::Duration::from_secs(30));
     loop {
         interval.tick().await;
@@ -146,7 +146,7 @@ pub async fn run_drain_watcher(pool: db::PgPool, caddy: CaddyClient) {
     }
 }
 
-async fn drain_tick(pool: &db::PgPool, caddy: &CaddyClient) -> anyhow::Result<()> {
+async fn drain_tick(pool: &db::PgPool, caddy: &CaddyRouter) -> anyhow::Result<()> {
     let all_hosts = db::list_hosts(pool).await?;
     let draining: Vec<_> = all_hosts
         .iter()

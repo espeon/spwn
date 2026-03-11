@@ -41,6 +41,22 @@ tunnel:
     podman run --rm --network=host docker.io/cloudflare/cloudflared:latest \
         tunnel --no-autoupdate run --token "$CLOUDFLARE_TUNNEL_TOKEN"
 
+# start the full compose stack (postgres, caddy, control-plane, ssh-gateway)
+up:
+    podman compose up -d
+
+# stop the full compose stack
+down:
+    podman compose down
+
+# rebuild and restart the full compose stack
+up-build:
+    podman compose up -d --build
+
+# stream logs from the compose stack (ctrl-c to stop)
+logs *args:
+    podman compose logs -f {{args}}
+
 # start postgres via podman compose in the background
 pg:
     podman compose up -d postgres
@@ -54,7 +70,7 @@ pg-reset:
     podman compose down -v
     podman compose up -d postgres
     @echo "waiting for postgres to accept connections..."
-    @until podman compose exec postgres pg_isready -U $POSTGRES_USER -d $POSTGRES_DB -q 2>/dev/null; do sleep 1; done
+    @until podman compose exec postgres pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB} -q 2>/dev/null; do sleep 1; done
     @echo "postgres ready — run 'just cp' to start the control-plane and apply migrations"
 
 # start caddy in the background (logs to /tmp/caddy-dev.log)

@@ -1,16 +1,13 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use agent_proto::agent::{
-    host_agent_client::HostAgentClient,
-    WatchRequest,
-};
+use agent_proto::agent::{WatchRequest, host_agent_client::HostAgentClient};
 use serde::Serialize;
 use tokio::sync::{Mutex, broadcast};
 use tonic::transport::Channel;
 use tracing::{error, info, warn};
 
-use router_sync::CaddyClient;
+use crate::caddy_router::CaddyRouter;
 
 #[derive(Clone, Debug, Serialize)]
 pub struct VmStatusEvent {
@@ -23,13 +20,13 @@ pub type EventBroadcast = broadcast::Sender<VmStatusEvent>;
 #[derive(Clone)]
 pub struct EventWatcher {
     pool: db::PgPool,
-    caddy: CaddyClient,
+    caddy: CaddyRouter,
     watched: Arc<Mutex<std::collections::HashSet<String>>>,
     pub tx: EventBroadcast,
 }
 
 impl EventWatcher {
-    pub fn new(pool: db::PgPool, caddy: CaddyClient) -> Self {
+    pub fn new(pool: db::PgPool, caddy: CaddyRouter) -> Self {
         let (tx, _) = broadcast::channel(256);
         Self {
             pool,
@@ -61,7 +58,7 @@ async fn watch_loop(
     host_id: String,
     address: String,
     pool: db::PgPool,
-    caddy: CaddyClient,
+    caddy: CaddyRouter,
     tx: EventBroadcast,
     watcher: EventWatcher,
 ) {
@@ -94,24 +91,28 @@ async fn connect_and_stream(
     host_id: &str,
     address: &str,
     pool: &db::PgPool,
-    caddy: &CaddyClient,
+    caddy: &CaddyRouter,
     tx: &EventBroadcast,
 ) -> anyhow::Result<()> {
-    let channel = Channel::from_shared(address.to_string())?
-        .connect()
-        .await?;
+    let channel = Channel::from_shared(address.to_string())?.connect().await?;
     let mut client = HostAgentClient::new(channel);
     let mut stream = client.watch_events(WatchRequest {}).await?.into_inner();
 
     while let Some(event) = stream.message().await? {
         let vm_id = &event.vm_id;
-        db::log_event(pool, vm_id, &event.event, Some(&event.detail)).await.ok();
+        db::log_event(pool, vm_id, &event.event, Some(&event.detail))
+            .await
+            .ok();
 
         let new_status = match event.event.as_str() {
             "started" => {
                 if let Ok(Some(vm)) = db::get_vm(pool, vm_id).await {
                     db::set_vm_status(pool, vm_id, "running").await.ok();
-                    if let Err(e) = caddy.set_vm_route(&vm.subdomain, &vm.ip_address, vm.exposed_port as u16).await {
+                    let client = caddy_for_vm(caddy, pool, &vm).await;
+                    if let Err(e) = client
+                        .set_vm_route(&vm.subdomain, &vm.ip_address, vm.exposed_port as u16)
+                        .await
+                    {
                         error!("failed to set caddy route for {vm_id}: {e}");
                     }
                 }
@@ -120,7 +121,8 @@ async fn connect_and_stream(
             "stopped" => {
                 if let Ok(Some(vm)) = db::get_vm(pool, vm_id).await {
                     db::set_vm_status(pool, vm_id, "stopped").await.ok();
-                    if let Err(e) = caddy.set_stopped_route(&vm.subdomain).await {
+                    let client = caddy_for_vm(caddy, pool, &vm).await;
+                    if let Err(e) = client.set_stopped_route(&vm.subdomain).await {
                         error!("failed to set stopped caddy route for {vm_id}: {e}");
                     }
                 }
@@ -129,7 +131,8 @@ async fn connect_and_stream(
             "crashed" => {
                 if let Ok(Some(vm)) = db::get_vm(pool, vm_id).await {
                     db::set_vm_status(pool, vm_id, "error").await.ok();
-                    if let Err(e) = caddy.set_stopped_route(&vm.subdomain).await {
+                    let client = caddy_for_vm(caddy, pool, &vm).await;
+                    if let Err(e) = client.set_stopped_route(&vm.subdomain).await {
                         error!("failed to update caddy route for crashed {vm_id}: {e}");
                     }
                 }
@@ -149,4 +152,20 @@ async fn connect_and_stream(
     }
 
     Ok(())
+}
+
+// Resolve the correct CaddyClient for a VM by looking up its host's region.
+async fn caddy_for_vm(
+    caddy: &CaddyRouter,
+    pool: &db::PgPool,
+    vm: &db::VmRow,
+) -> router_sync::CaddyClient {
+    let host = match vm.host_id.as_deref() {
+        Some(id) => db::get_host(pool, id).await.ok().flatten(),
+        None => None,
+    };
+    match &host {
+        Some(h) => caddy.for_host(h),
+        None => caddy.for_region(None),
+    }
 }

@@ -7,14 +7,12 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 
-use router_sync::CaddyClient;
-
-use crate::migration;
+use crate::{caddy_router::CaddyRouter, migration};
 
 #[derive(Clone)]
 pub struct AdminState {
     pub pool: db::PgPool,
-    pub caddy: CaddyClient,
+    pub caddy: CaddyRouter,
 }
 
 pub fn router(state: AdminState) -> Router {
@@ -59,10 +57,7 @@ impl From<db::HostRow> for HostResponse {
     }
 }
 
-async fn list_hosts(
-    _admin: auth::AdminId,
-    State(state): State<AdminState>,
-) -> impl IntoResponse {
+async fn list_hosts(_admin: auth::AdminId, State(state): State<AdminState>) -> impl IntoResponse {
     match db::list_hosts(&state.pool).await {
         Ok(hosts) => Json(
             hosts
@@ -135,7 +130,10 @@ async fn set_host_status(
     match body.status.as_str() {
         "active" | "draining" | "offline" => {}
         _ => {
-            return (StatusCode::BAD_REQUEST, "status must be active, draining, or offline")
+            return (
+                StatusCode::BAD_REQUEST,
+                "status must be active, draining, or offline",
+            )
                 .into_response();
         }
     }
