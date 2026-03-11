@@ -86,7 +86,7 @@ func (a *App) vmDetailView() string {
 	b.WriteString(styleDim.Render(strings.Repeat("─", a.width)) + "\n\n")
 
 	// Status line
-	b.WriteString(fmt.Sprintf("  %s %s   %gvc   %dMB   %s\n\n",
+	b.WriteString(fmt.Sprintf("  %s %s   %dvc   %dMB   %s\n\n",
 		statusDot(vm.Status),
 		statusColor(vm.Status).Render(vm.Status),
 		vm.Vcpus, vm.MemoryMb,

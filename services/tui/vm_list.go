@@ -107,7 +107,7 @@ func (a *App) vmListView() string {
 			dot := statusDot(vm.Status)
 			name := nameStyle.Render(vm.Name)
 			status := statusColor(vm.Status).Render(fmt.Sprintf("%-10s", vm.Status))
-			res := styleDim.Render(fmt.Sprintf("%gvc  %dMB", vm.Vcpus, vm.MemoryMb))
+			res := styleDim.Render(fmt.Sprintf("%dvc  %dMB", vm.Vcpus, vm.MemoryMb))
 			sub := styleDim.Render(vm.Subdomain)
 			b.WriteString(fmt.Sprintf("  %s%s %s  %s  %s  %s\n",
 				cursor, dot, name, status, res, sub))
