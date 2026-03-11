@@ -24,12 +24,13 @@ impl ControlPlane for ControlPlaneService {
             id: r.host_id.clone(),
             name: r.name,
             address: r.address.clone(),
-            vcpu_total: r.vcpu_total as i32,
+            vcpu_total: r.vcpu_total as i64,
             mem_total_mb: r.mem_total_mb as i32,
             images_dir: r.images_dir,
             overlay_dir: r.overlay_dir,
             snapshot_dir: r.snapshot_dir,
             kernel_path: r.kernel_path,
+            snapshot_addr: r.snapshot_addr,
         };
         match db::upsert_host(&self.pool, &host).await {
             Ok(_) => {
@@ -49,13 +50,14 @@ impl ControlPlane for ControlPlaneService {
         req: Request<HeartbeatRequest>,
     ) -> Result<Response<HeartbeatResponse>, Status> {
         let r = req.into_inner();
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_secs() as i64;
-        db::update_host_heartbeat(&self.pool, &r.host_id, now)
-            .await
-            .ok();
+        db::update_host_heartbeat(
+            &self.pool,
+            &r.host_id,
+            r.vcpu_used as i64,
+            r.mem_used_mb as i32,
+        )
+        .await
+        .ok();
         Ok(Response::new(HeartbeatResponse {}))
     }
 }

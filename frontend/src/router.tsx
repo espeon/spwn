@@ -19,6 +19,7 @@ import { ThemesPage } from "./pages/ThemesPage";
 import { SshKeysPage } from "./pages/SshKeysPage";
 import { CliAuthPage } from "./pages/CliAuthPage";
 import HomePage from "./pages/HomePage";
+import { AdminPage } from "./pages/AdminPage";
 
 const rootRoute = createRootRoute({
   component: RootLayout,
@@ -129,6 +130,22 @@ const accountSshKeysRoute = createRoute({
   component: SshKeysPage,
 });
 
+const adminRoute = createRoute({
+  getParentRoute: () => authedRoute,
+  path: "/admin",
+  beforeLoad: async () => {
+    const me = await queryClient.fetchQuery({
+      queryKey: ["me"],
+      queryFn: getMe,
+      staleTime: 30_000,
+    });
+    if (me.role !== "superadmin") {
+      throw redirect({ to: "/vms" });
+    }
+  },
+  component: AdminPage,
+});
+
 const routeTree = rootRoute.addChildren([
   indexRoute,
   loginRoute,
@@ -137,6 +154,7 @@ const routeTree = rootRoute.addChildren([
   authedRoute.addChildren([
     vmListRoute,
     vmDetailRoute,
+    adminRoute,
     accountRoute.addChildren([
       accountIndexRoute,
       accountIdentityRoute,

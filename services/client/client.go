@@ -126,7 +126,7 @@ type Account struct {
 	DisplayName string `json:"display_name"`
 	Theme       string `json:"theme"`
 	VmLimit     int    `json:"vm_limit"`
-	VcpuLimit   int    `json:"vcpu_limit"`
+	VcpuLimit   int64 `json:"vcpu_limit"`
 	MemLimitMb  int    `json:"mem_limit_mb"`
 }
 
@@ -145,8 +145,8 @@ type VM struct {
 	Name        string  `json:"name"`
 	Status      string  `json:"status"`
 	Subdomain   string  `json:"subdomain"`
-	Vcpus       float64 `json:"vcpus"`
-	MemoryMb    int     `json:"memory_mb"`
+	Vcpus       int64 `json:"vcpus"`
+	MemoryMb    int   `json:"memory_mb"`
 	IPAddress   string  `json:"ip_address"`
 	ExposedPort int     `json:"exposed_port"`
 	Image       string  `json:"image"`
@@ -155,7 +155,7 @@ type VM struct {
 type CreateVMRequest struct {
 	Name        string  `json:"name"`
 	Image       string  `json:"image,omitempty"`
-	Vcpus       float64 `json:"vcpus,omitempty"`
+	Vcpus       int64 `json:"vcpus,omitempty"`
 	MemoryMb    int     `json:"memory_mb,omitempty"`
 	ExposedPort int     `json:"exposed_port,omitempty"`
 }
@@ -223,6 +223,19 @@ func (c *Client) DeleteVM(id string) error {
 
 func (c *Client) PatchVM(id string, req PatchVMRequest) (VM, error) {
 	resp, err := c.do("PATCH", "/api/vms/"+id, req)
+	if err != nil {
+		return VM{}, err
+	}
+	return decode[VM](resp)
+}
+
+type CloneVMRequest struct {
+	Name          string `json:"name"`
+	IncludeMemory bool   `json:"include_memory"`
+}
+
+func (c *Client) CloneVM(id string, req CloneVMRequest) (VM, error) {
+	resp, err := c.do("POST", "/api/vms/"+id+"/clone", req)
 	if err != nil {
 		return VM{}, err
 	}

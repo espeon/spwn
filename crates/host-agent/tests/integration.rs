@@ -105,14 +105,14 @@ async fn setup() -> (db::PgPool, Arc<host_agent::manager::VmManager>) {
 }
 
 /// Insert a minimal account + VM row directly, bypassing the API layer.
-async fn insert_test_vm(pool: &db::PgPool, vcpus: f64, memory_mb: i32) -> (String, String) {
+async fn insert_test_vm(pool: &db::PgPool, vcpus: i64, memory_mb: i32) -> (String, String) {
     let account_id = uuid::Uuid::new_v4().to_string();
     let vm_id = uuid::Uuid::new_v4().to_string();
 
     sqlx::query(
         "INSERT INTO accounts (id, email, password_hash, username, theme,
          vcpu_limit, mem_limit_mb, vm_limit, created_at)
-         VALUES ($1,$2,'hash',$2,'catppuccin-latte',8,12288,5,0)",
+         VALUES ($1,$2,'hash',$2,'catppuccin-latte',8000,12288,5,0)",
     )
     .bind(&account_id)
     .bind(format!("test-{}@example.com", &account_id[..8]))
@@ -165,7 +165,7 @@ async fn cleanup_vm(pool: &db::PgPool, vm_id: &str, account_id: &str) {
 #[ignore = "requires KVM + firecracker + jailer on host"]
 async fn test_start_vm_creates_jailed_process() {
     let (pool, manager) = setup().await;
-    let (account_id, vm_id) = insert_test_vm(&pool, 1.0, 256).await;
+    let (account_id, vm_id) = insert_test_vm(&pool, 1000, 256).await;
 
     manager.start_vm(&vm_id).await.expect("start vm");
 
@@ -193,7 +193,7 @@ async fn test_start_vm_creates_jailed_process() {
 #[ignore = "requires KVM + firecracker + jailer on host"]
 async fn test_stop_vm_releases_tap_and_clears_pid() {
     let (pool, manager) = setup().await;
-    let (account_id, vm_id) = insert_test_vm(&pool, 1.0, 256).await;
+    let (account_id, vm_id) = insert_test_vm(&pool, 1000, 256).await;
 
     manager.start_vm(&vm_id).await.expect("start vm");
     manager.stop_vm(&vm_id).await.expect("stop vm");
@@ -214,7 +214,7 @@ async fn test_stop_vm_releases_tap_and_clears_pid() {
 #[ignore = "requires KVM + firecracker + jailer on host"]
 async fn test_stop_already_stopped_vm_is_idempotent() {
     let (pool, manager) = setup().await;
-    let (account_id, vm_id) = insert_test_vm(&pool, 1.0, 256).await;
+    let (account_id, vm_id) = insert_test_vm(&pool, 1000, 256).await;
 
     // should not error on a vm that was never started
     manager
@@ -229,7 +229,7 @@ async fn test_stop_already_stopped_vm_is_idempotent() {
 #[ignore = "requires KVM + firecracker + jailer on host"]
 async fn test_take_and_restore_snapshot() {
     let (pool, manager) = setup().await;
-    let (account_id, vm_id) = insert_test_vm(&pool, 1.0, 256).await;
+    let (account_id, vm_id) = insert_test_vm(&pool, 1000, 256).await;
 
     manager.start_vm(&vm_id).await.expect("start vm");
 
@@ -270,7 +270,7 @@ async fn test_take_and_restore_snapshot() {
 #[ignore = "requires KVM + firecracker + jailer on host"]
 async fn test_snapshot_limit_enforced() {
     let (pool, manager) = setup().await;
-    let (account_id, vm_id) = insert_test_vm(&pool, 1.0, 256).await;
+    let (account_id, vm_id) = insert_test_vm(&pool, 1000, 256).await;
 
     manager.start_vm(&vm_id).await.expect("start vm");
 
@@ -300,7 +300,7 @@ async fn test_snapshot_limit_enforced() {
 #[ignore = "requires KVM + firecracker + jailer on host"]
 async fn test_delete_vm_removes_overlay() {
     let (pool, manager) = setup().await;
-    let (account_id, vm_id) = insert_test_vm(&pool, 1.0, 256).await;
+    let (account_id, vm_id) = insert_test_vm(&pool, 1000, 256).await;
 
     manager.start_vm(&vm_id).await.expect("start vm");
     manager.stop_vm(&vm_id).await.expect("stop vm");

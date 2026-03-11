@@ -4,9 +4,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"text/tabwriter"
 	"time"
 
+	"github.com/charmbracelet/huh"
+	"github.com/charmbracelet/lipgloss"
+	ltable "github.com/charmbracelet/lipgloss/table"
 	"github.com/spf13/cobra"
 	"github.com/spwn/spwn/services/client"
 )
@@ -43,26 +45,42 @@ func snapshotListCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+
 			jsonFlag, _ := cmd.Root().PersistentFlags().GetBool("json")
 			if jsonFlag {
 				return json.NewEncoder(os.Stdout).Encode(snaps)
 			}
+
 			if len(snaps) == 0 {
-				fmt.Println("no snapshots")
+				printHint(fmt.Sprintf("no snapshots for %s — take one with 'spwn snapshot take %s'", vm.Name, vm.Name))
 				return nil
 			}
-			w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-			fmt.Fprintln(w, "ID\tLABEL\tSIZE\tCREATED")
+
+			t := newTable(func(row, col int) lipgloss.Style {
+				if row == ltable.HeaderRow {
+					return styleHeader
+				}
+				if col == 2 || col == 3 {
+					return styleDim
+				}
+				return styleVal
+			})
+
+			t.Headers("ID", "LABEL", "SIZE", "CREATED")
 			for _, s := range snaps {
 				label := ""
 				if s.Label != nil {
 					label = *s.Label
 				}
-				created := time.Unix(s.CreatedAt, 0).Format("2006-01-02 15:04")
-				size := fmt.Sprintf("%.1fMB", float64(s.SizeBytes)/1024/1024)
-				fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", s.ID, label, size, created)
+				t.Row(
+					s.ID,
+					label,
+					fmt.Sprintf("%.1fMB", float64(s.SizeBytes)/1024/1024),
+					time.Unix(s.CreatedAt, 0).Format("2006-01-02 15:04"),
+				)
 			}
-			return w.Flush()
+			fmt.Println(t.Render())
+			return nil
 		},
 	}
 }
@@ -91,11 +109,12 @@ func snapshotTakeCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+
 			jsonFlag, _ := cmd.Root().PersistentFlags().GetBool("json")
 			if jsonFlag {
 				return json.NewEncoder(os.Stdout).Encode(snap)
 			}
-			fmt.Printf("snapshot taken: %s\n", snap.ID)
+			printOK(fmt.Sprintf("snapshot taken  %s", styleDim.Render(snap.ID)))
 			return nil
 		},
 	}
@@ -120,14 +139,19 @@ func snapshotRestoreCmd() *cobra.Command {
 			if err := c.RestoreSnapshot(vm.ID, args[1]); err != nil {
 				return err
 			}
-			fmt.Printf("restoring %s from %s\n", vm.Name, args[1])
+			printOK(fmt.Sprintf("restoring %s from %s",
+				styleVal.Render(vm.Name),
+				styleDim.Render(args[1]),
+			))
 			return nil
 		},
 	}
 }
 
 func snapshotDeleteCmd() *cobra.Command {
-	return &cobra.Command{
+	var force bool
+
+	cmd := &cobra.Command{
 		Use:   "delete <vm> <snapshot>",
 		Short: "delete a snapshot",
 		Args:  cobra.ExactArgs(2),
@@ -140,11 +164,32 @@ func snapshotDeleteCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+
+			if !force {
+				var confirmed bool
+				err := huh.NewConfirm().
+					Title(fmt.Sprintf("Delete snapshot %s?", args[1])).
+					Description(fmt.Sprintf("Snapshot will be permanently removed from %s.", vm.Name)).
+					Affirmative("delete").
+					Negative("cancel").
+					Value(&confirmed).
+					Run()
+				if err != nil {
+					return err
+				}
+				if !confirmed {
+					fmt.Println("aborted")
+					return nil
+				}
+			}
+
 			if err := c.DeleteSnapshot(vm.ID, args[1]); err != nil {
 				return err
 			}
-			fmt.Printf("deleted snapshot %s\n", args[1])
+			printOK(fmt.Sprintf("deleted snapshot %s", styleDim.Render(args[1])))
 			return nil
 		},
 	}
+	cmd.Flags().BoolVar(&force, "force", false, "skip confirmation")
+	return cmd
 }

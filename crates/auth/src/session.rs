@@ -69,6 +69,36 @@ impl<S: Send + Sync> FromRequestParts<S> for AccountId {
     }
 }
 
+/// Axum extractor that resolves the session/token like `AccountId` but additionally
+/// fetches the account and requires `role = 'superadmin'`. Returns 403 if not superadmin.
+#[derive(Clone, Debug)]
+pub struct AdminId(pub String);
+
+impl<S: Send + Sync> FromRequestParts<S> for AdminId {
+    type Rejection = StatusCode;
+
+    async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
+        let AccountId(account_id) = AccountId::from_request_parts(parts, state).await?;
+
+        let pool = parts
+            .extensions
+            .get::<db::PgPool>()
+            .ok_or(StatusCode::INTERNAL_SERVER_ERROR)?
+            .clone();
+
+        let account = db::get_account(&pool, &account_id)
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+            .ok_or(StatusCode::UNAUTHORIZED)?;
+
+        if account.role != "superadmin" {
+            return Err(StatusCode::FORBIDDEN);
+        }
+
+        Ok(AdminId(account_id))
+    }
+}
+
 fn unix_now() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

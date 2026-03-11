@@ -4,19 +4,29 @@ use tonic::transport::Channel;
 use tracing::{error, warn};
 
 use agent_proto::agent::{
-    CreateVmRequest, DeleteVmRequest, RestoreRequest, StartVmRequest, StopVmRequest,
-    TakeSnapshotRequest, host_agent_client::HostAgentClient,
+    CloneVmRequest, CreateVmRequest, DeleteVmRequest, ResizeBandwidthRequest, ResizeCpuRequest,
+    RestoreRequest, StartVmRequest, StopVmRequest, TakeSnapshotRequest,
+    host_agent_client::HostAgentClient,
 };
 use router_sync::CaddyClient;
 
-use crate::{scheduler, subdomain};
+use crate::{caddy_router::CaddyRouter, scheduler, subdomain};
 
 pub struct ControlPlaneOps {
     pub pool: db::PgPool,
-    pub caddy: CaddyClient,
+    pub caddy: CaddyRouter,
 }
 
 impl ControlPlaneOps {
+    async fn caddy_for_vm(&self, vm: &db::VmRow) -> CaddyClient {
+        if let Some(host_id) = &vm.host_id {
+            if let Ok(Some(h)) = db::get_host(&self.pool, host_id).await {
+                return self.caddy.for_host(&h);
+            }
+        }
+        self.caddy.for_region(None)
+    }
+
     async fn agent_client(&self, vm_id: &str) -> anyhow::Result<HostAgentClient<Channel>> {
         let vm = db::get_vm(&self.pool, vm_id)
             .await?
@@ -43,7 +53,14 @@ impl api::VmOps for ControlPlaneOps {
             .await?
             .ok_or_else(|| anyhow!("account not found: {account_id}"))?;
 
-        let host = scheduler::pick_host(&self.pool).await?;
+        let host = scheduler::pick_host(
+            &self.pool,
+            req.vcpus,
+            req.memory_mb,
+            &req.placement_strategy,
+            req.required_labels.as_ref(),
+        )
+        .await?;
         let vm_id = uuid::Uuid::new_v4().to_string();
         let used_ips = db::get_used_ips(&self.pool).await?;
         let slot = scheduler::next_free_slot(&used_ips);
@@ -64,6 +81,8 @@ impl api::VmOps for ControlPlaneOps {
                 image: req.image,
                 vcpus: req.vcpus,
                 memory_mb: req.memory_mb,
+                disk_mb: req.disk_mb,
+                bandwidth_mbps: req.bandwidth_mbps,
                 exposed_port: req.exposed_port,
                 ip_address,
             })
@@ -78,7 +97,11 @@ impl api::VmOps for ControlPlaneOps {
             .await?
             .ok_or_else(|| anyhow!("vm {vm_id} not found after creation"))?;
 
-        let _ = self.caddy.set_stopped_route(&vm.subdomain).await;
+        let _ = self
+            .caddy
+            .for_host(&host)
+            .set_stopped_route(&vm.subdomain)
+            .await;
         Ok(vm)
     }
 
@@ -143,7 +166,8 @@ impl api::VmOps for ControlPlaneOps {
         if !resp.ok {
             return Err(anyhow!("agent delete_vm failed: {}", resp.error));
         }
-        if let Err(e) = self.caddy.set_stopped_route(&vm.subdomain).await {
+        let caddy = self.caddy_for_vm(&vm).await;
+        if let Err(e) = caddy.set_stopped_route(&vm.subdomain).await {
             error!("failed to update caddy route for deleted {id}: {e}");
         }
         Ok(())
@@ -229,8 +253,9 @@ impl api::VmOps for ControlPlaneOps {
 
             db::rename_vm(&self.pool, vm_id, new_name, &new_subdomain).await?;
 
+            let caddy = self.caddy_for_vm(&current).await;
             let set_result = if current.status == "running" {
-                self.caddy
+                caddy
                     .set_vm_route(
                         &new_subdomain,
                         &current.ip_address,
@@ -238,12 +263,12 @@ impl api::VmOps for ControlPlaneOps {
                     )
                     .await
             } else {
-                self.caddy.set_stopped_route(&new_subdomain).await
+                caddy.set_stopped_route(&new_subdomain).await
             };
             if let Err(e) = set_result {
                 error!("rename: failed to set caddy route {new_subdomain}: {e}");
             }
-            if let Err(e) = self.caddy.delete_route(&old_subdomain).await {
+            if let Err(e) = caddy.delete_route(&old_subdomain).await {
                 error!("rename: failed to delete old caddy route {old_subdomain}: {e}");
             }
         }
@@ -254,8 +279,8 @@ impl api::VmOps for ControlPlaneOps {
                 .ok_or_else(|| anyhow!("vm not found: {vm_id}"))?;
             db::update_vm_port(&self.pool, vm_id, port).await?;
             if current.status == "running" {
-                if let Err(e) = self
-                    .caddy
+                let caddy = self.caddy_for_vm(&current).await;
+                if let Err(e) = caddy
                     .set_vm_route(&current.subdomain, &current.ip_address, port as u16)
                     .await
                 {
@@ -267,6 +292,129 @@ impl api::VmOps for ControlPlaneOps {
         db::get_vm(&self.pool, vm_id)
             .await?
             .ok_or_else(|| anyhow!("vm {vm_id} not found after update"))
+    }
+
+    async fn resize_resources(
+        &self,
+        vm_id: &str,
+        _account_id: &str,
+        patch: api::VmResourcePatch,
+    ) -> anyhow::Result<db::VmRow> {
+        let vm = db::get_vm(&self.pool, vm_id)
+            .await?
+            .ok_or_else(|| anyhow!("vm not found: {vm_id}"))?;
+
+        if patch.memory_mb.is_some_and(|m| m != vm.memory_mb) && vm.status == "running" {
+            return Err(anyhow!(
+                "restart required: memory changes cannot be applied to a running vm"
+            ));
+        }
+
+        let new_vcpus = patch.vcpus.unwrap_or(vm.vcpus);
+        let new_memory = patch.memory_mb.unwrap_or(vm.memory_mb);
+        let new_bandwidth = patch.bandwidth_mbps.unwrap_or(vm.bandwidth_mbps);
+
+        db::update_vm_resources(&self.pool, vm_id, new_vcpus, new_memory, new_bandwidth).await?;
+
+        if vm.status == "running" && patch.vcpus.is_some_and(|v| v != vm.vcpus) {
+            let mut agent = self.agent_client(vm_id).await?;
+            let resp = agent
+                .resize_cpu(ResizeCpuRequest {
+                    vm_id: vm_id.into(),
+                    vcpus: new_vcpus,
+                })
+                .await?
+                .into_inner();
+            if !resp.ok {
+                return Err(anyhow!("agent resize_cpu failed: {}", resp.error));
+            }
+        }
+
+        if vm.status == "running" && patch.bandwidth_mbps.is_some_and(|b| b != vm.bandwidth_mbps) {
+            let mut agent = self.agent_client(vm_id).await?;
+            let resp = agent
+                .resize_bandwidth(ResizeBandwidthRequest {
+                    vm_id: vm_id.into(),
+                    bandwidth_mbps: new_bandwidth,
+                })
+                .await?
+                .into_inner();
+            if !resp.ok {
+                return Err(anyhow!("agent resize_bandwidth failed: {}", resp.error));
+            }
+        }
+
+        db::get_vm(&self.pool, vm_id)
+            .await?
+            .ok_or_else(|| anyhow!("vm {vm_id} not found after resize"))
+    }
+
+    async fn clone_vm(
+        &self,
+        source_id: &str,
+        account_id: &str,
+        req: api::CloneVmRequest,
+    ) -> anyhow::Result<db::VmRow> {
+        let source = db::get_vm(&self.pool, source_id)
+            .await?
+            .ok_or_else(|| anyhow!("vm not found: {source_id}"))?;
+
+        if source.account_id != account_id {
+            return Err(anyhow!("vm not found: {source_id}"));
+        }
+
+        let account = db::get_account(&self.pool, account_id)
+            .await?
+            .ok_or_else(|| anyhow!("account not found: {account_id}"))?;
+
+        let host_id = source
+            .host_id
+            .as_deref()
+            .ok_or_else(|| anyhow!("source vm has no host assignment"))?;
+        let host = db::get_host(&self.pool, host_id)
+            .await?
+            .ok_or_else(|| anyhow!("host {host_id} not found"))?;
+
+        let new_vm_id = uuid::Uuid::new_v4().to_string();
+        let used_ips = db::get_used_ips(&self.pool).await?;
+        let slot = scheduler::next_free_slot(&used_ips);
+        let ip_address = format!("172.16.{slot}.2");
+        let name = req.name.clone();
+        let sub = subdomain::generate(&self.pool, &name, &account.username).await?;
+
+        let channel = Channel::from_shared(host.address.clone())?
+            .connect()
+            .await?;
+        let mut agent = HostAgentClient::new(channel);
+
+        let resp = agent
+            .clone_vm(CloneVmRequest {
+                source_vm_id: source_id.into(),
+                new_vm_id: new_vm_id.clone(),
+                account_id: account_id.into(),
+                name,
+                subdomain: sub,
+                ip_address,
+                exposed_port: source.exposed_port,
+                include_memory: req.include_memory,
+            })
+            .await?
+            .into_inner();
+
+        if !resp.ok {
+            return Err(anyhow!("agent failed to clone vm: {}", resp.error));
+        }
+
+        let vm = db::get_vm(&self.pool, &new_vm_id)
+            .await?
+            .ok_or_else(|| anyhow!("vm {new_vm_id} not found after clone"))?;
+
+        let _ = self
+            .caddy
+            .for_host(&host)
+            .set_stopped_route(&vm.subdomain)
+            .await;
+        Ok(vm)
     }
 
     async fn change_username(&self, account_id: &str, new_username: &str) -> anyhow::Result<()> {
@@ -310,12 +458,13 @@ impl api::VmOps for ControlPlaneOps {
                 }
             };
 
+            let caddy = self.caddy_for_vm(&vm).await;
             let result = if vm.status == "running" {
-                self.caddy
+                caddy
                     .set_vm_route(&entry.new_subdomain, &vm.ip_address, vm.exposed_port as u16)
                     .await
             } else {
-                self.caddy.set_stopped_route(&entry.new_subdomain).await
+                caddy.set_stopped_route(&entry.new_subdomain).await
             };
 
             if let Err(e) = result {
@@ -325,7 +474,7 @@ impl api::VmOps for ControlPlaneOps {
                 );
             }
 
-            if let Err(e) = self.caddy.delete_route(&entry.old_subdomain).await {
+            if let Err(e) = caddy.delete_route(&entry.old_subdomain).await {
                 error!(
                     "failed to delete old caddy route {} after username change: {e}",
                     entry.old_subdomain

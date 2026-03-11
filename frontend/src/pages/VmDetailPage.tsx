@@ -3,10 +3,24 @@ import { useParams, useNavigate } from "@tanstack/react-router";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { trackVmToast } from "@/hooks/useVmEvents";
-import { getVm, startVm, stopVm, snapshotVm, deleteVm, ApiError } from "@/api";
+import {
+  getVm,
+  startVm,
+  stopVm,
+  snapshotVm,
+  deleteVm,
+  cloneVm,
+  resizeVmResources,
+  listSnapshots,
+  deleteSnapshot,
+  restoreSnapshot,
+  ApiError,
+} from "@/api";
 import { StatusBadge } from "@/components/StatusBadge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import {
   Dialog,
   DialogContent,
@@ -21,6 +35,11 @@ export function VmDetailPage() {
   const navigate = useNavigate();
   const qc = useQueryClient();
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [cloneOpen, setCloneOpen] = useState(false);
+  const [cloneName, setCloneName] = useState("");
+  const [cloneMemory, setCloneMemory] = useState(false);
+  const [resizeOpen, setResizeOpen] = useState(false);
+  const [resizeVcpus, setResizeVcpus] = useState("");
 
   const {
     data: vm,
@@ -31,9 +50,15 @@ export function VmDetailPage() {
     queryFn: () => getVm(vmId),
   });
 
+  const { data: snapshots, isLoading: snapshotsLoading } = useQuery({
+    queryKey: ["snapshots", vmId],
+    queryFn: () => listSnapshots(vmId),
+  });
+
   const invalidate = () => {
     qc.invalidateQueries({ queryKey: ["vms", vmId] });
     qc.invalidateQueries({ queryKey: ["vms"] });
+    qc.invalidateQueries({ queryKey: ["snapshots", vmId] });
   };
 
   const startMutation = useMutation({
@@ -69,6 +94,54 @@ export function VmDetailPage() {
     onSuccess: () => navigate({ to: "/vms" }),
   });
 
+  const cloneMutation = useMutation({
+    mutationFn: () => cloneVm(vmId, cloneName.trim(), cloneMemory),
+    onSuccess: (newVm) => {
+      qc.invalidateQueries({ queryKey: ["vms"] });
+      setCloneOpen(false);
+      setCloneName("");
+      setCloneMemory(false);
+      toast.success(`clone "${newVm.name}" created`);
+      navigate({ to: "/vms/$vmId", params: { vmId: newVm.id } });
+    },
+    onError: (err) =>
+      toast.error(
+        `clone failed: ${err instanceof ApiError ? err.message : err.message}`,
+      ),
+  });
+
+  const resizeMutation = useMutation({
+    mutationFn: () => {
+      const vcpus = resizeVcpus ? Math.round(parseFloat(resizeVcpus) * 1000) : undefined;
+      return resizeVmResources(vmId, vcpus, undefined);
+    },
+    onSuccess: () => {
+      invalidate();
+      setResizeOpen(false);
+      toast.success("resources updated");
+    },
+    onError: (err) => toast.error(`resize failed: ${err.message}`),
+  });
+
+  const deleteSnapMutation = useMutation({
+    mutationFn: (snapId: string) => deleteSnapshot(vmId, snapId),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["snapshots", vmId] });
+      toast.success("snapshot deleted");
+    },
+    onError: (err) => toast.error(`failed to delete snapshot: ${err.message}`),
+  });
+
+  const restoreSnapMutation = useMutation({
+    mutationFn: (snapId: string) => restoreSnapshot(vmId, snapId),
+    onSuccess: () => {
+      invalidate();
+      const toastId = toast.loading("restoring snapshot...");
+      trackVmToast(vmId, toastId, "running", "vm restored", "restore failed");
+    },
+    onError: (err) => toast.error(`failed to restore: ${err.message}`),
+  });
+
   if (isLoading)
     return <p className="text-muted-foreground text-sm">loading...</p>;
 
@@ -99,9 +172,125 @@ export function VmDetailPage() {
   const canStart = vm.status === "stopped" || vm.status === "error";
   const canStop = vm.status === "running";
   const canSnapshot = vm.status === "running";
+  const canClone = vm.status === "stopped" || vm.status === "running";
+
+  function openClone() {
+    if (!vm) return console.error("VM not found");
+    setCloneName(`${vm.name}-clone`);
+    setCloneMemory(vm.status === "running");
+    setCloneOpen(true);
+  }
+
+  function openResize() {
+    if (!vm) return console.error("VM not found");
+    setResizeVcpus(String(vm.vcpus / 1000));
+    setResizeOpen(true);
+  }
 
   return (
     <>
+      <Dialog open={cloneOpen} onOpenChange={setCloneOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>clone {vm.name}</DialogTitle>
+            <DialogDescription>
+              creates a new VM with a copy of this VM's disk. if you include
+              memory, the clone will start running in the same state.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-2">
+            <div className="space-y-1.5">
+              <Label htmlFor="clone-name">clone name</Label>
+              <Input
+                id="clone-name"
+                value={cloneName}
+                onChange={(e) => setCloneName(e.target.value)}
+                placeholder="my-clone"
+                autoFocus
+              />
+            </div>
+            {vm.status === "running" && (
+              <label className="flex items-center gap-2 text-sm cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  className="rounded"
+                  checked={cloneMemory}
+                  onChange={(e) => setCloneMemory(e.target.checked)}
+                />
+                include memory state (clone starts running)
+              </label>
+            )}
+            {cloneMemory && (
+              <p className="text-xs text-muted-foreground">
+                the clone will boot with the source's network state — you may
+                need to reconfigure networking inside the guest.
+              </p>
+            )}
+          </div>
+          <DialogFooter>
+            <Button
+              variant="ghost"
+              onClick={() => setCloneOpen(false)}
+              disabled={cloneMutation.isPending}
+            >
+              cancel
+            </Button>
+            <Button
+              onClick={() => cloneMutation.mutate()}
+              disabled={!cloneName.trim() || cloneMutation.isPending}
+            >
+              {cloneMutation.isPending ? "cloning..." : "clone"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={resizeOpen} onOpenChange={setResizeOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>resize {vm.name}</DialogTitle>
+            <DialogDescription>
+              {vm.status === "running"
+                ? "cpu changes apply immediately. memory changes require a restart."
+                : "changes take effect on next start."}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-2">
+            <div className="space-y-1.5">
+              <Label htmlFor="resize-vcpus">vcpus</Label>
+              <Input
+                id="resize-vcpus"
+                type="number"
+                min="0.1"
+                step="0.1"
+                value={resizeVcpus}
+                onChange={(e) => setResizeVcpus(e.target.value)}
+                placeholder="1"
+                autoFocus
+              />
+              <p className="text-xs text-muted-foreground">
+                e.g. 0.5, 1, 2 — fractional vCPUs allowed
+              </p>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button
+              variant="ghost"
+              onClick={() => setResizeOpen(false)}
+              disabled={resizeMutation.isPending}
+            >
+              cancel
+            </Button>
+            <Button
+              onClick={() => resizeMutation.mutate()}
+              disabled={!resizeVcpus || resizeMutation.isPending}
+            >
+              {resizeMutation.isPending ? "resizing..." : "apply"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       <div className="flex items-start justify-between mb-6">
         <div>
           <div className="flex items-center gap-3 mb-1">
@@ -126,7 +315,7 @@ export function VmDetailPage() {
       <div className="grid grid-cols-2 gap-3 mb-6 sm:grid-cols-4">
         {(
           [
-            ["vcpus", vm.vcpus],
+            ["vcpus", vm.vcpus / 1000],
             ["memory", `${vm.memory_mb} mb`],
             ["ip", vm.ip_address],
             ["port", vm.exposed_port],
@@ -146,7 +335,7 @@ export function VmDetailPage() {
           <DialogHeader>
             <DialogTitle>delete {vm.name}?</DialogTitle>
             <DialogDescription>
-              this is permanent. the vm and all its data will be gone.
+              this is permanent. the vm and all its data will be gone!
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
@@ -206,6 +395,80 @@ export function VmDetailPage() {
         >
           {snapshotMutation.isPending ? "snapshotting..." : "snapshot"}
         </Button>
+        <Button
+          variant="outline"
+          onClick={openClone}
+          disabled={!canClone || isTransitioning || cloneMutation.isPending}
+        >
+          {cloneMutation.isPending ? "cloning..." : "clone"}
+        </Button>
+        <Button
+          variant="outline"
+          onClick={openResize}
+          disabled={isTransitioning || resizeMutation.isPending}
+        >
+          resize
+        </Button>
+      </div>
+
+      <div className="mt-8">
+        <h2 className="text-sm font-medium mb-3">snapshots</h2>
+        {snapshotsLoading ? (
+          <p className="text-xs text-muted-foreground">loading...</p>
+        ) : !snapshots?.length ? (
+          <p className="text-xs text-muted-foreground">no snapshots yet</p>
+        ) : (
+          <div className="space-y-2">
+            {snapshots.map((snap) => (
+              <div
+                key={snap.id}
+                className="flex items-center justify-between rounded-md border px-4 py-3"
+              >
+                <div>
+                  <p className="text-sm font-mono">
+                    {snap.label ?? snap.id.slice(0, 8)}
+                  </p>
+                  <p className="text-xs text-muted-foreground mt-0.5">
+                    {(snap.size_bytes / 1024 / 1024).toFixed(1)} mb &middot;{" "}
+                    {new Date(snap.created_at * 1000).toLocaleString()}
+                  </p>
+                </div>
+                <div className="flex gap-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() =>
+                      toast.promise(restoreSnapMutation.mutateAsync(snap.id), {
+                        loading: "restoring...",
+                        success: "restored",
+                        error: (err) => `restore failed: ${err.message}`,
+                      })
+                    }
+                    disabled={
+                      vm.status !== "stopped" ||
+                      restoreSnapMutation.isPending ||
+                      deleteSnapMutation.isPending
+                    }
+                  >
+                    restore
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => deleteSnapMutation.mutate(snap.id)}
+                    disabled={
+                      deleteSnapMutation.isPending ||
+                      restoreSnapMutation.isPending
+                    }
+                    className="text-destructive hover:text-destructive hover:bg-destructive/10"
+                  >
+                    delete
+                  </Button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
     </>
   );

@@ -5,9 +5,11 @@ import (
 	"fmt"
 	"os"
 	"strings"
-	"text/tabwriter"
 	"time"
 
+	"github.com/charmbracelet/huh"
+	"github.com/charmbracelet/lipgloss"
+	ltable "github.com/charmbracelet/lipgloss/table"
 	"github.com/spf13/cobra"
 	"github.com/spwn/spwn/services/client"
 )
@@ -25,12 +27,12 @@ func vmCmd() *cobra.Command {
 		vmDeleteCmd(),
 		vmStatusCmd(),
 		vmRenameCmd(),
+		vmCloneCmd(),
 	)
 	return cmd
 }
 
 func resolveVM(c *client.Client, nameOrID string) (client.VM, error) {
-	// Try by name first (short-circuit if it looks like a UUID).
 	if !looksLikeID(nameOrID) {
 		vms, err := c.GetVMByName(nameOrID)
 		if err == nil && len(vms) > 0 {
@@ -57,38 +59,92 @@ func vmListCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+
 			jsonFlag, _ := cmd.Root().PersistentFlags().GetBool("json")
 			if jsonFlag {
 				return json.NewEncoder(os.Stdout).Encode(vms)
 			}
-			w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-			fmt.Fprintln(w, "NAME\tSTATUS\tSUBDOMAIN\tVCPUS\tMEM")
-			for _, vm := range vms {
-				fmt.Fprintf(w, "%s\t%s\t%s\t%g\t%dMB\n",
-					vm.Name, vm.Status, vm.Subdomain, vm.Vcpus, vm.MemoryMb)
+
+			if len(vms) == 0 {
+				printHint("no VMs yet — create one with 'spwn vm create <name>'")
+				return nil
 			}
-			return w.Flush()
+
+			t := newTable(func(row, col int) lipgloss.Style {
+				if row == ltable.HeaderRow {
+					return styleHeader
+				}
+				vm := vms[row]
+				switch col {
+				case 0:
+					return statusStyle(vm.Status)
+				case 2:
+					return statusStyle(vm.Status)
+				case 3, 4:
+					return styleDim
+				}
+				return styleVal
+			})
+
+			t.Headers("", "NAME", "STATUS", "SUBDOMAIN", "VCPUS / MEM")
+			for _, vm := range vms {
+				t.Row(
+					statusSymbol(vm.Status),
+					vm.Name,
+					vm.Status,
+					vm.Subdomain,
+					fmt.Sprintf("%g / %dMB", vm.Vcpus, vm.MemoryMb),
+				)
+			}
+			fmt.Println(t.Render())
+			return nil
 		},
 	}
 }
 
 func vmCreateCmd() *cobra.Command {
-	var vcpus float64
+	var vcpus int64
 	var memMb int
 	var image string
 	var port int
 
 	cmd := &cobra.Command{
-		Use:   "create <name>",
+		Use:   "create [name]",
 		Short: "create a VM",
-		Args:  cobra.ExactArgs(1),
+		Args:  cobra.RangeArgs(0, 1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			c, err := client.NewAuthedClient()
 			if err != nil {
 				return err
 			}
+
+			name := ""
+			if len(args) == 1 {
+				name = args[0]
+			}
+
+			if name == "" {
+				form := huh.NewForm(
+					huh.NewGroup(
+						huh.NewInput().
+							Title("VM name").
+							Value(&name),
+						huh.NewInput().
+							Title("Image").
+							Value(&image),
+					),
+				)
+				if err := form.Run(); err != nil {
+					return err
+				}
+			}
+
+			if name == "" {
+				return fmt.Errorf("name is required")
+			}
+
 			vm, err := c.CreateVM(client.CreateVMRequest{
-				Name:        args[0],
+				Name:        name,
 				Image:       image,
 				Vcpus:       vcpus,
 				MemoryMb:    memMb,
@@ -97,15 +153,17 @@ func vmCreateCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+
 			jsonFlag, _ := cmd.Root().PersistentFlags().GetBool("json")
 			if jsonFlag {
 				return json.NewEncoder(os.Stdout).Encode(vm)
 			}
-			fmt.Printf("created %s (%s)\n", vm.Name, vm.ID)
+			printOK(fmt.Sprintf("created %s", styleVal.Render(vm.Name)))
+			printHint(fmt.Sprintf("start it with: spwn vm start %s", vm.Name))
 			return nil
 		},
 	}
-	cmd.Flags().Float64Var(&vcpus, "vcpus", 2, "number of vCPUs (fractional allowed, e.g. 0.5)")
+	cmd.Flags().Int64Var(&vcpus, "vcpus", 1000, "cpu in millicores (1000 = 1 vCPU, 500 = 0.5 vCPU)")
 	cmd.Flags().IntVar(&memMb, "memory", 512, "memory in MB")
 	cmd.Flags().StringVar(&image, "image", "ubuntu", "root filesystem image")
 	cmd.Flags().IntVar(&port, "port", 8080, "exposed port")
@@ -129,7 +187,7 @@ func vmStartCmd() *cobra.Command {
 			if err := c.StartVM(vm.ID); err != nil {
 				return err
 			}
-			fmt.Printf("starting %s\n", vm.Name)
+			printOK(fmt.Sprintf("starting %s", styleVal.Render(vm.Name)))
 			return nil
 		},
 	}
@@ -152,7 +210,7 @@ func vmStopCmd() *cobra.Command {
 			if err := c.StopVM(vm.ID); err != nil {
 				return err
 			}
-			fmt.Printf("stopping %s\n", vm.Name)
+			printOK(fmt.Sprintf("stopping %s", styleVal.Render(vm.Name)))
 			return nil
 		},
 	}
@@ -174,19 +232,29 @@ func vmDeleteCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+
 			if !force {
-				fmt.Printf("delete %s? [y/N] ", vm.Name)
-				var confirm string
-				fmt.Scanln(&confirm)
-				if confirm != "y" && confirm != "Y" {
+				var confirmed bool
+				err := huh.NewConfirm().
+					Title(fmt.Sprintf("Delete %s?", vm.Name)).
+					Description("This is permanent. The VM and all its data will be gone.").
+					Affirmative("delete").
+					Negative("cancel").
+					Value(&confirmed).
+					Run()
+				if err != nil {
+					return err
+				}
+				if !confirmed {
 					fmt.Println("aborted")
 					return nil
 				}
 			}
+
 			if err := c.DeleteVM(vm.ID); err != nil {
 				return err
 			}
-			fmt.Printf("deleted %s\n", vm.Name)
+			printOK(fmt.Sprintf("deleted %s", styleVal.Render(vm.Name)))
 			return nil
 		},
 	}
@@ -218,13 +286,25 @@ func vmStatusCmd() *cobra.Command {
 				}{vm, events})
 			}
 
-			fmt.Printf("%s  %s\n", vm.Name, vm.Status)
-			fmt.Printf("subdomain: %s   vcpus: %g   mem: %dMB\n",
-				vm.Subdomain, vm.Vcpus, vm.MemoryMb)
+			// Build panel content.
+			rows := []string{
+				statusDot(vm.Status) + "  " + statusBadge(vm.Status),
+				"",
+				kvLine("subdomain", vm.Subdomain),
+				kvLine("vcpus", fmt.Sprintf("%dm", vm.Vcpus)),
+				kvLine("memory", fmt.Sprintf("%dMB", vm.MemoryMb)),
+				kvLine("ip", vm.IPAddress),
+			}
+			if vm.ExposedPort > 0 {
+				rows = append(rows, kvLine("port", fmt.Sprintf("%d", vm.ExposedPort)))
+			}
+
+			fmt.Println(panel(vm.Name, strings.Join(rows, "\n")))
+
 			if len(events) > 0 {
-				fmt.Println("\nrecent events:")
+				fmt.Println(styleHeader.Render("  events"))
 				for _, e := range events {
-					ts := time.Unix(e.CreatedAt, 0).Format("2006-01-02 15:04")
+					ts := styleDim.Render(time.Unix(e.CreatedAt, 0).Format("2006-01-02 15:04"))
 					fmt.Printf("  %s  %s\n", ts, e.Event)
 				}
 			}
@@ -252,8 +332,51 @@ func vmRenameCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			fmt.Printf("renamed to %s (%s)\n", updated.Name, updated.Subdomain)
+			printOK(fmt.Sprintf("renamed to %s  %s",
+				styleVal.Render(updated.Name),
+				styleDim.Render(updated.Subdomain),
+			))
 			return nil
 		},
 	}
+}
+
+func vmCloneCmd() *cobra.Command {
+	var includeMemory bool
+
+	cmd := &cobra.Command{
+		Use:   "clone <name|id> <new-name>",
+		Short: "clone a VM",
+		Args:  cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			c, err := client.NewAuthedClient()
+			if err != nil {
+				return err
+			}
+			vm, err := resolveVM(c, args[0])
+			if err != nil {
+				return err
+			}
+			clone, err := c.CloneVM(vm.ID, client.CloneVMRequest{
+				Name:          args[1],
+				IncludeMemory: includeMemory,
+			})
+			if err != nil {
+				return err
+			}
+
+			jsonFlag, _ := cmd.Root().PersistentFlags().GetBool("json")
+			if jsonFlag {
+				return json.NewEncoder(os.Stdout).Encode(clone)
+			}
+			printOK(fmt.Sprintf("cloned %s → %s",
+				styleVal.Render(vm.Name),
+				styleVal.Render(clone.Name),
+			))
+			printHint(fmt.Sprintf("start it with: spwn vm start %s", clone.Name))
+			return nil
+		},
+	}
+	cmd.Flags().BoolVar(&includeMemory, "with-memory", false, "include memory state (source must be running; clone starts paused)")
+	return cmd
 }

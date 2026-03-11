@@ -16,6 +16,7 @@ export interface Account {
   vcpu_limit: number;
   mem_limit_mb: number;
   vm_limit: number;
+  role: string;
 }
 
 export interface UpdateProfileRequest {
@@ -52,10 +53,11 @@ class ApiError extends Error {
 }
 
 async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
-  const resp = await fetch(path, {
-    headers: { "Content-Type": "application/json", ...options.headers },
-    ...options,
-  });
+  const headers: Record<string, string> = { ...options.headers as Record<string, string> };
+  if (options.body !== undefined) {
+    headers["Content-Type"] = "application/json";
+  }
+  const resp = await fetch(path, { ...options, headers });
   if (!resp.ok) {
     const text = await resp.text().catch(() => resp.statusText);
     throw new ApiError(resp.status, text);
@@ -160,8 +162,50 @@ export function stopVm(id: string): Promise<void> {
   return request(`/api/vms/${id}/stop`, { method: "POST" });
 }
 
-export function snapshotVm(id: string): Promise<void> {
+export interface Snapshot {
+  id: string;
+  vm_id: string;
+  label: string | null;
+  size_bytes: number;
+  created_at: number;
+}
+
+export function snapshotVm(id: string): Promise<Snapshot> {
   return request(`/api/vms/${id}/snapshot`, { method: "POST" });
+}
+
+export function listSnapshots(vmId: string): Promise<Snapshot[]> {
+  return request(`/api/vms/${vmId}/snapshots`);
+}
+
+export function deleteSnapshot(vmId: string, snapId: string): Promise<void> {
+  return request(`/api/vms/${vmId}/snapshots/${snapId}`, { method: "DELETE" });
+}
+
+export function restoreSnapshot(vmId: string, snapId: string): Promise<void> {
+  return request(`/api/vms/${vmId}/restore/${snapId}`, { method: "POST" });
+}
+
+export function resizeVmResources(
+  id: string,
+  vcpus?: number,
+  memory_mb?: number,
+): Promise<Vm> {
+  return request(`/api/vms/${id}/resources`, {
+    method: "POST",
+    body: JSON.stringify({ vcpus, memory_mb }),
+  });
+}
+
+export function cloneVm(
+  id: string,
+  name: string,
+  includeMemory: boolean,
+): Promise<Vm> {
+  return request(`/api/vms/${id}/clone`, {
+    method: "POST",
+    body: JSON.stringify({ name, include_memory: includeMemory }),
+  });
 }
 
 export function cliAuthorize(code: string): Promise<void> {
@@ -202,6 +246,57 @@ export function addSshKey(name: string, public_key: string): Promise<SshKey> {
 
 export function deleteSshKey(id: string): Promise<void> {
   return request(`/api/account/keys/${id}`, { method: "DELETE" });
+}
+
+// ── admin ─────────────────────────────────────────────────────────────────────
+
+export interface Host {
+  id: string;
+  name: string;
+  address: string;
+  status: string;
+  vcpu_total: number;
+  vcpu_used: number;
+  mem_total_mb: number;
+  mem_used_mb: number;
+  labels: Record<string, string>;
+  snapshot_addr: string;
+  last_seen_at: number;
+}
+
+export function listHosts(): Promise<Host[]> {
+  return request("/api/admin/hosts");
+}
+
+export interface AdminVm {
+  id: string;
+  name: string;
+  status: string;
+  host_id: string | null;
+  account_id: string;
+  username: string;
+  vcpus: number;
+  memory_mb: number;
+  disk_usage_mb: number;
+  subdomain: string;
+}
+
+export function listAdminVms(): Promise<AdminVm[]> {
+  return request("/api/admin/vms");
+}
+
+export function setHostStatus(id: string, status: string): Promise<void> {
+  return request(`/api/admin/hosts/${id}/status`, {
+    method: "POST",
+    body: JSON.stringify({ status }),
+  });
+}
+
+export function adminMigrateVm(vmId: string, targetHostId: string): Promise<void> {
+  return request(`/api/admin/vms/${vmId}/migrate`, {
+    method: "POST",
+    body: JSON.stringify({ target_host_id: targetHostId }),
+  });
 }
 
 export { ApiError };

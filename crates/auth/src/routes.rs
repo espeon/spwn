@@ -59,8 +59,9 @@ struct MeResponse {
     has_avatar: bool,
     theme: String,
     vm_limit: i32,
-    vcpu_limit: i32,
+    vcpu_limit: i64,
     mem_limit_mb: i32,
+    role: String,
 }
 
 pub fn auth_router(state: AuthState) -> Router {
@@ -384,6 +385,7 @@ async fn me(State(state): State<AuthState>, account_id: AccountId) -> impl IntoR
             vm_limit: acc.vm_limit,
             vcpu_limit: acc.vcpu_limit,
             mem_limit_mb: acc.mem_limit_mb,
+            role: acc.role,
         })
         .into_response(),
         Ok(None) => StatusCode::UNAUTHORIZED.into_response(),

@@ -379,7 +379,7 @@ function VmRow({ vm }: { vm: Vm }) {
           <div className="flex gap-4 text-xs text-muted-foreground">
             <span className="flex items-center gap-1">
               <IconCpu size={16} />
-              {vm.vcpus} vCPU{vm.vcpus !== 1 && "s"}
+              {vm.vcpus / 1000} vCPU{vm.vcpus / 1000 > 1 && "s"}
             </span>
             <span className="flex items-center gap-1">
               <MemoryStick size={16} />

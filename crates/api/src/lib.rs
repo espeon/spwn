@@ -18,6 +18,12 @@ pub trait VmOps: Send + Sync {
         account_id: String,
         req: CreateVmRequest,
     ) -> anyhow::Result<db::VmRow>;
+    async fn clone_vm(
+        &self,
+        source_id: &str,
+        account_id: &str,
+        req: CloneVmRequest,
+    ) -> anyhow::Result<db::VmRow>;
     async fn start_vm(&self, id: &str) -> anyhow::Result<()>;
     async fn stop_vm(&self, id: &str) -> anyhow::Result<()>;
     async fn delete_vm(&self, id: &str) -> anyhow::Result<()>;
@@ -32,6 +38,12 @@ pub trait VmOps: Send + Sync {
     async fn delete_snapshot(&self, vm_id: &str, snap_id: &str) -> anyhow::Result<()>;
     async fn restore_snapshot(&self, vm_id: &str, snap_id: &str) -> anyhow::Result<()>;
     async fn change_username(&self, account_id: &str, new_username: &str) -> anyhow::Result<()>;
+    async fn resize_resources(
+        &self,
+        vm_id: &str,
+        account_id: &str,
+        patch: VmResourcePatch,
+    ) -> anyhow::Result<db::VmRow>;
     async fn update_vm(
         &self,
         vm_id: &str,
@@ -45,6 +57,12 @@ pub struct VmPatch {
     pub exposed_port: Option<i32>,
 }
 
+pub struct VmResourcePatch {
+    pub vcpus: Option<i64>,
+    pub memory_mb: Option<i32>,
+    pub bandwidth_mbps: Option<i32>,
+}
+
 #[derive(Debug, Deserialize)]
 pub struct ChangeUsernameRequest {
     pub username: String,
@@ -56,24 +74,48 @@ pub struct CreateVmRequest {
     #[serde(default = "default_image")]
     pub image: String,
     #[serde(default = "default_vcpus")]
-    pub vcpus: f64,
+    pub vcpus: i64,
     #[serde(default = "default_memory")]
     pub memory_mb: i32,
+    #[serde(default = "default_disk")]
+    pub disk_mb: i32,
+    #[serde(default = "default_bandwidth")]
+    pub bandwidth_mbps: i32,
     #[serde(default = "default_port")]
     pub exposed_port: i32,
+    #[serde(default = "default_placement_strategy")]
+    pub placement_strategy: String,
+    #[serde(default)]
+    pub required_labels: Option<serde_json::Value>,
 }
 
 fn default_image() -> String {
     "ubuntu".into()
 }
-fn default_vcpus() -> f64 {
-    1.0
+fn default_vcpus() -> i64 {
+    1000
 }
 fn default_memory() -> i32 {
     512
 }
 fn default_port() -> i32 {
     8080
+}
+fn default_disk() -> i32 {
+    5120
+}
+fn default_bandwidth() -> i32 {
+    100
+}
+fn default_placement_strategy() -> String {
+    "best_fit".into()
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CloneVmRequest {
+    pub name: String,
+    #[serde(default)]
+    pub include_memory: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -88,6 +130,13 @@ pub struct VmPatchRequest {
 }
 
 #[derive(Debug, Deserialize)]
+pub struct VmResourcePatchRequest {
+    pub vcpus: Option<i64>,
+    pub memory_mb: Option<i32>,
+    pub bandwidth_mbps: Option<i32>,
+}
+
+#[derive(Debug, Deserialize)]
 pub struct VmListQuery {
     pub name: Option<String>,
 }
@@ -98,12 +147,16 @@ struct VmResponse {
     name: String,
     status: String,
     subdomain: String,
-    vcpus: f64,
+    vcpus: i64,
     memory_mb: i32,
+    disk_mb: i32,
+    bandwidth_mbps: i32,
     ip_address: String,
     exposed_port: i32,
     image: String,
     overlay_path: Option<String>,
+    cloned_from: Option<String>,
+    disk_usage_mb: i32,
 }
 
 impl From<db::VmRow> for VmResponse {
@@ -120,10 +173,14 @@ impl From<db::VmRow> for VmResponse {
             subdomain: v.subdomain,
             vcpus: v.vcpus,
             memory_mb: v.memory_mb,
+            disk_mb: v.disk_mb,
+            bandwidth_mbps: v.bandwidth_mbps,
             ip_address: v.ip_address,
             exposed_port: v.exposed_port,
             image,
             overlay_path: v.overlay_path,
+            cloned_from: v.cloned_from,
+            disk_usage_mb: v.disk_usage_mb,
         }
     }
 }
@@ -184,6 +241,8 @@ pub fn router(ops: Arc<dyn VmOps>) -> Router {
         .route("/api/vms/{id}/snapshot", post(take_snapshot))
         .route("/api/vms/{id}/snapshots", get(list_snapshots))
         .route("/api/vms/{id}/snapshots/{snap_id}", delete(delete_snapshot))
+        .route("/api/vms/{id}/clone", post(clone_vm))
+        .route("/api/vms/{id}/resources", post(resize_resources))
         .route("/api/vms/{id}/restore/{snap_id}", post(restore_snapshot))
         .route("/api/vms/{id}/events", get(list_vm_events))
         .route("/api/account/username", post(change_username))
@@ -239,6 +298,25 @@ async fn create_vm(
     match ops.create_vm(account_id.0, req).await {
         Ok(vm) => (StatusCode::CREATED, Json(VmResponse::from(vm))).into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+async fn clone_vm(
+    State(ops): State<AppState>,
+    account_id: AccountId,
+    Path(id): Path<String>,
+    Json(req): Json<CloneVmRequest>,
+) -> impl IntoResponse {
+    match ops.clone_vm(&id, &account_id.0, req).await {
+        Ok(vm) => (StatusCode::CREATED, Json(VmResponse::from(vm))).into_response(),
+        Err(e) => {
+            let msg = e.to_string();
+            if msg.contains("quota") || msg.contains("limit") {
+                (StatusCode::UNPROCESSABLE_ENTITY, msg).into_response()
+            } else {
+                (StatusCode::INTERNAL_SERVER_ERROR, msg).into_response()
+            }
+        }
     }
 }
 
@@ -405,5 +483,37 @@ async fn patch_vm(
     match ops.update_vm(&id, &account_id.0, p).await {
         Ok(updated) => Json(VmResponse::from(updated)).into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+async fn resize_resources(
+    State(ops): State<AppState>,
+    account_id: AccountId,
+    Path(id): Path<String>,
+    Json(body): Json<VmResourcePatchRequest>,
+) -> impl IntoResponse {
+    let vm = match ops.get_vm(&id).await {
+        Ok(Some(v)) => v,
+        Ok(None) => return StatusCode::NOT_FOUND.into_response(),
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    };
+    if vm.account_id != account_id.0 {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    let p = VmResourcePatch {
+        vcpus: body.vcpus,
+        memory_mb: body.memory_mb,
+        bandwidth_mbps: body.bandwidth_mbps,
+    };
+    match ops.resize_resources(&id, &account_id.0, p).await {
+        Ok(updated) => Json(VmResponse::from(updated)).into_response(),
+        Err(e) => {
+            let msg = e.to_string();
+            if msg.contains("restart required") {
+                (StatusCode::UNPROCESSABLE_ENTITY, msg).into_response()
+            } else {
+                (StatusCode::INTERNAL_SERVER_ERROR, msg).into_response()
+            }
+        }
     }
 }

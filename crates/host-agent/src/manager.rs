@@ -103,6 +103,8 @@ impl VmManager {
         image: &str,
         vcpus: i64,
         memory_mb: i32,
+        disk_mb: i32,
+        bandwidth_mbps: i32,
         exposed_port: i32,
         ip_address: &str,
     ) -> anyhow::Result<()> {
@@ -118,7 +120,7 @@ impl VmManager {
         let real_init = read_image_init(&self.images_dir, image);
 
         let overlay_path = self.overlay_dir.join(format!("{vm_id}.ext4"));
-        overlay::provision_overlay(&overlay_path, overlay::DEFAULT_OVERLAY_SIZE_MB)
+        overlay::provision_overlay(&overlay_path, disk_mb as u64)
             .with_context(|| format!("provision overlay for vm {vm_id}"))?;
 
         db::create_vm(
@@ -130,6 +132,8 @@ impl VmManager {
                 subdomain: subdomain.to_string(),
                 vcpus,
                 memory_mb,
+                disk_mb,
+                bandwidth_mbps,
                 kernel_path: self.kernel_path.to_string_lossy().into(),
                 rootfs_path: rootfs_path.to_string_lossy().into(),
                 overlay_path: overlay_path.to_string_lossy().into(),
@@ -145,6 +149,12 @@ impl VmManager {
         .await?;
 
         db::set_vm_host(&self.pool, vm_id, &self.host_id).await?;
+
+        let usage = overlay::measure_overlay_usage_mb(&overlay_path);
+        db::update_disk_usage_mb(&self.pool, vm_id, usage)
+            .await
+            .ok();
+
         Ok(())
     }
 
@@ -174,7 +184,7 @@ impl VmManager {
 
         let overlay_p = std::path::Path::new(overlay_path);
         if !overlay_p.exists() {
-            overlay::provision_overlay(overlay_p, overlay::DEFAULT_OVERLAY_SIZE_MB)
+            overlay::provision_overlay(overlay_p, vm.disk_mb as u64)
                 .with_context(|| format!("provision overlay for vm {vm_id}"))?;
         }
 
@@ -183,6 +193,8 @@ impl VmManager {
             .networking
             .allocate_tap(slot)
             .context("allocate TAP device")?;
+        networking::tap::apply_tc_shaping(&tap.name, vm.bandwidth_mbps as u32)
+            .with_context(|| format!("apply tc shaping to {}", tap.name))?;
 
         let jail_id = make_jail_id(vm_id)?;
 
@@ -606,6 +618,8 @@ impl VmManager {
             .networking
             .allocate_tap(slot)
             .context("allocate TAP device")?;
+        networking::tap::apply_tc_shaping(&tap.name, vm.bandwidth_mbps as u32)
+            .with_context(|| format!("apply tc shaping to {}", tap.name))?;
 
         let jail_id = make_jail_id(&vm.id)?;
 
@@ -815,6 +829,8 @@ impl VmManager {
                 subdomain: subdomain.to_string(),
                 vcpus: source.vcpus,
                 memory_mb: source.memory_mb,
+                disk_mb: source.disk_mb,
+                bandwidth_mbps: source.bandwidth_mbps,
                 kernel_path: self.kernel_path.to_string_lossy().into(),
                 rootfs_path: source.rootfs_path.clone(),
                 overlay_path: new_overlay_path.to_string_lossy().into(),
@@ -830,12 +846,10 @@ impl VmManager {
         .await?;
         db::set_vm_host(&self.pool, new_vm_id, &self.host_id).await?;
 
-        if let Ok(meta) = std::fs::metadata(&new_overlay_path) {
-            let mb = (meta.len() / (1024 * 1024)) as i32;
-            db::update_disk_usage_mb(&self.pool, new_vm_id, mb)
-                .await
-                .ok();
-        }
+        let usage = overlay::measure_overlay_usage_mb(&new_overlay_path);
+        db::update_disk_usage_mb(&self.pool, new_vm_id, usage)
+            .await
+            .ok();
 
         // 4. If include_memory, copy the snapshot files and restore the clone.
         if let Some(snap) = source_snap {
@@ -887,6 +901,8 @@ impl VmManager {
         subdomain: &str,
         vcpus: i64,
         memory_mb: i32,
+        disk_mb: i32,
+        bandwidth_mbps: i32,
         ip_address: &str,
         exposed_port: i32,
         image: &str,
@@ -920,6 +936,8 @@ impl VmManager {
                 subdomain: subdomain.to_string(),
                 vcpus,
                 memory_mb,
+                disk_mb,
+                bandwidth_mbps,
                 kernel_path: self.kernel_path.to_string_lossy().into(),
                 rootfs_path: rootfs_path.to_string_lossy().into(),
                 overlay_path: local_overlay.to_string_lossy().into(),
@@ -935,6 +953,12 @@ impl VmManager {
         .await?;
 
         db::set_vm_host(&self.pool, vm_id, &self.host_id).await?;
+
+        let usage = overlay::measure_overlay_usage_mb(&local_overlay);
+        db::update_disk_usage_mb(&self.pool, vm_id, usage)
+            .await
+            .ok();
+
         info!("migrated vm {vm_id} to this host from {source_snapshot_url}");
         Ok(())
     }
@@ -953,6 +977,23 @@ impl VmManager {
         tokio::fs::write(&path, format!("{weight}\n"))
             .await
             .with_context(|| format!("write {path}"))?;
+        Ok(())
+    }
+
+    pub async fn resize_bandwidth(&self, vm_id: &str, bandwidth_mbps: i32) -> anyhow::Result<()> {
+        let vm = db::get_vm(&self.pool, vm_id)
+            .await?
+            .ok_or_else(|| anyhow!("vm not found: {vm_id}"))?;
+
+        if vm.status != "running" {
+            return Err(anyhow!("vm {vm_id} is not running"));
+        }
+
+        let slot = ip_to_slot(&vm.ip_address)?;
+        let tap = networking::tap::tap_name(slot);
+        networking::tap::apply_tc_shaping(&tap, bandwidth_mbps as u32)
+            .with_context(|| format!("apply tc shaping to {tap}"))?;
+
         Ok(())
     }
 }

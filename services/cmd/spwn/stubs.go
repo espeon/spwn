@@ -8,6 +8,8 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/charmbracelet/lipgloss"
+	ltable "github.com/charmbracelet/lipgloss/table"
 	"github.com/spf13/cobra"
 	gossh "golang.org/x/crypto/ssh"
 	"golang.org/x/term"
@@ -260,12 +262,23 @@ func keysListCmd() *cobra.Command {
 				return err
 			}
 			if len(keys) == 0 {
-				fmt.Println("no keys registered — add one with 'spwn keys add'")
+				printHint("no keys registered — add one with 'spwn keys add <path>'")
 				return nil
 			}
+			t := newTable(func(row, col int) lipgloss.Style {
+				if row == ltable.HeaderRow {
+					return styleHeader
+				}
+				if col == 1 {
+					return styleDim
+				}
+				return styleVal
+			})
+			t.Headers("NAME", "FINGERPRINT")
 			for _, k := range keys {
-				fmt.Printf("%-20s  %s\n", k.Name, k.Fingerprint)
+				t.Row(k.Name, k.Fingerprint)
 			}
+			fmt.Println(t.Render())
 			return nil
 		},
 	}

@@ -10,7 +10,7 @@ set -euo pipefail
 #   build-rootfs    convert ext4 rootfs → squashfs with overlay-init baked in
 #   setup           download + build-rootfs (full dev setup)
 #   images               list available squashfs images in IMAGES_DIR
-#   inject-platform-key  rebuild a squashfs image with the platform public key in authorized_keys
+#   inject-platform-key  rebuild a squashfs image with the platform public key and latest overlay-init
 #   help                 show this message
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -101,6 +101,10 @@ set -e
 
 REAL_INIT=/sbin/init
 
+mount -t proc proc /proc
+mount -t sysfs sysfs /sys
+mount -t devtmpfs devtmpfs /dev 2>/dev/null || true
+
 for x in $(cat /proc/cmdline); do
     case "$x" in
     overlay_root=*)  OVERLAY_ROOT="${x#overlay_root=}" ;;
@@ -117,6 +121,7 @@ mount -t ext4 "/dev/${OVERLAY_ROOT}" /overlay
 
 mkdir -p /overlay/upper /overlay/work
 
+mkdir -p /rom
 mount -t overlay overlay \
     -o "lowerdir=/,upperdir=/overlay/upper,workdir=/overlay/work" \
     /rom
@@ -190,6 +195,51 @@ cmd_inject_platform_key() {
         info "platform key added to authorized_keys"
     fi
     chmod 600 "$authorized_keys"
+
+    info "updating overlay-init..."
+    mkdir -p "$tmpdir/rootfs/sbin"
+    mkdir -p "$tmpdir/rootfs/overlay" "$tmpdir/rootfs/rom"
+    cat > "$tmpdir/rootfs/sbin/overlay-init" << 'OVERLAY_INIT_EOF'
+#!/bin/sh
+set -e
+
+REAL_INIT=/sbin/init
+
+mount -t proc proc /proc
+mount -t sysfs sysfs /sys
+mount -t devtmpfs devtmpfs /dev 2>/dev/null || true
+
+for x in $(cat /proc/cmdline); do
+    case "$x" in
+    overlay_root=*)  OVERLAY_ROOT="${x#overlay_root=}" ;;
+    real_init=*)     REAL_INIT="${x#real_init=}" ;;
+    esac
+done
+
+if [ -z "$OVERLAY_ROOT" ]; then
+    exec "$REAL_INIT" "$@"
+fi
+
+mkdir -p /overlay
+mount -t ext4 "/dev/${OVERLAY_ROOT}" /overlay
+
+mkdir -p /overlay/upper /overlay/work
+
+mkdir -p /rom
+mount -t overlay overlay \
+    -o "lowerdir=/,upperdir=/overlay/upper,workdir=/overlay/work" \
+    /rom
+
+for dir in dev proc sys; do
+    mkdir -p "/rom/${dir}"
+    mount --move "/${dir}" "/rom/${dir}" 2>/dev/null || true
+done
+
+cd /rom
+pivot_root . overlay
+exec chroot . "$REAL_INIT" "$@" <dev/console >dev/console 2>&1
+OVERLAY_INIT_EOF
+    chmod +x "$tmpdir/rootfs/sbin/overlay-init"
 
     local backup="${image}.bak"
     info "backing up original image to $backup..."

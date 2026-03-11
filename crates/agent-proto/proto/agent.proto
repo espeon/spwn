@@ -10,6 +10,10 @@ service HostAgent {
   rpc DeleteVm(DeleteVmRequest)          returns (DeleteVmResponse);
   rpc TakeSnapshot(TakeSnapshotRequest)  returns (TakeSnapshotResponse);
   rpc RestoreSnapshot(RestoreRequest)    returns (RestoreResponse);
+  rpc CloneVm(CloneVmRequest)            returns (CloneVmResponse);
+  rpc MigrateVm(MigrateVmRequest)        returns (MigrateVmResponse);
+  rpc ResizeCpu(ResizeCpuRequest)        returns (ResizeCpuResponse);
+  rpc ResizeBandwidth(ResizeBandwidthRequest) returns (ResizeBandwidthResponse);
   rpc WatchEvents(WatchRequest)          returns (stream AgentEvent);
 
   // bidirectional SSH console relay; first ConsoleInput frame carries vm_id
@@ -25,15 +29,17 @@ service ControlPlane {
 // ── HostAgent messages ────────────────────────────────────────────────────────
 
 message CreateVmRequest {
-  string vm_id        = 1;
-  string account_id   = 2;
-  string name         = 3;
-  string subdomain    = 4;
-  string image        = 5;
-  double vcpus        = 6;
-  int32  memory_mb    = 7;
-  int32  exposed_port = 8;
-  string ip_address   = 9;
+  string vm_id          = 1;
+  string account_id     = 2;
+  string name           = 3;
+  string subdomain      = 4;
+  string image          = 5;
+  int64  vcpus          = 6;
+  int32  memory_mb      = 7;
+  int32  exposed_port   = 8;
+  string ip_address     = 9;
+  int32  disk_mb        = 10;
+  int32  bandwidth_mbps = 11;
 }
 message CreateVmResponse { bool ok = 1; string error = 2; }
 
@@ -51,6 +57,43 @@ message TakeSnapshotResponse { bool ok = 1; string error = 2; string snap_id = 3
 
 message RestoreRequest  { string vm_id = 1; string snap_id = 2; }
 message RestoreResponse { bool ok = 1; string error = 2; }
+
+message CloneVmRequest {
+  string source_vm_id   = 1;
+  string new_vm_id      = 2;
+  string account_id     = 3;
+  string name           = 4;
+  string subdomain      = 5;
+  string ip_address     = 6;
+  int32  exposed_port   = 7;
+  bool   include_memory = 8;
+}
+message CloneVmResponse { bool ok = 1; string error = 2; }
+
+// MigrateVm: pull snapshot from source and restore as a new VM on this host.
+// The source snapshot files are fetched from source_snapshot_url via HTTP.
+message MigrateVmRequest {
+  string vm_id               = 1;  // VM id (already created in DB by control-plane)
+  string snap_id             = 2;  // snapshot id to pull
+  string source_snapshot_url = 3;  // HTTP base URL of source agent's snapshot server
+  string account_id          = 4;
+  string name                = 5;
+  string subdomain           = 6;
+  int64  vcpus               = 7;
+  int32  memory_mb           = 8;
+  string ip_address          = 9;
+  int32  exposed_port        = 10;
+  string image               = 11;
+  int32  disk_mb             = 12;
+  int32  bandwidth_mbps      = 13;
+}
+message MigrateVmResponse { bool ok = 1; string error = 2; }
+
+message ResizeCpuRequest  { string vm_id = 1; int64 vcpus = 2; }
+message ResizeCpuResponse { bool ok = 1; string error = 2; }
+
+message ResizeBandwidthRequest  { string vm_id = 1; int32 bandwidth_mbps = 2; }
+message ResizeBandwidthResponse { bool ok = 1; string error = 2; }
 
 message WatchRequest {}
 
@@ -70,22 +113,23 @@ message ConsoleOutput { bytes data = 1; }
 // ── ControlPlane messages ─────────────────────────────────────────────────────
 
 message RegisterRequest {
-  string host_id      = 1;
-  string name         = 2;
-  string address      = 3; // gRPC address control-plane uses to reach this agent
-  uint32 vcpu_total   = 4;
-  uint32 mem_total_mb = 5;
-  string images_dir   = 6;
-  string overlay_dir  = 7;
-  string snapshot_dir = 8;
-  string kernel_path  = 9;
+  string host_id       = 1;
+  string name          = 2;
+  string address       = 3; // gRPC address control-plane uses to reach this agent
+  uint64 vcpu_total    = 4;
+  uint32 mem_total_mb  = 5;
+  string images_dir    = 6;
+  string overlay_dir   = 7;
+  string snapshot_dir  = 8;
+  string kernel_path   = 9;
+  string snapshot_addr = 10; // HTTP base URL for snapshot file serving
 }
 message RegisterResponse { bool ok = 1; }
 
 message HeartbeatRequest {
   string          host_id        = 1;
   repeated string running_vm_ids = 2;
-  uint32          vcpu_used      = 3;
+  uint64          vcpu_used      = 3;
   uint32          mem_used_mb    = 4;
 }
 message HeartbeatResponse {}

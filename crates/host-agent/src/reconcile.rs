@@ -1,8 +1,8 @@
-use std::{sync::Arc, time::Duration};
+use std::{path::PathBuf, sync::Arc, time::Duration};
 
 use tracing::{error, info, warn};
 
-use crate::manager::VmManager;
+use crate::{manager::VmManager, overlay};
 
 pub async fn run_reconciliation(manager: Arc<VmManager>) -> ! {
     loop {
@@ -17,6 +17,21 @@ pub async fn reconcile_once(manager: &VmManager) -> anyhow::Result<()> {
     info!("running reconciliation");
 
     let db_vms = db::get_vms_by_host(&manager.pool, &manager.host_id).await?;
+
+    // Update real disk usage for every VM that has an overlay on this host.
+    for vm in &db_vms {
+        let Some(overlay_path) = vm.overlay_path.as_deref() else {
+            continue;
+        };
+        let path = PathBuf::from(overlay_path);
+        if !path.exists() {
+            continue;
+        }
+        let usage = overlay::measure_overlay_usage_mb(&path);
+        db::update_disk_usage_mb(&manager.pool, &vm.id, usage)
+            .await
+            .ok();
+    }
 
     for vm in db_vms
         .iter()
