@@ -25,6 +25,8 @@ use crate::manager::{VmEvent, VmManager};
 
 // ── Image build helpers ───────────────────────────────────────────────────────
 
+const ROOTFS_CONFIG: &[u8] = include_bytes!("../../../scripts/rootfs-config.sh");
+
 const OVERLAY_INIT: &str = r#"#!/bin/sh
 set -e
 
@@ -70,6 +72,18 @@ fn event(stage: Stage, message: impl Into<String>) -> Result<BuildImageEvent, St
         stage: stage as i32,
         message: message.into(),
         size_bytes: 0,
+    })
+}
+
+fn event_with_size(
+    stage: Stage,
+    message: impl Into<String>,
+    size_bytes: i64,
+) -> Result<BuildImageEvent, Status> {
+    Ok(BuildImageEvent {
+        stage: stage as i32,
+        message: message.into(),
+        size_bytes,
     })
 }
 
@@ -141,13 +155,17 @@ async fn build_image_inner(
     };
 
     // ── pull ──────────────────────────────────────────────────────────────────
+    tracing::info!(source = %req.source, image_id = %req.image_id, "build_image: pulling");
     send(event(Stage::Pulling, format!("pulling {}", req.source))).await;
     if let Err(e) = run_cmd(bin, &["pull", &req.source]).await {
+        tracing::error!(source = %req.source, "build_image: pull failed: {e}");
         send(event_error(format!("pull failed: {e}"))).await;
         return;
     }
+    tracing::info!(source = %req.source, "build_image: pull complete");
 
     // ── export ────────────────────────────────────────────────────────────────
+    tracing::info!(source = %req.source, "build_image: exporting container filesystem");
     send(event(Stage::Exporting, format!("exporting {}", req.source))).await;
 
     let tmpdir = match tempfile::TempDir::new() {
@@ -168,16 +186,22 @@ async fn build_image_inner(
         .output()
         .await
     {
-        Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout).trim().to_string(),
+        Ok(o) if o.status.success() => {
+            let id = String::from_utf8_lossy(&o.stdout).trim().to_string();
+            tracing::info!(container_id = %id, "build_image: container created");
+            id
+        }
         Ok(o) => {
-            send(event_error(format!(
+            let msg = format!(
                 "container create failed: {}",
                 String::from_utf8_lossy(&o.stderr)
-            )))
-            .await;
+            );
+            tracing::error!("build_image: {msg}");
+            send(event_error(msg)).await;
             return;
         }
         Err(e) => {
+            tracing::error!("build_image: container create: {e}");
             send(event_error(format!("container create: {e}"))).await;
             return;
         }
@@ -236,42 +260,81 @@ async fn build_image_inner(
     let _ = run_cmd(bin, &["rm", &container_id]).await;
 
     match docker_out {
-        Ok(o) if o.status.success() => {}
+        Ok(o) if o.status.success() => {
+            tracing::info!("build_image: docker export succeeded");
+        }
         Ok(o) => {
             let stderr = String::from_utf8_lossy(&o.stderr);
-            send(event_error(format!(
-                "docker export failed ({}): {}",
-                o.status,
-                stderr.trim()
-            )))
-            .await;
+            let msg = format!("docker export failed ({}): {}", o.status, stderr.trim());
+            tracing::error!("build_image: {msg}");
+            send(event_error(msg)).await;
             return;
         }
         Err(e) => {
+            tracing::error!("build_image: docker export: {e}");
             send(event_error(format!("docker export: {e}"))).await;
             return;
         }
     }
 
     match tar_out {
-        Ok(o) if o.status.success() => {}
+        Ok(o) if o.status.success() => {
+            tracing::info!("build_image: tar extraction succeeded");
+        }
         Ok(o) => {
             let stderr = String::from_utf8_lossy(&o.stderr);
-            send(event_error(format!(
-                "tar extract failed ({}): {}",
-                o.status,
-                stderr.trim()
-            )))
-            .await;
+            let msg = format!("tar extract failed ({}): {}", o.status, stderr.trim());
+            tracing::error!("build_image: {msg}");
+            send(event_error(msg)).await;
             return;
         }
         Err(e) => {
+            tracing::error!("build_image: tar extract: {e}");
             send(event_error(format!("tar extract: {e}"))).await;
             return;
         }
     }
 
+    // Sanity-check: measure the extracted rootfs and bail early if it looks
+    // suspiciously small (< 1 MB suggests docker export produced nothing).
+    let rootfs_size = tokio::process::Command::new("du")
+        .args(["-sb", rootfs.to_str().unwrap()])
+        .output()
+        .await
+        .ok()
+        .and_then(|o| {
+            String::from_utf8_lossy(&o.stdout)
+                .split_whitespace()
+                .next()
+                .and_then(|s| s.parse::<u64>().ok())
+        })
+        .unwrap_or(0);
+
+    let rootfs_size_mb = rootfs_size / 1_000_000;
+    tracing::info!(
+        rootfs_bytes = rootfs_size,
+        rootfs_mb = rootfs_size_mb,
+        "build_image: rootfs extracted"
+    );
+    send(event_with_size(
+        Stage::Exporting,
+        format!("extracted rootfs: {rootfs_size_mb} MB"),
+        rootfs_size as i64,
+    ))
+    .await;
+
+    if rootfs_size < 1_000_000 {
+        let msg = format!(
+            "extracted rootfs is suspiciously small ({rootfs_size} bytes) — docker export may have failed silently"
+        );
+        tracing::error!("build_image: {msg}");
+        send(event_error(msg)).await;
+        return;
+    }
+
     // ── bake in overlay-init, resolv.conf, CA bundle ─────────────────────────
+    tracing::info!("build_image: baking overlay-init and config into rootfs");
+    send(event(Stage::Exporting, "baking overlay-init into rootfs")).await;
 
     // Create /overlay and /rom unconditionally — these must exist as real dirs
     // in the squashfs since the rootfs is mounted read-only at boot.
@@ -288,9 +351,12 @@ async fn build_image_inner(
     // the squashfs and leave /sbin empty at boot.
     let sbin_link = rootfs.join("sbin");
     let sbin = match tokio::fs::canonicalize(&sbin_link).await {
-        Ok(real) => real,
+        Ok(real) => {
+            tracing::info!(resolved = %real.display(), "build_image: /sbin resolved (usrmerge distro)");
+            real
+        }
         Err(_) => {
-            // No sbin at all — create it as a real directory.
+            tracing::info!("build_image: /sbin not found, creating as real directory");
             if let Err(e) = tokio::fs::create_dir_all(&sbin_link).await {
                 send(event_error(format!("mkdir sbin: {e}"))).await;
                 return;
@@ -323,6 +389,12 @@ async fn build_image_inner(
             .unwrap_or_else(|_| "/sbin/overlay-init".to_string()),
         Err(_) => "/sbin/overlay-init".to_string(),
     };
+    tracing::info!(init_path = %overlay_init_guest_path, "build_image: overlay-init guest path");
+    send(event(
+        Stage::Exporting,
+        format!("overlay-init path: {overlay_init_guest_path}"),
+    ))
+    .await;
     let sidecar_path = images_dir.join(format!("{}.overlay-init", req.image_id));
     let _ = tokio::fs::write(&sidecar_path, &overlay_init_guest_path).await;
 
@@ -334,35 +406,147 @@ async fn build_image_inner(
     .await;
 
     // CA bundle — copy from host
-    for candidate in &[
+    let ca_candidates = [
         "/etc/ssl/certs/ca-certificates.crt",
         "/etc/pki/tls/certs/ca-bundle.crt",
         "/etc/ssl/cert.pem",
-    ] {
+    ];
+    let mut ca_injected = false;
+    for candidate in &ca_candidates {
         if tokio::fs::metadata(candidate).await.is_ok() {
             let dest = rootfs.join("etc/ssl/certs/ca-certificates.crt");
             if let Some(parent) = dest.parent() {
                 let _ = tokio::fs::create_dir_all(parent).await;
             }
             let _ = tokio::fs::copy(candidate, &dest).await;
+            tracing::info!(source = candidate, "build_image: CA bundle injected");
+            ca_injected = true;
             break;
+        }
+    }
+    if !ca_injected {
+        tracing::warn!("build_image: no CA bundle found on host — TLS may fail inside the VM");
+    }
+
+    // ── chroot: install init system + openssh + basic tools ──────────────────
+    // The base docker image for many distros ships without an init system.
+    // Without one, overlay-init's exec of REAL_INIT fails immediately and the
+    // VM dies. We embed rootfs-config.sh and run it via chroot so distro
+    // detection and package install live in one place (the shell script).
+    tracing::info!("build_image: running rootfs-config in chroot");
+    send(event(
+        Stage::Exporting,
+        "installing packages (systemd, openssh-server, ...)",
+    ))
+    .await;
+
+    let config_script_path = rootfs.join("tmp/rootfs-config.sh");
+    if let Err(e) = tokio::fs::write(&config_script_path, ROOTFS_CONFIG).await {
+        send(event_error(format!("write rootfs-config.sh: {e}"))).await;
+        return;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ =
+            tokio::fs::set_permissions(&config_script_path, std::fs::Permissions::from_mode(0o755))
+                .await;
+    }
+
+    // Bind-mount proc/sys/dev so package managers work correctly inside the chroot.
+    let mounts: &[(&str, &str, Option<&str>)] = &[
+        ("proc", "proc", Some("proc")),
+        ("sysfs", "sys", Some("sysfs")),
+        ("/dev", "dev", None),
+        ("/dev/pts", "dev/pts", None),
+    ];
+    let mut mounted = vec![];
+    for (src, rel_dst, fstype) in mounts {
+        let dst = rootfs.join(rel_dst);
+        let _ = tokio::fs::create_dir_all(&dst).await;
+        let mut cmd = tokio::process::Command::new("mount");
+        if let Some(t) = fstype {
+            cmd.args(["-t", t, src]);
+        } else {
+            cmd.args(["--bind", src]);
+        }
+        cmd.arg(dst.to_str().unwrap());
+        match cmd.status().await {
+            Ok(s) if s.success() => mounted.push(dst),
+            Ok(s) => tracing::warn!("build_image: mount {src} failed: {s}"),
+            Err(e) => tracing::warn!("build_image: mount {src}: {e}"),
+        }
+    }
+
+    let chroot_out = tokio::process::Command::new("chroot")
+        .arg(rootfs.to_str().unwrap())
+        .args(["/tmp/rootfs-config.sh"])
+        .output()
+        .await;
+
+    // Unmount in reverse order regardless of outcome.
+    for dst in mounted.into_iter().rev() {
+        let _ = tokio::process::Command::new("umount")
+            .arg(dst.to_str().unwrap())
+            .status()
+            .await;
+    }
+    let _ = tokio::fs::remove_file(&config_script_path).await;
+
+    match chroot_out {
+        Ok(o) if o.status.success() => {
+            let stdout = String::from_utf8_lossy(&o.stdout);
+            let stdout = stdout.trim();
+            if !stdout.is_empty() {
+                tracing::info!("build_image: rootfs-config output:\n{stdout}");
+            }
+            tracing::info!("build_image: package install complete");
+            send(event(Stage::Exporting, "package install complete")).await;
+        }
+        Ok(o) => {
+            let stderr = String::from_utf8_lossy(&o.stderr);
+            let stdout = String::from_utf8_lossy(&o.stdout);
+            let detail = format!("{}\n{}", stdout.trim(), stderr.trim());
+            let msg = format!("rootfs-config failed ({}): {}", o.status, detail.trim());
+            tracing::error!("build_image: {msg}");
+            send(event_error(msg)).await;
+            return;
+        }
+        Err(e) => {
+            tracing::error!("build_image: spawn chroot rootfs-config: {e}");
+            send(event_error(format!("spawn chroot rootfs-config: {e}"))).await;
+            return;
         }
     }
 
     // ── platform SSH public key ───────────────────────────────────────────────
     match inject_platform_pubkey(&rootfs).await {
-        Ok(true) => {}
+        Ok(true) => {
+            tracing::info!("build_image: platform SSH public key injected");
+            send(event(Stage::Exporting, "platform SSH key injected")).await;
+        }
         Ok(false) => {
             tracing::warn!(
-                "platform key not found — image will require manual authorized_keys setup"
+                "build_image: platform key not found — image will require manual authorized_keys setup"
             );
+            send(event(
+                Stage::Exporting,
+                "warning: platform SSH key not found, skipping injection",
+            ))
+            .await;
         }
         Err(e) => {
-            tracing::warn!("failed to inject platform key: {e}");
+            tracing::warn!("build_image: failed to inject platform key: {e}");
+            send(event(
+                Stage::Exporting,
+                format!("warning: platform key injection failed: {e}"),
+            ))
+            .await;
         }
     }
 
     // ── squash ────────────────────────────────────────────────────────────────
+    tracing::info!(output = %images_dir.join(format!("{}.sqfs", req.image_id)).display(), "build_image: running mksquashfs");
     send(event(Stage::Squashing, "building squashfs")).await;
 
     let output_path = images_dir.join(format!("{}.sqfs", req.image_id));
@@ -378,18 +562,25 @@ async fn build_image_inner(
         .await;
 
     match mksquashfs_out {
-        Ok(o) if o.status.success() => {}
+        Ok(o) if o.status.success() => {
+            let stdout = String::from_utf8_lossy(&o.stdout);
+            let stdout = stdout.trim();
+            if !stdout.is_empty() {
+                tracing::info!("build_image: mksquashfs output:\n{stdout}");
+            }
+        }
         Ok(o) => {
             let stderr = String::from_utf8_lossy(&o.stderr);
-            let stderr = stderr.trim();
-            send(event_error(format!(
-                "mksquashfs failed ({}): {stderr}",
-                o.status
-            )))
-            .await;
+            let stdout = String::from_utf8_lossy(&o.stdout);
+            let detail = format!("{}\n{}", stdout.trim(), stderr.trim());
+            let detail = detail.trim();
+            let msg = format!("mksquashfs failed ({}): {detail}", o.status);
+            tracing::error!("build_image: {msg}");
+            send(event_error(msg)).await;
             return;
         }
         Err(e) => {
+            tracing::error!("build_image: spawn mksquashfs: {e}");
             send(event_error(format!("spawn mksquashfs: {e}"))).await;
             return;
         }
@@ -399,6 +590,64 @@ async fn build_image_inner(
         .await
         .map(|m| m.len() as i64)
         .unwrap_or(0);
+
+    let size_mb = size_bytes / 1_000_000;
+    let ratio = if rootfs_size > 0 {
+        (size_bytes as f64 / rootfs_size as f64) * 100.0
+    } else {
+        0.0
+    };
+    tracing::info!(
+        size_bytes,
+        size_mb,
+        rootfs_bytes = rootfs_size,
+        compression_pct = format!("{ratio:.1}%"),
+        "build_image: squashfs complete"
+    );
+    send(event_with_size(
+        Stage::Squashing,
+        format!("squashfs: {size_mb} MB ({ratio:.1}% of extracted rootfs)"),
+        size_bytes,
+    ))
+    .await;
+
+    // ── sanity check: verify init binary exists in the rootfs ─────────────────
+    // Read the overlay-init guest path we resolved earlier to find REAL_INIT.
+    // overlay-init defaults to /sbin/init; check that path exists in the rootfs
+    // so we catch a missing init before the image is marked ready.
+    let init_candidates = [
+        "sbin/init",
+        "usr/sbin/init",
+        "usr/lib/systemd/systemd",
+        "bin/sh",
+        "usr/bin/sh",
+        "bin/bash",
+        "usr/bin/bash",
+    ];
+    let init_found = init_candidates.iter().any(|p| rootfs.join(p).exists());
+
+    if !init_found {
+        let msg = format!(
+            "no init binary found in rootfs (checked: {}); \
+             the VM will crash immediately after boot — \
+             ensure the image has systemd or a shell installed",
+            init_candidates.join(", ")
+        );
+        tracing::error!("build_image: {msg}");
+        send(event_error(msg)).await;
+        return;
+    }
+
+    let init_path = init_candidates
+        .iter()
+        .find(|p| rootfs.join(p).exists())
+        .unwrap();
+    tracing::info!(init_path, "build_image: init binary present");
+    send(event(
+        Stage::Squashing,
+        format!("init binary found: /{init_path}"),
+    ))
+    .await;
 
     send(event_done(size_bytes)).await;
 }
