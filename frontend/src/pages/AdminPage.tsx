@@ -421,6 +421,9 @@ function ImagesPanel() {
 
   function handleSourceChange(val: string) {
     setSource(val);
+  }
+
+  function handleSourceBlur(val: string) {
     if (!name) setName(deriveName(val));
     if (!tag) {
       const parts = val.split(":");
@@ -463,6 +466,7 @@ function ImagesPanel() {
                 id="img-source"
                 value={source}
                 onChange={(e) => handleSourceChange(e.target.value)}
+                onBlur={(e) => handleSourceBlur(e.target.value)}
                 placeholder="e.g. ubuntu:22.04"
                 autoFocus
               />
