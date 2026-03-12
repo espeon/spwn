@@ -214,11 +214,13 @@ async fn build_image_inner(
     }
 
     // ── bake in overlay-init, resolv.conf, CA bundle ─────────────────────────
-    let sbin = rootfs.join("sbin");
-    if let Err(e) = tokio::fs::create_dir_all(&sbin).await {
-        send(event_error(format!("mkdir sbin: {e}"))).await;
-        return;
+    for dir in &["sbin", "overlay", "rom"] {
+        if let Err(e) = tokio::fs::create_dir_all(rootfs.join(dir)).await {
+            send(event_error(format!("mkdir {dir}: {e}"))).await;
+            return;
+        }
     }
+    let sbin = rootfs.join("sbin");
     let overlay_init_path = sbin.join("overlay-init");
     if let Err(e) = tokio::fs::write(&overlay_init_path, OVERLAY_INIT).await {
         send(event_error(format!("write overlay-init: {e}"))).await;
