@@ -5,8 +5,13 @@ import {
   listAdminVms,
   setHostStatus,
   adminMigrateVm,
+  listAdminImages,
+  buildImage,
+  deleteAdminImage,
   type Host,
   type AdminVm,
+  type AdminImage,
+  type BuildImageRequest,
 } from "@/api";
 import { toast } from "sonner";
 import {
@@ -19,6 +24,9 @@ import {
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
+import { Input } from "@/components/ui/input";
+import { IconBox, IconTrash, IconLoader2 } from "@tabler/icons-react";
+import { formatDataSize } from "@/lib/utils";
 
 function resourcePercent(used: number, total: number): number {
   if (total === 0) return 0;
@@ -270,7 +278,280 @@ function UnassignedVms({
   );
 }
 
+type AdminTab = "hosts" | "images";
+
+// ── Images panel ──────────────────────────────────────────────────────────────
+
+function imageSizeLabel(img: AdminImage): string {
+  if (img.status === "building") return "building...";
+  if (img.status === "error") return "error";
+  if (img.size_bytes > 0) return formatDataSize(img.size_bytes);
+  return "—";
+}
+
+function imageStatusColor(status: string): string {
+  switch (status) {
+    case "ready":
+      return "text-green-500";
+    case "building":
+      return "text-yellow-500";
+    case "error":
+      return "text-destructive";
+    default:
+      return "text-muted-foreground";
+  }
+}
+
+function timeAgo(ts: number): string {
+  const diff = Math.max(0, Math.floor(Date.now() / 1000 - ts));
+  if (diff < 60) return `${diff}s ago`;
+  if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
+  if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
+  return `${Math.floor(diff / 86400)}d ago`;
+}
+
+function ImageRow({
+  image,
+  onDelete,
+}: {
+  image: AdminImage;
+  onDelete: (id: string) => void;
+}) {
+  const age = useMemo(() => timeAgo(image.created_at), [image.created_at]);
+
+  return (
+    <div className="flex items-center justify-between py-2.5 px-3 rounded-md hover:bg-muted/50 text-sm gap-3">
+      <div className="flex items-center gap-3 min-w-0">
+        <IconBox className="size-5 shrink-0 text-muted-foreground opacity-60" />
+        <div className="min-w-0">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="font-medium">{image.name}</span>
+            <span className="text-xs font-mono bg-secondary px-1.5 py-0.5 rounded text-muted-foreground">
+              {image.tag}
+            </span>
+            <span
+              className={`text-xs font-medium flex items-center gap-1 ${imageStatusColor(image.status)}`}
+            >
+              {image.status === "building" && (
+                <IconLoader2 className="size-3 animate-spin" />
+              )}
+              {image.status}
+            </span>
+          </div>
+          {image.status === "error" && image.error && (
+            <p className="text-xs text-destructive mt-0.5 truncate">
+              {image.error}
+            </p>
+          )}
+          <p className="text-xs text-muted-foreground font-mono truncate mt-0.5">
+            {image.source}
+          </p>
+        </div>
+      </div>
+      <div className="flex items-center gap-4 shrink-0 text-xs text-muted-foreground">
+        <span className="w-16 text-right">{imageSizeLabel(image)}</span>
+        <span className="w-16 text-right">{age}</span>
+        <button
+          onClick={() => onDelete(image.id)}
+          disabled={image.status === "building"}
+          className="p-1 rounded hover:text-destructive transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+          title="delete image"
+        >
+          <IconTrash className="size-3.5" />
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function ImagesPanel() {
+  const qc = useQueryClient();
+  const [buildOpen, setBuildOpen] = useState(false);
+  const [source, setSource] = useState("");
+  const [name, setName] = useState("");
+  const [tag, setTag] = useState("");
+  const [formError, setFormError] = useState<string | null>(null);
+
+  const hasBuilding = true; // always poll while panel is mounted; cheap
+
+  const { data: images = [], isLoading } = useQuery({
+    queryKey: ["admin", "images"],
+    queryFn: listAdminImages,
+    refetchInterval: hasBuilding ? 4_000 : false,
+  });
+
+  const buildMutation = useMutation({
+    mutationFn: (req: BuildImageRequest) => buildImage(req),
+    onSuccess: (img) => {
+      qc.invalidateQueries({ queryKey: ["admin", "images"] });
+      qc.invalidateQueries({ queryKey: ["images"] });
+      setBuildOpen(false);
+      setSource("");
+      setName("");
+      setTag("");
+      setFormError(null);
+      toast.success(`building ${img.name}:${img.tag}...`);
+    },
+    onError: (e: Error) => setFormError(e.message),
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: (id: string) => deleteAdminImage(id),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["admin", "images"] });
+      qc.invalidateQueries({ queryKey: ["images"] });
+      toast.success("image deleted");
+    },
+    onError: (e: Error) => toast.error(e.message),
+  });
+
+  function openBuild() {
+    setSource("");
+    setName("");
+    setTag("");
+    setFormError(null);
+    setBuildOpen(true);
+  }
+
+  function deriveName(src: string): string {
+    // "ubuntu:22.04" → "ubuntu", "ghcr.io/org/image:tag" → "image"
+    const base = src.split("/").pop() ?? src;
+    return base.split(":")[0];
+  }
+
+  function handleSourceChange(val: string) {
+    setSource(val);
+    if (!name) setName(deriveName(val));
+    if (!tag) {
+      const parts = val.split(":");
+      if (parts.length > 1 && parts[1]) setTag(parts[1]);
+    }
+  }
+
+  function submitBuild() {
+    if (!source.trim() || !name.trim()) {
+      setFormError("source and name are required");
+      return;
+    }
+    buildMutation.mutate({
+      source: source.trim(),
+      name: name.trim(),
+      tag: tag.trim() || "latest",
+    });
+  }
+
+  return (
+    <>
+      <Dialog
+        open={buildOpen}
+        onOpenChange={(o) => {
+          if (!o) setBuildOpen(false);
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>build image</DialogTitle>
+            <DialogDescription>
+              pull a docker/OCI image and build a squashfs rootfs on the host
+              agent.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-2">
+            <div className="space-y-1.5">
+              <Label htmlFor="img-source">docker image</Label>
+              <Input
+                id="img-source"
+                value={source}
+                onChange={(e) => handleSourceChange(e.target.value)}
+                placeholder="e.g. ubuntu:22.04"
+                autoFocus
+              />
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <Label htmlFor="img-name">name</Label>
+                <Input
+                  id="img-name"
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  placeholder="ubuntu"
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="img-tag">tag</Label>
+                <Input
+                  id="img-tag"
+                  value={tag}
+                  onChange={(e) => setTag(e.target.value)}
+                  placeholder="latest"
+                />
+              </div>
+            </div>
+            {formError && (
+              <p className="text-sm text-destructive">{formError}</p>
+            )}
+          </div>
+          <DialogFooter>
+            <Button
+              variant="ghost"
+              onClick={() => setBuildOpen(false)}
+              disabled={buildMutation.isPending}
+            >
+              cancel
+            </Button>
+            <Button onClick={submitBuild} disabled={buildMutation.isPending}>
+              {buildMutation.isPending ? "requesting..." : "build"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <div className="flex flex-col gap-4">
+        <div className="flex items-center justify-between">
+          <p className="text-sm text-muted-foreground">
+            {images.length} image{images.length !== 1 ? "s" : ""}
+          </p>
+          <Button size="sm" onClick={openBuild}>
+            build image
+          </Button>
+        </div>
+
+        {isLoading ? (
+          <p className="text-sm text-muted-foreground">loading...</p>
+        ) : images.length === 0 ? (
+          <div className="flex flex-col items-center gap-2 py-16 text-muted-foreground rounded-lg border">
+            <IconBox className="size-8 opacity-30" />
+            <p className="text-sm">no images yet</p>
+            <Button size="sm" variant="outline" onClick={openBuild}>
+              build first image
+            </Button>
+          </div>
+        ) : (
+          <div className="rounded-lg border bg-card px-1 py-2 flex flex-col">
+            {images.map((img) => (
+              <ImageRow
+                key={img.id}
+                image={img}
+                onDelete={(id) => {
+                  toast.promise(deleteMutation.mutateAsync(id), {
+                    loading: "deleting...",
+                    success: "deleted",
+                    error: (e: Error) => e.message,
+                  });
+                }}
+              />
+            ))}
+          </div>
+        )}
+      </div>
+    </>
+  );
+}
+
+// ── AdminPage ─────────────────────────────────────────────────────────────────
+
 export function AdminPage() {
+  const [tab, setTab] = useState<AdminTab>("hosts");
   const [migrateVm, setMigrateVm] = useState<AdminVm | null>(null);
   const [migrateTarget, setMigrateTarget] = useState("");
   const qc = useQueryClient();
@@ -331,6 +612,13 @@ export function AdminPage() {
   const totalVms = vms?.length ?? 0;
   const totalDisk = vms?.reduce((s, v) => s + v.disk_usage_mb, 0) ?? 0;
   const activeHosts = hosts?.filter((h) => h.status === "active").length ?? 0;
+
+  const tabClass = (t: AdminTab) =>
+    `px-3 py-1.5 text-sm rounded-md transition-colors ${
+      tab === t
+        ? "bg-secondary text-foreground font-medium"
+        : "text-muted-foreground hover:text-foreground"
+    }`;
 
   return (
     <>
@@ -395,50 +683,74 @@ export function AdminPage() {
           <div>
             <h1 className="text-xl font-semibold">admin</h1>
             <p className="text-sm text-muted-foreground mt-1">
-              host cluster overview
+              {tab === "hosts"
+                ? "host cluster overview"
+                : "image catalogue management"}
             </p>
           </div>
-          <div className="flex gap-6 text-right">
-            <div>
-              <p className="text-sm font-medium">
-                {activeHosts}/{hosts?.length ?? 0}
-              </p>
-              <p className="text-xs text-muted-foreground">hosts active</p>
+          {tab === "hosts" && (
+            <div className="flex gap-6 text-right">
+              <div>
+                <p className="text-sm font-medium">
+                  {activeHosts}/{hosts?.length ?? 0}
+                </p>
+                <p className="text-xs text-muted-foreground">hosts active</p>
+              </div>
+              <div>
+                <p className="text-sm font-medium">{totalVms}</p>
+                <p className="text-xs text-muted-foreground">total vms</p>
+              </div>
+              <div>
+                <p className="text-sm font-medium">
+                  {(totalDisk / 1024).toFixed(1)}gb
+                </p>
+                <p className="text-xs text-muted-foreground">disk used</p>
+              </div>
             </div>
-            <div>
-              <p className="text-sm font-medium">{totalVms}</p>
-              <p className="text-xs text-muted-foreground">total vms</p>
-            </div>
-            <div>
-              <p className="text-sm font-medium">
-                {(totalDisk / 1024).toFixed(1)}gb
-              </p>
-              <p className="text-xs text-muted-foreground">disk used</p>
-            </div>
-          </div>
+          )}
         </div>
 
-        {hosts && hosts.length === 0 && (
-          <p className="text-sm text-muted-foreground">no hosts registered</p>
+        <div className="flex gap-1 border-b pb-2">
+          <button className={tabClass("hosts")} onClick={() => setTab("hosts")}>
+            hosts
+          </button>
+          <button
+            className={tabClass("images")}
+            onClick={() => setTab("images")}
+          >
+            images
+          </button>
+        </div>
+
+        {tab === "hosts" && (
+          <>
+            {hosts && hosts.length === 0 && (
+              <p className="text-sm text-muted-foreground">
+                no hosts registered
+              </p>
+            )}
+
+            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+              {hosts?.map((h) => (
+                <HostCard
+                  key={h.id}
+                  host={h}
+                  vms={vmsByHost.get(h.id) ?? []}
+                  hosts={hosts}
+                  onMigrateVm={setMigrateVm}
+                />
+              ))}
+            </div>
+
+            <UnassignedVms
+              vms={unassigned}
+              hosts={hosts ?? []}
+              onMigrate={setMigrateVm}
+            />
+          </>
         )}
 
-        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-          {hosts?.map((h) => (
-            <HostCard
-              key={h.id}
-              host={h}
-              vms={vmsByHost.get(h.id) ?? []}
-              hosts={hosts}
-              onMigrateVm={setMigrateVm}
-            />
-          ))}
-        </div>
-
-        <UnassignedVms
-          vms={unassigned}
-          hosts={hosts ?? []}
-          onMigrate={setMigrateVm}
-        />
+        {tab === "images" && <ImagesPanel />}
       </div>
     </>
   );
