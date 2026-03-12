@@ -63,11 +63,9 @@ impl NetworkManager {
             .map(|o| o.status.success())
             .unwrap_or(false);
         if already_exists {
-            run("ip", &["tuntap", "del", "dev", &name, "mode", "tap"]).map_err(|e| {
-                NetworkError::CommandFailed {
-                    cmd: format!("remove stale tap {name}"),
-                    stderr: e.to_string(),
-                }
+            run("ip", &["link", "delete", &name]).map_err(|e| NetworkError::CommandFailed {
+                cmd: format!("remove stale tap {name}"),
+                stderr: e.to_string(),
             })?;
         }
 
@@ -89,7 +87,7 @@ impl NetworkManager {
     /// Tear down the TAP device for a VM.
     pub fn release_tap(&self, slot: u32) -> Result<()> {
         let name = tap_name(slot);
-        run("ip", &["tuntap", "del", "dev", &name, "mode", "tap"])
+        run("ip", &["link", "delete", &name])
     }
 
     /// List all TAP devices matching the `fc-tap-` prefix.
