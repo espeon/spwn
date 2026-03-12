@@ -66,7 +66,7 @@ async fn main() -> anyhow::Result<()> {
             let (region, url) = entry.split_once('=')?;
             Some((
                 region.trim().to_string(),
-                CaddyClient::new(url.trim(), PathBuf::from("/dev/null")),
+                CaddyClient::new(url.trim(), static_files_path.clone()),
             ))
         })
         .collect();
