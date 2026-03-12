@@ -183,32 +183,90 @@ async fn build_image_inner(
         }
     };
 
-    // pipe docker export | tar -x -C rootfs via sh -c to avoid manual stdin wiring
-    let pipeline = format!(
-        "{bin} export {container_id} | tar -x -C {}",
-        rootfs.to_string_lossy()
-    );
-    let tar_out = tokio::process::Command::new("sh")
-        .args(["-c", &pipeline])
-        .output()
-        .await;
+    // Export the container filesystem and pipe it directly into tar.
+    // We spawn both processes manually so we can stream between them without
+    // buffering the whole image in memory, and capture each process's stderr
+    // independently — a shell pipeline masks docker errors because sh reports
+    // tar's exit code (0) even when docker fails.
+    let mut docker_child = match tokio::process::Command::new(bin)
+        .args(["export", &container_id])
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+    {
+        Ok(c) => c,
+        Err(e) => {
+            let _ = run_cmd(bin, &["rm", &container_id]).await;
+            send(event_error(format!("spawn docker export: {e}"))).await;
+            return;
+        }
+    };
+
+    let mut tar_child = match tokio::process::Command::new("tar")
+        .args(["-x", "-C", rootfs.to_str().unwrap()])
+        .stdin(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+    {
+        Ok(c) => c,
+        Err(e) => {
+            let _ = docker_child.kill().await;
+            let _ = run_cmd(bin, &["rm", &container_id]).await;
+            send(event_error(format!("spawn tar: {e}"))).await;
+            return;
+        }
+    };
+
+    // Stream docker stdout → tar stdin.
+    let mut docker_stdout = docker_child.stdout.take().unwrap();
+    let mut tar_stdin = tar_child.stdin.take().unwrap();
+    if let Err(e) = tokio::io::copy(&mut docker_stdout, &mut tar_stdin).await {
+        let _ = docker_child.kill().await;
+        let _ = tar_child.kill().await;
+        let _ = run_cmd(bin, &["rm", &container_id]).await;
+        send(event_error(format!("streaming export to tar: {e}"))).await;
+        return;
+    }
+    // Close tar's stdin so it knows the stream is done.
+    drop(tar_stdin);
+
+    let docker_out = docker_child.wait_with_output().await;
+    let tar_out = tar_child.wait_with_output().await;
 
     let _ = run_cmd(bin, &["rm", &container_id]).await;
 
-    match tar_out {
+    match docker_out {
         Ok(o) if o.status.success() => {}
         Ok(o) => {
             let stderr = String::from_utf8_lossy(&o.stderr);
-            let stderr = stderr.trim();
             send(event_error(format!(
-                "export/extract failed ({}): {stderr}",
-                o.status
+                "docker export failed ({}): {}",
+                o.status,
+                stderr.trim()
             )))
             .await;
             return;
         }
         Err(e) => {
-            send(event_error(format!("spawn export pipeline: {e}"))).await;
+            send(event_error(format!("docker export: {e}"))).await;
+            return;
+        }
+    }
+
+    match tar_out {
+        Ok(o) if o.status.success() => {}
+        Ok(o) => {
+            let stderr = String::from_utf8_lossy(&o.stderr);
+            send(event_error(format!(
+                "tar extract failed ({}): {}",
+                o.status,
+                stderr.trim()
+            )))
+            .await;
+            return;
+        }
+        Err(e) => {
+            send(event_error(format!("tar extract: {e}"))).await;
             return;
         }
     }
