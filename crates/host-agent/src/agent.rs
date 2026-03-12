@@ -232,6 +232,21 @@ async fn build_image_inner(
                 .await;
     }
 
+    // Resolve the actual in-guest path to overlay-init, accounting for usrmerge
+    // distros (Ubuntu 22.04+) where /sbin is a symlink to usr/sbin. We follow
+    // the symlink on the extracted rootfs to find the canonical host path, then
+    // strip the rootfs prefix to get the absolute guest path. This is written to
+    // a .init sidecar so read_image_init picks it up for the boot args.
+    let overlay_init_guest_path = match std::fs::canonicalize(&overlay_init_path) {
+        Ok(canonical) => canonical
+            .strip_prefix(&rootfs)
+            .map(|rel| format!("/{}", rel.to_string_lossy()))
+            .unwrap_or_else(|_| "/sbin/overlay-init".to_string()),
+        Err(_) => "/sbin/overlay-init".to_string(),
+    };
+    let sidecar_path = images_dir.join(format!("{}.init", req.image_id));
+    let _ = tokio::fs::write(&sidecar_path, &overlay_init_guest_path).await;
+
     // resolv.conf
     let _ = tokio::fs::write(
         rootfs.join("etc/resolv.conf"),

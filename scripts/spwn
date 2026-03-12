@@ -336,6 +336,14 @@ cmd_build_from_image() {
     info "adding overlay-init..."
     install_overlay_init "$tmpdir"
 
+    # Resolve the actual in-guest path to overlay-init, accounting for usrmerge
+    # distros (Ubuntu 22.04+) where /sbin is a symlink to usr/sbin.
+    local overlay_init_host_path
+    overlay_init_host_path="$(realpath "$tmpdir/sbin/overlay-init" 2>/dev/null || echo "$tmpdir/sbin/overlay-init")"
+    local overlay_init_guest_path="/${overlay_init_host_path#$tmpdir/}"
+    echo "$overlay_init_guest_path" > "${output%.sqfs}.init"
+    info "overlay-init guest path: $overlay_init_guest_path"
+
     info "writing resolv.conf..."
     install_resolv "$tmpdir"
 
