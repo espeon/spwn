@@ -90,13 +90,19 @@ fn event_error(msg: impl Into<String>) -> Result<BuildImageEvent, Status> {
 }
 
 async fn run_cmd(prog: &str, args: &[&str]) -> anyhow::Result<()> {
-    let status = tokio::process::Command::new(prog)
+    let out = tokio::process::Command::new(prog)
         .args(args)
-        .status()
+        .output()
         .await
         .with_context(|| format!("spawn {prog}"))?;
-    if !status.success() {
-        anyhow::bail!("{prog} exited with status {status}");
+    if !out.status.success() {
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        let stderr = stderr.trim();
+        if stderr.is_empty() {
+            anyhow::bail!("{prog} exited with status {}", out.status);
+        } else {
+            anyhow::bail!("{prog} exited with status {}: {stderr}", out.status);
+        }
     }
     Ok(())
 }
@@ -182,17 +188,23 @@ async fn build_image_inner(
         "{bin} export {container_id} | tar -x -C {}",
         rootfs.to_string_lossy()
     );
-    let tar_status = tokio::process::Command::new("sh")
+    let tar_out = tokio::process::Command::new("sh")
         .args(["-c", &pipeline])
-        .status()
+        .output()
         .await;
 
     let _ = run_cmd(bin, &["rm", &container_id]).await;
 
-    match tar_status {
-        Ok(s) if s.success() => {}
-        Ok(s) => {
-            send(event_error(format!("export/extract failed: {s}"))).await;
+    match tar_out {
+        Ok(o) if o.status.success() => {}
+        Ok(o) => {
+            let stderr = String::from_utf8_lossy(&o.stderr);
+            let stderr = stderr.trim();
+            send(event_error(format!(
+                "export/extract failed ({}): {stderr}",
+                o.status
+            )))
+            .await;
             return;
         }
         Err(e) => {
@@ -260,7 +272,7 @@ async fn build_image_inner(
     send(event(Stage::Squashing, "building squashfs")).await;
 
     let output_path = images_dir.join(format!("{}.sqfs", req.image_id));
-    let status = tokio::process::Command::new("mksquashfs")
+    let mksquashfs_out = tokio::process::Command::new("mksquashfs")
         .args([
             rootfs.to_str().unwrap(),
             output_path.to_str().unwrap(),
@@ -268,13 +280,19 @@ async fn build_image_inner(
             "-comp",
             "zstd",
         ])
-        .status()
+        .output()
         .await;
 
-    match status {
-        Ok(s) if s.success() => {}
-        Ok(s) => {
-            send(event_error(format!("mksquashfs failed: {s}"))).await;
+    match mksquashfs_out {
+        Ok(o) if o.status.success() => {}
+        Ok(o) => {
+            let stderr = String::from_utf8_lossy(&o.stderr);
+            let stderr = stderr.trim();
+            send(event_error(format!(
+                "mksquashfs failed ({}): {stderr}",
+                o.status
+            )))
+            .await;
             return;
         }
         Err(e) => {
