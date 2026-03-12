@@ -53,6 +53,21 @@ impl api::VmOps for ControlPlaneOps {
             .await?
             .ok_or_else(|| anyhow!("account not found: {account_id}"))?;
 
+        let (image_name, image_tag) = match req.image.split_once(':') {
+            Some((n, t)) => (n, t),
+            None => (req.image.as_str(), "latest"),
+        };
+        let image = db::get_image_by_name_tag(&self.pool, image_name, image_tag)
+            .await?
+            .ok_or_else(|| anyhow!("image '{}' not found", req.image))?;
+        if image.status != "ready" {
+            return Err(anyhow!(
+                "image '{}' is not ready (status: {})",
+                req.image,
+                image.status
+            ));
+        }
+
         let host = scheduler::pick_host(
             &self.pool,
             req.vcpus,
@@ -78,7 +93,7 @@ impl api::VmOps for ControlPlaneOps {
                 account_id,
                 name: req.name,
                 subdomain: sub,
-                image: req.image,
+                image: image.id,
                 vcpus: req.vcpus,
                 memory_mb: req.memory_mb,
                 disk_mb: req.disk_mb,

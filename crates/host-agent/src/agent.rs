@@ -1,3 +1,5 @@
+use anyhow::Context as _;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -11,17 +13,337 @@ use tokio_stream::wrappers::{BroadcastStream, ReceiverStream};
 use tonic::{Request, Response, Status, Streaming};
 
 use agent_proto::agent::{
-    AgentEvent, CloneVmRequest, CloneVmResponse, ConsoleInput, ConsoleOutput, CreateVmRequest,
-    CreateVmResponse, DeleteVmRequest, DeleteVmResponse, MigrateVmRequest, MigrateVmResponse,
-    ResizeBandwidthRequest, ResizeBandwidthResponse, ResizeCpuRequest, ResizeCpuResponse,
-    RestoreRequest, RestoreResponse, StartVmRequest, StartVmResponse, StopVmRequest,
-    StopVmResponse, TakeSnapshotRequest, TakeSnapshotResponse, WatchRequest,
-    host_agent_server::HostAgent,
+    AgentEvent, BuildImageEvent, BuildImageRequest, CloneVmRequest, CloneVmResponse, ConsoleInput,
+    ConsoleOutput, CreateVmRequest, CreateVmResponse, DeleteVmRequest, DeleteVmResponse,
+    MigrateVmRequest, MigrateVmResponse, ResizeBandwidthRequest, ResizeBandwidthResponse,
+    ResizeCpuRequest, ResizeCpuResponse, RestoreRequest, RestoreResponse, StartVmRequest,
+    StartVmResponse, StopVmRequest, StopVmResponse, TakeSnapshotRequest, TakeSnapshotResponse,
+    WatchRequest, build_image_event::Stage, host_agent_server::HostAgent,
 };
 
 use crate::manager::{VmEvent, VmManager};
 
+// ── Image build helpers ───────────────────────────────────────────────────────
+
+const OVERLAY_INIT: &str = r#"#!/bin/sh
+set -e
+
+REAL_INIT=/sbin/init
+
+mount -t proc proc /proc
+mount -t sysfs sysfs /sys
+mount -t devtmpfs devtmpfs /dev 2>/dev/null || true
+
+for x in $(cat /proc/cmdline); do
+    case "$x" in
+    overlay_root=*)  OVERLAY_ROOT="${x#overlay_root=}" ;;
+    real_init=*)     REAL_INIT="${x#real_init=}" ;;
+    esac
+done
+
+if [ -z "$OVERLAY_ROOT" ]; then
+    exec "$REAL_INIT" "$@"
+fi
+
+mkdir -p /overlay
+mount -t ext4 "/dev/${OVERLAY_ROOT}" /overlay
+
+mkdir -p /overlay/upper /overlay/work
+
+mkdir -p /rom
+mount -t overlay overlay \
+    -o "lowerdir=/,upperdir=/overlay/upper,workdir=/overlay/work" \
+    /rom
+
+for dir in dev proc sys; do
+    mkdir -p "/rom/${dir}"
+    mount --move "/${dir}" "/rom/${dir}" 2>/dev/null || true
+done
+
+cd /rom
+pivot_root . overlay
+exec chroot . "$REAL_INIT" "$@" <dev/console >dev/console 2>&1
+"#;
+
+fn event(stage: Stage, message: impl Into<String>) -> Result<BuildImageEvent, Status> {
+    Ok(BuildImageEvent {
+        stage: stage as i32,
+        message: message.into(),
+        size_bytes: 0,
+    })
+}
+
+fn event_done(size_bytes: i64) -> Result<BuildImageEvent, Status> {
+    Ok(BuildImageEvent {
+        stage: Stage::Done as i32,
+        message: "done".into(),
+        size_bytes,
+    })
+}
+
+fn event_error(msg: impl Into<String>) -> Result<BuildImageEvent, Status> {
+    Ok(BuildImageEvent {
+        stage: Stage::Error as i32,
+        message: msg.into(),
+        size_bytes: 0,
+    })
+}
+
+async fn run_cmd(prog: &str, args: &[&str]) -> anyhow::Result<()> {
+    let status = tokio::process::Command::new(prog)
+        .args(args)
+        .status()
+        .await
+        .with_context(|| format!("spawn {prog}"))?;
+    if !status.success() {
+        anyhow::bail!("{prog} exited with status {status}");
+    }
+    Ok(())
+}
+
+/// Detect whether docker or podman is available.
+fn container_bin() -> anyhow::Result<&'static str> {
+    for bin in ["docker", "podman"] {
+        if std::process::Command::new("which")
+            .arg(bin)
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+        {
+            return Ok(bin);
+        }
+    }
+    anyhow::bail!("docker or podman is required to build images")
+}
+
+async fn build_image_inner(
+    req: BuildImageRequest,
+    images_dir: PathBuf,
+    tx: tokio::sync::mpsc::Sender<Result<BuildImageEvent, Status>>,
+) {
+    let send = |ev: Result<BuildImageEvent, Status>| {
+        let tx = tx.clone();
+        async move { tx.send(ev).await.ok() }
+    };
+
+    let bin = match container_bin() {
+        Ok(b) => b,
+        Err(e) => {
+            send(event_error(e.to_string())).await;
+            return;
+        }
+    };
+
+    // ── pull ──────────────────────────────────────────────────────────────────
+    send(event(Stage::Pulling, format!("pulling {}", req.source))).await;
+    if let Err(e) = run_cmd(bin, &["pull", &req.source]).await {
+        send(event_error(format!("pull failed: {e}"))).await;
+        return;
+    }
+
+    // ── export ────────────────────────────────────────────────────────────────
+    send(event(Stage::Exporting, format!("exporting {}", req.source))).await;
+
+    let tmpdir = match tempfile::TempDir::new() {
+        Ok(d) => d,
+        Err(e) => {
+            send(event_error(format!("tempdir: {e}"))).await;
+            return;
+        }
+    };
+    let rootfs = tmpdir.path().join("rootfs");
+    if let Err(e) = tokio::fs::create_dir_all(&rootfs).await {
+        send(event_error(format!("mkdir rootfs: {e}"))).await;
+        return;
+    }
+
+    let container_id = match tokio::process::Command::new(bin)
+        .args(["create", &req.source])
+        .output()
+        .await
+    {
+        Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout).trim().to_string(),
+        Ok(o) => {
+            send(event_error(format!(
+                "container create failed: {}",
+                String::from_utf8_lossy(&o.stderr)
+            )))
+            .await;
+            return;
+        }
+        Err(e) => {
+            send(event_error(format!("container create: {e}"))).await;
+            return;
+        }
+    };
+
+    // pipe docker export | tar -x -C rootfs via sh -c to avoid manual stdin wiring
+    let pipeline = format!(
+        "{bin} export {container_id} | tar -x -C {}",
+        rootfs.to_string_lossy()
+    );
+    let tar_status = tokio::process::Command::new("sh")
+        .args(["-c", &pipeline])
+        .status()
+        .await;
+
+    let _ = run_cmd(bin, &["rm", &container_id]).await;
+
+    match tar_status {
+        Ok(s) if s.success() => {}
+        Ok(s) => {
+            send(event_error(format!("export/extract failed: {s}"))).await;
+            return;
+        }
+        Err(e) => {
+            send(event_error(format!("spawn export pipeline: {e}"))).await;
+            return;
+        }
+    }
+
+    // ── bake in overlay-init, resolv.conf, CA bundle ─────────────────────────
+    let sbin = rootfs.join("sbin");
+    if let Err(e) = tokio::fs::create_dir_all(&sbin).await {
+        send(event_error(format!("mkdir sbin: {e}"))).await;
+        return;
+    }
+    let overlay_init_path = sbin.join("overlay-init");
+    if let Err(e) = tokio::fs::write(&overlay_init_path, OVERLAY_INIT).await {
+        send(event_error(format!("write overlay-init: {e}"))).await;
+        return;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ =
+            tokio::fs::set_permissions(&overlay_init_path, std::fs::Permissions::from_mode(0o755))
+                .await;
+    }
+
+    // resolv.conf
+    let _ = tokio::fs::write(
+        rootfs.join("etc/resolv.conf"),
+        "nameserver 8.8.8.8\nnameserver 1.1.1.1\n",
+    )
+    .await;
+
+    // CA bundle — copy from host
+    for candidate in &[
+        "/etc/ssl/certs/ca-certificates.crt",
+        "/etc/pki/tls/certs/ca-bundle.crt",
+        "/etc/ssl/cert.pem",
+    ] {
+        if tokio::fs::metadata(candidate).await.is_ok() {
+            let dest = rootfs.join("etc/ssl/certs/ca-certificates.crt");
+            if let Some(parent) = dest.parent() {
+                let _ = tokio::fs::create_dir_all(parent).await;
+            }
+            let _ = tokio::fs::copy(candidate, &dest).await;
+            break;
+        }
+    }
+
+    // ── platform SSH public key ───────────────────────────────────────────────
+    match inject_platform_pubkey(&rootfs).await {
+        Ok(true) => {}
+        Ok(false) => {
+            tracing::warn!(
+                "platform key not found — image will require manual authorized_keys setup"
+            );
+        }
+        Err(e) => {
+            tracing::warn!("failed to inject platform key: {e}");
+        }
+    }
+
+    // ── squash ────────────────────────────────────────────────────────────────
+    send(event(Stage::Squashing, "building squashfs")).await;
+
+    let output_path = images_dir.join(format!("{}.sqfs", req.image_id));
+    let status = tokio::process::Command::new("mksquashfs")
+        .args([
+            rootfs.to_str().unwrap(),
+            output_path.to_str().unwrap(),
+            "-noappend",
+            "-comp",
+            "zstd",
+        ])
+        .status()
+        .await;
+
+    match status {
+        Ok(s) if s.success() => {}
+        Ok(s) => {
+            send(event_error(format!("mksquashfs failed: {s}"))).await;
+            return;
+        }
+        Err(e) => {
+            send(event_error(format!("spawn mksquashfs: {e}"))).await;
+            return;
+        }
+    }
+
+    let size_bytes = tokio::fs::metadata(&output_path)
+        .await
+        .map(|m| m.len() as i64)
+        .unwrap_or(0);
+
+    send(event_done(size_bytes)).await;
+}
+
 // ── Platform SSH key ──────────────────────────────────────────────────────────
+
+/// Inject the platform SSH public key into `rootfs/root/.ssh/authorized_keys`.
+/// Returns `Ok(true)` if the key was present and injected, `Ok(false)` if the
+/// platform key file doesn't exist yet (agent hasn't generated it).
+async fn inject_platform_pubkey(rootfs: &std::path::Path) -> anyhow::Result<bool> {
+    let key_path = platform_key_path();
+    if !key_path.exists() {
+        return Ok(false);
+    }
+
+    let private_key = load_or_generate_platform_key()?;
+    let pubkey = private_key.public_key();
+    let pubkey_str = pubkey
+        .to_openssh()
+        .map_err(|e| anyhow::anyhow!("serialize pubkey: {e}"))?;
+
+    let ssh_dir = rootfs.join("root/.ssh");
+    tokio::fs::create_dir_all(&ssh_dir).await?;
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = tokio::fs::set_permissions(&ssh_dir, std::fs::Permissions::from_mode(0o700)).await;
+    }
+
+    let authorized_keys_path = ssh_dir.join("authorized_keys");
+    let existing = tokio::fs::read_to_string(&authorized_keys_path)
+        .await
+        .unwrap_or_default();
+
+    if !existing.contains(pubkey_str.trim()) {
+        let mut content = existing;
+        if !content.is_empty() && !content.ends_with('\n') {
+            content.push('\n');
+        }
+        content.push_str(pubkey_str.trim());
+        content.push('\n');
+        tokio::fs::write(&authorized_keys_path, &content).await?;
+    }
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = tokio::fs::set_permissions(
+            &authorized_keys_path,
+            std::fs::Permissions::from_mode(0o600),
+        )
+        .await;
+    }
+
+    Ok(true)
+}
 
 struct SshClientHandler;
 
@@ -100,7 +422,7 @@ impl HostAgent for HostAgentService {
             })),
             Err(e) => Ok(Response::new(CreateVmResponse {
                 ok: false,
-                error: e.to_string(),
+                error: format!("{e:#}"),
             })),
         }
     }
@@ -117,7 +439,7 @@ impl HostAgent for HostAgentService {
             })),
             Err(e) => Ok(Response::new(StartVmResponse {
                 ok: false,
-                error: e.to_string(),
+                error: format!("{e:#}"),
             })),
         }
     }
@@ -134,7 +456,7 @@ impl HostAgent for HostAgentService {
             })),
             Err(e) => Ok(Response::new(StopVmResponse {
                 ok: false,
-                error: e.to_string(),
+                error: format!("{e:#}"),
             })),
         }
     }
@@ -151,7 +473,7 @@ impl HostAgent for HostAgentService {
             })),
             Err(e) => Ok(Response::new(DeleteVmResponse {
                 ok: false,
-                error: e.to_string(),
+                error: format!("{e:#}"),
             })),
         }
     }
@@ -175,7 +497,7 @@ impl HostAgent for HostAgentService {
             })),
             Err(e) => Ok(Response::new(TakeSnapshotResponse {
                 ok: false,
-                error: e.to_string(),
+                error: format!("{e:#}"),
                 snap_id: String::new(),
                 size_bytes: 0,
             })),
@@ -194,7 +516,7 @@ impl HostAgent for HostAgentService {
             })),
             Err(e) => Ok(Response::new(RestoreResponse {
                 ok: false,
-                error: e.to_string(),
+                error: format!("{e:#}"),
             })),
         }
     }
@@ -224,7 +546,7 @@ impl HostAgent for HostAgentService {
             })),
             Err(e) => Ok(Response::new(CloneVmResponse {
                 ok: false,
-                error: e.to_string(),
+                error: format!("{e:#}"),
             })),
         }
     }
@@ -260,7 +582,7 @@ impl HostAgent for HostAgentService {
             })),
             Err(e) => Ok(Response::new(MigrateVmResponse {
                 ok: false,
-                error: e.to_string(),
+                error: format!("{e:#}"),
             })),
         }
     }
@@ -277,7 +599,7 @@ impl HostAgent for HostAgentService {
             })),
             Err(e) => Ok(Response::new(ResizeCpuResponse {
                 ok: false,
-                error: e.to_string(),
+                error: format!("{e:#}"),
             })),
         }
     }
@@ -298,9 +620,29 @@ impl HostAgent for HostAgentService {
             })),
             Err(e) => Ok(Response::new(ResizeBandwidthResponse {
                 ok: false,
-                error: e.to_string(),
+                error: format!("{e:#}"),
             })),
         }
+    }
+
+    type BuildImageStream = std::pin::Pin<
+        Box<dyn futures_core::Stream<Item = Result<BuildImageEvent, Status>> + Send + 'static>,
+    >;
+
+    async fn build_image(
+        &self,
+        req: Request<BuildImageRequest>,
+    ) -> Result<Response<Self::BuildImageStream>, Status> {
+        let req = req.into_inner();
+        let images_dir = self.manager.images_dir.clone();
+
+        let (tx, rx) = tokio::sync::mpsc::channel(32);
+        tokio::spawn(async move {
+            build_image_inner(req, images_dir, tx).await;
+        });
+
+        let stream = tokio_stream::wrappers::ReceiverStream::new(rx);
+        Ok(Response::new(Box::pin(stream)))
     }
 
     type WatchEventsStream = std::pin::Pin<
@@ -372,6 +714,7 @@ impl HostAgent for HostAgentService {
             return Err(Status::invalid_argument("first frame must set vm_id"));
         }
         let initial_data = first.data;
+        let command = first.command;
 
         let vm = db::get_vm(&self.manager.pool, &vm_id)
             .await
@@ -414,15 +757,22 @@ impl HostAgent for HostAgentService {
             .await
             .map_err(|e| Status::internal(format!("open session: {e}")))?;
 
-        channel
-            .request_pty(false, "xterm-256color", 80, 24, 0, 0, &[])
-            .await
-            .map_err(|e| Status::internal(format!("pty request: {e}")))?;
+        if command.is_empty() {
+            channel
+                .request_pty(false, "xterm-256color", 80, 24, 0, 0, &[])
+                .await
+                .map_err(|e| Status::internal(format!("pty request: {e}")))?;
 
-        channel
-            .request_shell(false)
-            .await
-            .map_err(|e| Status::internal(format!("shell request: {e}")))?;
+            channel
+                .request_shell(false)
+                .await
+                .map_err(|e| Status::internal(format!("shell request: {e}")))?;
+        } else {
+            channel
+                .exec(false, command.as_str())
+                .await
+                .map_err(|e| Status::internal(format!("exec request: {e}")))?;
+        }
 
         let ssh_stream = channel.into_stream();
         let (mut ssh_reader, mut ssh_writer) = tokio::io::split(ssh_stream);
