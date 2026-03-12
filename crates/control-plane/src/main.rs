@@ -55,7 +55,7 @@ async fn main() -> anyhow::Result<()> {
     db::migrate(&pool).await?;
     info!("migrations complete");
 
-    let caddy_default = CaddyClient::new(&caddy_url, static_files_path);
+    let caddy_default = CaddyClient::new(&caddy_url, static_files_path.clone());
     caddy_default.write_static_files()?;
 
     let caddy_region_clients: HashMap<String, CaddyClient> = std::env::var("CADDY_REGION_URLS")
