@@ -341,7 +341,7 @@ cmd_build_from_image() {
     local overlay_init_host_path
     overlay_init_host_path="$(realpath "$tmpdir/sbin/overlay-init" 2>/dev/null || echo "$tmpdir/sbin/overlay-init")"
     local overlay_init_guest_path="/${overlay_init_host_path#$tmpdir/}"
-    echo "$overlay_init_guest_path" > "${output%.sqfs}.init"
+    echo "$overlay_init_guest_path" > "${output%.sqfs}.overlay-init"
     info "overlay-init guest path: $overlay_init_guest_path"
 
     info "writing resolv.conf..."

@@ -257,8 +257,9 @@ impl VmManager {
             )
             .context("register overlay resource")?;
 
+        let overlay_init_path = read_overlay_init_path(&self.images_dir, &vm.base_image);
         let mut boot_args = format!(
-            "console=ttyS0 reboot=k panic=1 pci=off {} init=/sbin/overlay-init overlay_root=vdb",
+            "console=ttyS0 reboot=k panic=1 pci=off {} init={overlay_init_path} overlay_root=vdb",
             networking::ip::kernel_boot_args(slot)
         );
         if vm.real_init != "/sbin/init" {
@@ -1229,6 +1230,16 @@ fn read_image_init(images_dir: &std::path::Path, name: &str) -> String {
     std::fs::read_to_string(&sidecar)
         .map(|s| s.trim().to_string())
         .unwrap_or_else(|_| "/sbin/init".into())
+}
+
+/// Read the overlay-init guest path from the .init sidecar written at build
+/// time. Defaults to /sbin/overlay-init if no sidecar exists (pre-usrmerge
+/// images or images built by the bash script before this fix).
+fn read_overlay_init_path(images_dir: &std::path::Path, image_id: &str) -> String {
+    let sidecar = images_dir.join(format!("{image_id}.overlay-init"));
+    std::fs::read_to_string(&sidecar)
+        .map(|s| s.trim().to_string())
+        .unwrap_or_else(|_| "/sbin/overlay-init".into())
 }
 
 /// Download a remote file to `dest` using a bearer token for auth.
