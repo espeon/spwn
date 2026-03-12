@@ -487,6 +487,7 @@ function eventColor(event: string): string {
     case "stopped":
       return "text-muted-foreground";
     case "error":
+    case "crashed":
       return "text-destructive";
     case "snapshot_taken":
       return "text-blue-400";
@@ -501,12 +502,14 @@ function EventLog({ vmId, status }: { vmId: string; status: string }) {
   const { data: events = [], isLoading } = useQuery({
     queryKey: ["vm-events", vmId],
     queryFn: () => listVmEvents(vmId, 20),
-    refetchInterval: isError ? false : 10_000,
+    refetchInterval: 10_000,
   });
 
   const latestError = useMemo(() => {
     if (!isError) return null;
-    return events.find((e) => e.event === "error") ?? null;
+    return (
+      events.find((e) => e.event === "crashed" || e.event === "error") ?? null
+    );
   }, [events, isError]);
 
   return (
@@ -516,7 +519,7 @@ function EventLog({ vmId, status }: { vmId: string; status: string }) {
       {isError && latestError && (
         <div className="mb-3 rounded-md border border-destructive/40 bg-destructive/10 px-4 py-3">
           <p className="text-xs font-medium text-destructive mb-1">
-            start failed
+            {latestError.event === "crashed" ? "vm crashed" : "start failed"}
           </p>
           <p className="text-xs font-mono text-destructive/90 break-all">
             {latestError.metadata ?? "unknown error"}

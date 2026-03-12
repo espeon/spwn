@@ -9,18 +9,18 @@ use fctools::{
         api::VmApi,
         configuration::{InitMethod, VmConfiguration, VmConfigurationData},
         models::{
-            BootSource, CreateSnapshot, Drive, LoadSnapshot, MachineConfiguration, MemoryBackend,
-            MemoryBackendType, NetworkInterface, NetworkOverride, SnapshotType,
+            BootSource, CreateSnapshot, Drive, LoadSnapshot, LoggerSystem, MachineConfiguration,
+            MemoryBackend, MemoryBackendType, NetworkInterface, NetworkOverride, SnapshotType,
         },
         shutdown::{VmShutdownAction, VmShutdownMethod},
     },
     vmm::{
-        arguments::{VmmApiSocket, VmmArguments, jailer::JailerArguments},
+        arguments::{VmmApiSocket, VmmArguments, VmmLogLevel, jailer::JailerArguments},
         executor::jailed::{FlatVirtualPathResolver, JailedVmmExecutor},
         id::VmmId,
         installation::VmmInstallation,
         ownership::VmmOwnershipModel,
-        resource::{MovedResourceType, ResourceType, system::ResourceSystem},
+        resource::{CreatedResourceType, MovedResourceType, ResourceType, system::ResourceSystem},
     },
 };
 use networking::NetworkManager;
@@ -38,6 +38,22 @@ pub enum VmEvent {
     Stopped { vm_id: String },
     Crashed { vm_id: String },
     SnapshotTaken { vm_id: String, snap_id: String },
+}
+
+/// Read the last ~2 KB of the firecracker log file for crash diagnostics.
+/// Returns None if the file doesn't exist or can't be read.
+pub fn read_fc_log_tail(path: &std::path::Path) -> Option<String> {
+    let content = std::fs::read_to_string(path).ok()?;
+    if content.is_empty() {
+        return None;
+    }
+    // keep the last 2000 chars to stay within the db metadata field
+    let trimmed = if content.len() > 2000 {
+        content[content.len() - 2000..].trim_start()
+    } else {
+        content.trim()
+    };
+    Some(trimmed.to_string())
 }
 
 pub struct VmManager {
@@ -299,7 +315,21 @@ impl VmManager {
                 }],
                 balloon_device: None,
                 vsock_device: None,
-                logger_system: None,
+                logger_system: {
+                    let log_res = resource_system
+                        .create_resource(
+                            PathBuf::from("firecracker.log"),
+                            ResourceType::Created(CreatedResourceType::File),
+                        )
+                        .context("register log resource")?;
+                    Some(LoggerSystem {
+                        logs: Some(log_res),
+                        level: Some(VmmLogLevel::Warn),
+                        show_level: Some(true),
+                        show_log_origin: None,
+                        module: None,
+                    })
+                },
                 metrics_system: None,
                 memory_hotplug_configuration: None,
                 mmds_configuration: None,
@@ -968,6 +998,10 @@ impl VmManager {
 
     fn jail_root_path(&self, vm_id: &str) -> PathBuf {
         jail_root_path(&self.chroot_base_dir, &self.installation, vm_id)
+    }
+
+    pub fn jail_log_path(&self, vm_id: &str) -> PathBuf {
+        self.jail_root_path(vm_id).join("firecracker.log")
     }
 
     fn jail_socket_path(&self, vm_id: &str) -> PathBuf {
