@@ -67,8 +67,8 @@ function CreateVmDialog({
     } else if (!/^[a-zA-Z0-9][a-zA-Z0-9\- ]*$/.test(trimmed)) {
       errs.name = "letters, numbers, hyphens, and spaces only";
     }
-    if (vcpus < 0.5 || vcpus > 8) {
-      errs.vcpus = "must be between 0.5 and 8";
+    if (vcpus < 0.125 || vcpus > 8) {
+      errs.vcpus = "must be between 0.125 and 8";
     }
     if (memoryMb < 128 || memoryMb > 12288 || memoryMb % 128 !== 0) {
       errs.memory = "must be 128–12288 mb in multiples of 128";
@@ -99,7 +99,7 @@ function CreateVmDialog({
     setFieldErrors({});
     const req = {
       name: name.trim(),
-      vcpus,
+      vcpus: vcpus * 1000, // convert to millicpus
       memory_mb: memoryMb,
       exposed_port: port,
     };
