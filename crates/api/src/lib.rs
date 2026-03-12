@@ -87,6 +87,8 @@ pub struct CreateVmRequest {
     pub placement_strategy: String,
     #[serde(default)]
     pub required_labels: Option<serde_json::Value>,
+    #[serde(default)]
+    pub region: Option<String>,
 }
 
 fn default_image() -> String {
@@ -158,6 +160,7 @@ struct VmResponse {
     overlay_path: Option<String>,
     cloned_from: Option<String>,
     disk_usage_mb: i32,
+    region: Option<String>,
 }
 
 impl From<db::VmRow> for VmResponse {
@@ -182,6 +185,7 @@ impl From<db::VmRow> for VmResponse {
             overlay_path: v.overlay_path,
             cloned_from: v.cloned_from,
             disk_usage_mb: v.disk_usage_mb,
+            region: v.region,
         }
     }
 }
@@ -248,6 +252,7 @@ pub fn router(ops: Arc<dyn VmOps>) -> Router {
         .route("/api/vms/{id}/events", get(list_vm_events))
         .route("/api/account/username", post(change_username))
         .route("/api/images", get(list_images))
+        .route("/api/regions", get(list_regions))
         .route("/healthz", get(|| async { "ok" }))
         .with_state(ops)
 }
@@ -290,6 +295,16 @@ async fn list_images(
                 .collect::<Vec<_>>(),
         )
         .into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+async fn list_regions(
+    Extension(pool): Extension<db::PgPool>,
+    _account_id: AccountId,
+) -> impl IntoResponse {
+    match db::list_active_regions(&pool).await {
+        Ok(regions) => Json(regions).into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     }
 }

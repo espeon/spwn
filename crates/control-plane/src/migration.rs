@@ -169,7 +169,21 @@ async fn drain_tick(pool: &db::PgPool, caddy: &CaddyRouter) -> anyhow::Result<()
         }
 
         for vm in active_vms {
-            match scheduler::pick_host(pool, vm.vcpus, vm.memory_mb, "spread", None).await {
+            // Prefer a target in the same region as the VM; fall back to any host if none found.
+            let region_labels = vm
+                .region
+                .as_deref()
+                .map(|r| serde_json::json!({"region": r}));
+            let target_result = match region_labels.as_ref() {
+                Some(labels) => {
+                    match scheduler::pick_host(pool, vm.vcpus, vm.memory_mb, "spread", Some(labels)).await {
+                        Ok(t) => Ok(t),
+                        Err(_) => scheduler::pick_host(pool, vm.vcpus, vm.memory_mb, "spread", None).await,
+                    }
+                }
+                None => scheduler::pick_host(pool, vm.vcpus, vm.memory_mb, "spread", None).await,
+            };
+            match target_result {
                 Ok(target) if target.id != host.id => {
                     if let Err(e) = migrate_vm(pool, caddy, &vm.id, &target.id).await {
                         error!("drain: failed to migrate vm {}: {e}", vm.id);

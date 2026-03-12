@@ -41,6 +41,7 @@ pub struct VmRow {
     pub last_started_at: Option<i64>,
     pub placement_strategy: String,
     pub required_labels: Option<serde_json::Value>,
+    pub region: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -94,6 +95,7 @@ pub struct NewVm {
     pub cloned_from: Option<String>,
     pub placement_strategy: String,
     pub required_labels: Option<serde_json::Value>,
+    pub region: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -163,8 +165,8 @@ pub async fn create_vm(pool: &PgPool, vm: &NewVm) -> Result<()> {
         "INSERT INTO vms (id, account_id, name, status, subdomain, vcpus, memory_mb,
          disk_mb, bandwidth_mbps, kernel_path, rootfs_path, overlay_path, real_init,
          ip_address, exposed_port, base_image, cloned_from, placement_strategy,
-         required_labels, created_at)
-         VALUES ($1,$2,$3,'stopped',$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)",
+         required_labels, region, created_at)
+         VALUES ($1,$2,$3,'stopped',$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)",
     )
     .bind(&vm.id)
     .bind(&vm.account_id)
@@ -184,6 +186,7 @@ pub async fn create_vm(pool: &PgPool, vm: &NewVm) -> Result<()> {
     .bind(&vm.cloned_from)
     .bind(&vm.placement_strategy)
     .bind(vm.required_labels.as_ref().map(sqlx::types::Json))
+    .bind(&vm.region)
     .bind(now)
     .execute(pool)
     .await?;
@@ -195,7 +198,7 @@ pub async fn get_vm(pool: &PgPool, id: &str) -> Result<Option<VmRow>> {
         "SELECT id, account_id, name, status, subdomain, vcpus, memory_mb, disk_mb, bandwidth_mbps,
          kernel_path, rootfs_path, overlay_path, real_init, ip_address, exposed_port, tap_device, pid,
          socket_path, host_id, base_image, cloned_from, disk_usage_mb, created_at, last_started_at,
-         placement_strategy, required_labels FROM vms WHERE id = $1",
+         placement_strategy, required_labels, region FROM vms WHERE id = $1",
     )
     .bind(id)
     .fetch_optional(pool)
@@ -208,7 +211,7 @@ pub async fn get_vm_by_subdomain(pool: &PgPool, subdomain: &str) -> Result<Optio
         "SELECT id, account_id, name, status, subdomain, vcpus, memory_mb, disk_mb, bandwidth_mbps,
          kernel_path, rootfs_path, overlay_path, real_init, ip_address, exposed_port, tap_device, pid,
          socket_path, host_id, base_image, cloned_from, disk_usage_mb, created_at, last_started_at,
-         placement_strategy, required_labels FROM vms WHERE subdomain = $1",
+         placement_strategy, required_labels, region FROM vms WHERE subdomain = $1",
     )
     .bind(subdomain)
     .fetch_optional(pool)
@@ -221,7 +224,7 @@ pub async fn list_vms(pool: &PgPool, account_id: &str) -> Result<Vec<VmRow>> {
         "SELECT id, account_id, name, status, subdomain, vcpus, memory_mb, disk_mb, bandwidth_mbps,
          kernel_path, rootfs_path, overlay_path, real_init, ip_address, exposed_port, tap_device, pid,
          socket_path, host_id, base_image, cloned_from, disk_usage_mb, created_at, last_started_at,
-         placement_strategy, required_labels FROM vms WHERE account_id = $1
+         placement_strategy, required_labels, region FROM vms WHERE account_id = $1
          ORDER BY created_at DESC",
     )
     .bind(account_id)
@@ -263,7 +266,7 @@ pub async fn get_vms_by_status(pool: &PgPool, status: &str) -> Result<Vec<VmRow>
         "SELECT id, account_id, name, status, subdomain, vcpus, memory_mb, disk_mb, bandwidth_mbps,
          kernel_path, rootfs_path, overlay_path, real_init, ip_address, exposed_port, tap_device, pid,
          socket_path, host_id, base_image, cloned_from, disk_usage_mb, created_at, last_started_at,
-         placement_strategy, required_labels FROM vms WHERE status = $1",
+         placement_strategy, required_labels, region FROM vms WHERE status = $1",
     )
     .bind(status)
     .fetch_all(pool)
@@ -276,7 +279,7 @@ pub async fn get_all_vms(pool: &PgPool) -> Result<Vec<VmRow>> {
         "SELECT id, account_id, name, status, subdomain, vcpus, memory_mb, disk_mb, bandwidth_mbps,
          kernel_path, rootfs_path, overlay_path, real_init, ip_address, exposed_port, tap_device, pid,
          socket_path, host_id, base_image, cloned_from, disk_usage_mb, created_at, last_started_at,
-         placement_strategy, required_labels FROM vms",
+         placement_strategy, required_labels, region FROM vms",
     )
     .fetch_all(pool)
     .await?;
@@ -288,7 +291,7 @@ pub async fn get_vms_by_host(pool: &PgPool, host_id: &str) -> Result<Vec<VmRow>>
         "SELECT id, account_id, name, status, subdomain, vcpus, memory_mb, disk_mb, bandwidth_mbps,
          kernel_path, rootfs_path, overlay_path, real_init, ip_address, exposed_port, tap_device, pid,
          socket_path, host_id, base_image, cloned_from, disk_usage_mb, created_at, last_started_at,
-         placement_strategy, required_labels FROM vms WHERE host_id = $1",
+         placement_strategy, required_labels, region FROM vms WHERE host_id = $1",
     )
     .bind(host_id)
     .fetch_all(pool)
@@ -419,7 +422,28 @@ fn row_to_vm(r: sqlx::postgres::PgRow) -> VmRow {
         last_started_at: r.get("last_started_at"),
         placement_strategy: r.get("placement_strategy"),
         required_labels: r.get("required_labels"),
+        region: r.get("region"),
     }
+}
+
+pub async fn set_vm_region(pool: &PgPool, vm_id: &str, region: &str) -> Result<()> {
+    sqlx::query("UPDATE vms SET region = $1 WHERE id = $2")
+        .bind(region)
+        .bind(vm_id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+pub async fn list_active_regions(pool: &PgPool) -> Result<Vec<String>> {
+    let rows = sqlx::query(
+        "SELECT DISTINCT labels->>'region' AS region FROM hosts
+         WHERE status = 'active' AND labels->>'region' IS NOT NULL
+         ORDER BY region",
+    )
+    .fetch_all(pool)
+    .await?;
+    Ok(rows.iter().map(|r| r.get("region")).collect())
 }
 
 pub async fn update_disk_usage_mb(pool: &PgPool, vm_id: &str, disk_usage_mb: i32) -> Result<()> {
@@ -1088,7 +1112,7 @@ pub async fn get_vm_by_name(pool: &PgPool, account_id: &str, name: &str) -> Resu
         "SELECT id, account_id, name, status, subdomain, vcpus, memory_mb, disk_mb, bandwidth_mbps,
          kernel_path, rootfs_path, overlay_path, real_init, ip_address, exposed_port, tap_device, pid,
          socket_path, host_id, base_image, cloned_from, disk_usage_mb, created_at, last_started_at,
-         placement_strategy, required_labels FROM vms WHERE account_id = $1 AND name = $2",
+         placement_strategy, required_labels, region FROM vms WHERE account_id = $1 AND name = $2",
     )
     .bind(account_id)
     .bind(name)

@@ -6,6 +6,7 @@ import { trackVmToast } from "@/hooks/useVmEvents";
 import {
   listVms,
   listImages,
+  listRegions,
   createVm,
   startVm,
   stopVm,
@@ -40,6 +41,7 @@ function CreateVmDialog({
   const [image, setImage] = useState("");
   const [vcpus, setVcpus] = useState(1.0);
   const [memoryMb, setMemoryMb] = useState(512);
+  const [region, setRegion] = useState("");
   const [port, setPort] = useState(8080);
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const [submitError, setSubmitError] = useState<string | null>(null);
@@ -50,6 +52,12 @@ function CreateVmDialog({
     staleTime: 60_000,
   });
 
+  const { data: regions = [] } = useQuery({
+    queryKey: ["regions"],
+    queryFn: listRegions,
+    staleTime: 60_000,
+  });
+
   useEffect(() => {
     if (images.length > 0 && !image) {
       // eslint-disable-next-line react-hooks/set-state-in-effect
@@ -57,21 +65,21 @@ function CreateVmDialog({
     }
   }, [images, image]);
 
-  function initAllDefault() {
-    setName("");
-    setImage(images.length > 0 ? `${images[0].name}:${images[0].tag}` : "");
-    setVcpus(1.0);
-    setMemoryMb(512);
-    setPort(8080);
-    setFieldErrors({});
-    setSubmitError(null);
-  }
   useEffect(() => {
+    const initAllDefault = () => {
+      setName("");
+      setImage(images.length > 0 ? `${images[0].name}:${images[0].tag}` : "");
+      setVcpus(1.0);
+      setMemoryMb(512);
+      setPort(8080);
+      setRegion(regions.length > 0 ? regions[0] : "");
+      setFieldErrors({});
+      setSubmitError(null);
+    };
     if (!open) {
-      // eslint-disable-next-line react-hooks/set-state-in-effect
       initAllDefault();
     }
-  }, [open]);
+  }, [open, images, regions]);
 
   function validate(): Record<string, string> {
     const errs: Record<string, string> = {};
@@ -287,6 +295,32 @@ function CreateVmDialog({
             />
             {fieldErrors.port && (
               <p className="text-xs text-destructive">{fieldErrors.port}</p>
+            )}
+          </div>
+          <div>
+            <Label htmlFor="vm-region">region</Label>
+            <select
+              id="vm-region"
+              value={region}
+              onChange={(e) => {
+                setRegion(e.target.value);
+                if (fieldErrors.region)
+                  setFieldErrors((p) => ({ ...p, region: "" }));
+              }}
+              className={`w-full rounded-md border px-3 py-2 ${
+                fieldErrors.region
+                  ? "border-destructive focus-visible:ring-destructive"
+                  : "border-input"
+              }`}
+            >
+              {regions.map((r) => (
+                <option key={r} value={r}>
+                  {r}
+                </option>
+              ))}
+            </select>
+            {fieldErrors.region && (
+              <p className="text-xs text-destructive">{fieldErrors.region}</p>
             )}
           </div>
           {submitError && (
