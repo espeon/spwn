@@ -126,7 +126,7 @@ type Account struct {
 	DisplayName string `json:"display_name"`
 	Theme       string `json:"theme"`
 	VmLimit     int    `json:"vm_limit"`
-	VcpuLimit   int64 `json:"vcpu_limit"`
+	VcpuLimit   int64  `json:"vcpu_limit"`
 	MemLimitMb  int    `json:"mem_limit_mb"`
 }
 
@@ -141,23 +141,23 @@ func (c *Client) Me() (Account, error) {
 // ── VMs ───────────────────────────────────────────────────────────────────────
 
 type VM struct {
-	ID          string  `json:"id"`
-	Name        string  `json:"name"`
-	Status      string  `json:"status"`
-	Subdomain   string  `json:"subdomain"`
-	Vcpus       int64 `json:"vcpus"`
-	MemoryMb    int   `json:"memory_mb"`
-	IPAddress   string  `json:"ip_address"`
-	ExposedPort int     `json:"exposed_port"`
-	Image       string  `json:"image"`
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Status      string `json:"status"`
+	Subdomain   string `json:"subdomain"`
+	Vcpus       int64  `json:"vcpus"`
+	MemoryMb    int    `json:"memory_mb"`
+	IPAddress   string `json:"ip_address"`
+	ExposedPort int    `json:"exposed_port"`
+	Image       string `json:"image"`
 }
 
 type CreateVMRequest struct {
-	Name        string  `json:"name"`
-	Image       string  `json:"image,omitempty"`
-	Vcpus       int64 `json:"vcpus,omitempty"`
-	MemoryMb    int     `json:"memory_mb,omitempty"`
-	ExposedPort int     `json:"exposed_port,omitempty"`
+	Name        string `json:"name"`
+	Image       string `json:"image,omitempty"`
+	Vcpus       int64  `json:"vcpus,omitempty"`
+	MemoryMb    int    `json:"memory_mb,omitempty"`
+	ExposedPort int    `json:"exposed_port,omitempty"`
 }
 
 type PatchVMRequest struct {
@@ -183,6 +183,14 @@ func (c *Client) GetVM(id string) (VM, error) {
 
 func (c *Client) GetVMByName(name string) ([]VM, error) {
 	resp, err := c.do("GET", "/api/vms?name="+url.QueryEscape(name), nil)
+	if err != nil {
+		return nil, err
+	}
+	return decode[[]VM](resp)
+}
+
+func (c *Client) GetVMBySubdomain(subdomain string) ([]VM, error) {
+	resp, err := c.do("GET", "/api/vms?subdomain="+url.QueryEscape(subdomain), nil)
 	if err != nil {
 		return nil, err
 	}
