@@ -1,3 +1,23 @@
+export interface Image {
+  id: string;
+  name: string;
+  tag: string;
+  source: string;
+  status: string;
+  size_bytes: number;
+  created_at: number;
+}
+
+export interface AdminImage extends Image {
+  error: string | null;
+}
+
+export interface BuildImageRequest {
+  source: string;
+  name: string;
+  tag?: string;
+}
+
 export type VmStatus =
   | "stopped"
   | "starting"
@@ -38,6 +58,7 @@ export interface Vm {
 
 export interface CreateVmRequest {
   name: string;
+  image: string;
   vcpus: number;
   memory_mb: number;
   exposed_port: number;
@@ -53,7 +74,9 @@ class ApiError extends Error {
 }
 
 async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
-  const headers: Record<string, string> = { ...options.headers as Record<string, string> };
+  const headers: Record<string, string> = {
+    ...(options.headers as Record<string, string>),
+  };
   if (options.body !== undefined) {
     headers["Content-Type"] = "application/json";
   }
@@ -292,11 +315,49 @@ export function setHostStatus(id: string, status: string): Promise<void> {
   });
 }
 
-export function adminMigrateVm(vmId: string, targetHostId: string): Promise<void> {
+export function adminMigrateVm(
+  vmId: string,
+  targetHostId: string,
+): Promise<void> {
   return request(`/api/admin/vms/${vmId}/migrate`, {
     method: "POST",
     body: JSON.stringify({ target_host_id: targetHostId }),
   });
+}
+
+// ── vm events ─────────────────────────────────────────────────────────────────
+
+export interface VmEvent {
+  id: string;
+  vm_id: string;
+  event: string;
+  metadata: string | null;
+  created_at: number;
+}
+
+export function listVmEvents(vmId: string, limit = 20): Promise<VmEvent[]> {
+  return request(`/api/vms/${vmId}/events?limit=${limit}`);
+}
+
+// ── images ────────────────────────────────────────────────────────────────────
+
+export function listImages(): Promise<Image[]> {
+  return request("/api/images");
+}
+
+export function listAdminImages(): Promise<AdminImage[]> {
+  return request("/api/admin/images");
+}
+
+export function buildImage(req: BuildImageRequest): Promise<AdminImage> {
+  return request("/api/admin/images", {
+    method: "POST",
+    body: JSON.stringify(req),
+  });
+}
+
+export function deleteAdminImage(id: string): Promise<void> {
+  return request(`/api/admin/images/${id}`, { method: "DELETE" });
 }
 
 export { ApiError };

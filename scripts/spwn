@@ -6,12 +6,31 @@ set -euo pipefail
 # usage: scripts/spwn <command> [args]
 #
 # commands:
-#   download        download kernel, ubuntu rootfs, and ssh key to /tmp
-#   build-rootfs    convert ext4 rootfs → squashfs with overlay-init baked in
-#   setup           download + build-rootfs (full dev setup)
+#   download             download kernel, ubuntu rootfs, and ssh key to /tmp
+#   build-rootfs         convert ext4 rootfs → squashfs with overlay-init baked in
+#   build-from-image     build a rootfs from any docker image (e.g. ubuntu:22.04)
+#   setup                download + build-rootfs (full dev setup)
 #   images               list available squashfs images in IMAGES_DIR
 #   inject-platform-key  rebuild a squashfs image with the platform public key and latest overlay-init
 #   help                 show this message
+#
+# rootfs customization:
+#   place a shell script at scripts/rootfs-config.sh and it will be copied into
+#   the rootfs and executed via chroot during build-from-image and inject-platform-key.
+#   use it to install packages, write config files, etc.
+#   note: build-rootfs converts the stripped firecracker ext4 image and does NOT
+#         run rootfs-config.sh — use build-from-image for a full apt-capable rootfs.
+#
+#   example scripts/rootfs-config.sh:
+#     #!/bin/sh
+#     apt-get update -qq
+#     apt-get install -y -qq curl git vim htop
+#
+# build-from-image examples:
+#   sudo scripts/spwn build-from-image ubuntu:22.04
+#   sudo scripts/spwn build-from-image ubuntu:22.04 jammy
+#   sudo scripts/spwn build-from-image debian:bookworm debian
+#     echo "PermitRootLogin yes" >> /etc/ssh/sshd_config
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
@@ -51,6 +70,160 @@ download_file() {
     info "downloading $label..."
     curl -fL --progress-bar -o "$dest" "$url"
     info "$label → $dest"
+}
+
+# ── shared rootfs helpers ────────────────────────────────────────────────────
+
+# install_overlay_init <rootdir>
+# Writes /sbin/overlay-init into the given rootfs directory.
+install_overlay_init() {
+    local root="$1"
+    mkdir -p "$root/sbin" "$root/overlay" "$root/rom"
+    cat > "$root/sbin/overlay-init" << 'EOF'
+#!/bin/sh
+set -e
+
+REAL_INIT=/sbin/init
+
+mount -t proc proc /proc
+mount -t sysfs sysfs /sys
+mount -t devtmpfs devtmpfs /dev 2>/dev/null || true
+
+for x in $(cat /proc/cmdline); do
+    case "$x" in
+    overlay_root=*)  OVERLAY_ROOT="${x#overlay_root=}" ;;
+    real_init=*)     REAL_INIT="${x#real_init=}" ;;
+    esac
+done
+
+if [ -z "$OVERLAY_ROOT" ]; then
+    exec "$REAL_INIT" "$@"
+fi
+
+mkdir -p /overlay
+mount -t ext4 "/dev/${OVERLAY_ROOT}" /overlay
+
+mkdir -p /overlay/upper /overlay/work
+
+mkdir -p /rom
+mount -t overlay overlay \
+    -o "lowerdir=/,upperdir=/overlay/upper,workdir=/overlay/work" \
+    /rom
+
+for dir in dev proc sys; do
+    mkdir -p "/rom/${dir}"
+    mount --move "/${dir}" "/rom/${dir}" 2>/dev/null || true
+done
+
+cd /rom
+pivot_root . overlay
+exec chroot . "$REAL_INIT" "$@" <dev/console >dev/console 2>&1
+EOF
+    chmod +x "$root/sbin/overlay-init"
+}
+
+# install_resolv <rootdir>
+# Writes a basic resolv.conf with public DNS resolvers.
+install_resolv() {
+    local root="$1"
+    cat > "$root/etc/resolv.conf" << 'EOF'
+nameserver 8.8.8.8
+nameserver 1.1.1.1
+EOF
+}
+
+# run_rootfs_config <rootdir>
+# Copies scripts/rootfs-config.sh into the rootfs and runs it via chroot, if present.
+run_rootfs_config() {
+    local root="$1"
+    local config_script="$SCRIPT_DIR/rootfs-config.sh"
+
+    if [[ ! -f "$config_script" ]]; then
+        return
+    fi
+
+    info "running rootfs-config.sh in chroot..."
+    cp "$config_script" "$root/tmp/rootfs-config.sh"
+    chmod +x "$root/tmp/rootfs-config.sh"
+
+    # bind-mount proc/sys/dev so apt and other tools work inside the chroot
+    mount -t proc  proc    "$root/proc"
+    mount -t sysfs sysfs   "$root/sys"
+    mount --bind   /dev    "$root/dev"
+    mount --bind   /dev/pts "$root/dev/pts"
+
+    local chroot_ok=0
+    chroot "$root" /tmp/rootfs-config.sh && chroot_ok=1 || true
+
+    umount "$root/dev/pts" 2>/dev/null || true
+    umount "$root/dev"     2>/dev/null || true
+    umount "$root/sys"     2>/dev/null || true
+    umount "$root/proc"    2>/dev/null || true
+
+    rm -f "$root/tmp/rootfs-config.sh"
+
+    if [[ $chroot_ok -eq 0 ]]; then
+        error "rootfs-config.sh exited with an error"
+    fi
+
+    info "rootfs-config.sh done"
+}
+
+# update_ca_certs <rootdir>
+# Copies the host CA bundle into the rootfs so HTTPS works out of the box.
+update_ca_certs() {
+    local root="$1"
+    local host_bundle=""
+    for candidate in \
+        /etc/ssl/certs/ca-certificates.crt \
+        /etc/pki/tls/certs/ca-bundle.crt \
+        /etc/ssl/cert.pem; do
+        if [[ -f "$candidate" ]]; then
+            host_bundle="$candidate"
+            break
+        fi
+    done
+
+    if [[ -z "$host_bundle" ]]; then
+        info "no host CA bundle found, skipping"
+        return
+    fi
+
+    mkdir -p "$root/etc/ssl/certs"
+    cp "$host_bundle" "$root/etc/ssl/certs/ca-certificates.crt"
+    info "copied CA bundle from $host_bundle"
+}
+
+# install_platform_key <rootdir>
+# Injects the platform SSH public key into the rootfs authorized_keys.
+# Skips silently if the platform key file does not exist yet.
+install_platform_key() {
+    local root="$1"
+    local platform_key_path="${PLATFORM_KEY_PATH:-/var/lib/spwn/platform_key}"
+
+    if [[ ! -f "$platform_key_path" ]]; then
+        info "platform key not found at $platform_key_path — skipping (run the agent once to generate it, then re-run inject-platform-key)"
+        return
+    fi
+
+    local pubkey
+    pubkey="$(ssh-keygen -y -f "$platform_key_path")"
+    [[ -n "$pubkey" ]] || error "failed to read public key from $platform_key_path"
+
+    mkdir -p "$root/root/.ssh"
+    chmod 700 "$root/root/.ssh"
+
+    local authorized_keys="$root/root/.ssh/authorized_keys"
+    touch "$authorized_keys"
+
+    if grep -qF "$pubkey" "$authorized_keys" 2>/dev/null; then
+        info "platform key already present in authorized_keys, skipping"
+    else
+        echo "$pubkey" >> "$authorized_keys"
+        info "platform key added to authorized_keys"
+    fi
+    chmod 600 "$authorized_keys"
+    info "platform key fingerprint: $(ssh-keygen -l -f "$platform_key_path" | awk '{print $2}')"
 }
 
 # ── commands ─────────────────────────────────────────────────────────────────
@@ -93,50 +266,12 @@ cmd_build_rootfs() {
     mount "$input" "$mountpoint"
 
     info "adding overlay-init..."
-    mkdir -p "$mountpoint"/{overlay,rom}
+    install_overlay_init "$mountpoint"
 
-    cat > "$mountpoint/sbin/overlay-init" << 'EOF'
-#!/bin/sh
-set -e
+    info "writing resolv.conf..."
+    install_resolv "$mountpoint"
 
-REAL_INIT=/sbin/init
-
-mount -t proc proc /proc
-mount -t sysfs sysfs /sys
-mount -t devtmpfs devtmpfs /dev 2>/dev/null || true
-
-for x in $(cat /proc/cmdline); do
-    case "$x" in
-    overlay_root=*)  OVERLAY_ROOT="${x#overlay_root=}" ;;
-    real_init=*)     REAL_INIT="${x#real_init=}" ;;
-    esac
-done
-
-if [ -z "$OVERLAY_ROOT" ]; then
-    exec "$REAL_INIT" "$@"
-fi
-
-mkdir -p /overlay
-mount -t ext4 "/dev/${OVERLAY_ROOT}" /overlay
-
-mkdir -p /overlay/upper /overlay/work
-
-mkdir -p /rom
-mount -t overlay overlay \
-    -o "lowerdir=/,upperdir=/overlay/upper,workdir=/overlay/work" \
-    /rom
-
-for dir in dev proc sys; do
-    mkdir -p "/rom/${dir}"
-    mount --move "/${dir}" "/rom/${dir}" 2>/dev/null || true
-done
-
-cd /rom
-pivot_root . overlay
-exec chroot . "$REAL_INIT" "$@" <dev/console >dev/console 2>&1
-EOF
-
-    chmod +x "$mountpoint/sbin/overlay-init"
+    update_ca_certs "$mountpoint"
 
     info "building squashfs (zstd) → $output..."
     mksquashfs "$mountpoint" "$output" -noappend -comp zstd
@@ -154,20 +289,95 @@ EOF
     info "  curl -X POST http://localhost:3000/api/vms -d '{\"name\":\"my-vm\",\"image\":\"$name\"}'"
 }
 
+cmd_build_from_image() {
+    require_root "build-from-image"
+    require_cmd mksquashfs "apt install squashfs-tools"
+
+    local docker_image="${1:-ubuntu:22.04}"
+    local name="${2:-}"
+    # derive name from image if not given: "ubuntu:22.04" → "ubuntu"
+    if [[ -z "$name" ]]; then
+        name="${docker_image%%:*}"
+        name="${name##*/}"
+    fi
+    local output="${IMAGES_DIR}/${name}.sqfs"
+    local tmpdir
+    tmpdir="$(mktemp -d)"
+
+    mkdir -p "$IMAGES_DIR"
+
+    cleanup() {
+        umount "$tmpdir/dev/pts" 2>/dev/null || true
+        umount "$tmpdir/dev"     2>/dev/null || true
+        umount "$tmpdir/sys"     2>/dev/null || true
+        umount "$tmpdir/proc"    2>/dev/null || true
+        rm -rf "$tmpdir"
+    }
+    trap cleanup EXIT
+
+    local docker_bin=""
+    if command -v docker &>/dev/null; then
+        docker_bin="docker"
+    elif command -v podman &>/dev/null; then
+        docker_bin="podman"
+    else
+        error "docker or podman is required"
+    fi
+
+    info "pulling $docker_image..."
+    $docker_bin pull "$docker_image"
+
+    info "exporting $docker_image → $tmpdir..."
+    local container_id
+    container_id="$($docker_bin create "$docker_image")"
+    $docker_bin export "$container_id" | tar -x -C "$tmpdir"
+    $docker_bin rm "$container_id"
+
+    info "adding overlay-init..."
+    install_overlay_init "$tmpdir"
+
+    # Resolve the actual in-guest path to overlay-init, accounting for usrmerge
+    # distros (Ubuntu 22.04+) where /sbin is a symlink to usr/sbin.
+    local overlay_init_host_path
+    overlay_init_host_path="$(realpath "$tmpdir/sbin/overlay-init" 2>/dev/null || echo "$tmpdir/sbin/overlay-init")"
+    local overlay_init_guest_path="/${overlay_init_host_path#$tmpdir/}"
+    echo "$overlay_init_guest_path" > "${output%.sqfs}.overlay-init"
+    info "overlay-init guest path: $overlay_init_guest_path"
+
+    info "writing resolv.conf..."
+    install_resolv "$tmpdir"
+
+    update_ca_certs "$tmpdir"
+
+    run_rootfs_config "$tmpdir"
+
+    install_platform_key "$tmpdir"
+
+    info "building squashfs (zstd) → $output..."
+    mksquashfs "$tmpdir" "$output" -noappend -comp zstd
+
+    trap - EXIT
+    rm -rf "$tmpdir"
+
+    local size
+    size="$(du -h "$output" | cut -f1)"
+    info "done: $output ($size)"
+    info ""
+    info "available as image '$name' (from: $docker_image) — create a VM with:"
+    info "  curl -X POST http://localhost:3000/api/vms -d '{\"name\":\"my-vm\",\"image\":\"$name\"}'"
+}
+
 cmd_inject_platform_key() {
     require_root "inject-platform-key"
     require_cmd mksquashfs "apt install squashfs-tools"
     require_cmd unsquashfs "apt install squashfs-tools"
 
     local name="${1:-ubuntu}"
-    local platform_key_path="${PLATFORM_KEY_PATH:-/var/lib/spwn/platform_key}"
     local image="${IMAGES_DIR}/${name}.sqfs"
     [[ -f "$image" ]] || error "image not found: $image (run: sudo scripts/spwn build-rootfs $name)"
-    [[ -f "$platform_key_path" ]] || error "platform key not found: $platform_key_path (run the agent once to generate it)"
 
-    local pubkey
-    pubkey="$(ssh-keygen -y -f "$platform_key_path")"
-    [[ -n "$pubkey" ]] || error "failed to read public key from $platform_key_path"
+    local platform_key_path="${PLATFORM_KEY_PATH:-/var/lib/spwn/platform_key}"
+    [[ -f "$platform_key_path" ]] || error "platform key not found: $platform_key_path (run the agent once to generate it)"
 
     local tmpdir=""
     tmpdir="$(mktemp -d)"
@@ -181,65 +391,17 @@ cmd_inject_platform_key() {
     info "extracting $image..."
     unsquashfs -d "$tmpdir/rootfs" "$image"
 
-    info "injecting platform public key..."
-    mkdir -p "$tmpdir/rootfs/root/.ssh"
-    chmod 700 "$tmpdir/rootfs/root/.ssh"
-
-    local authorized_keys="$tmpdir/rootfs/root/.ssh/authorized_keys"
-    touch "$authorized_keys"
-
-    if grep -qF "$pubkey" "$authorized_keys" 2>/dev/null; then
-        info "platform key already present in authorized_keys, skipping"
-    else
-        echo "$pubkey" >> "$authorized_keys"
-        info "platform key added to authorized_keys"
-    fi
-    chmod 600 "$authorized_keys"
-
     info "updating overlay-init..."
-    mkdir -p "$tmpdir/rootfs/sbin"
-    mkdir -p "$tmpdir/rootfs/overlay" "$tmpdir/rootfs/rom"
-    cat > "$tmpdir/rootfs/sbin/overlay-init" << 'OVERLAY_INIT_EOF'
-#!/bin/sh
-set -e
+    install_overlay_init "$tmpdir/rootfs"
 
-REAL_INIT=/sbin/init
+    info "writing resolv.conf..."
+    install_resolv "$tmpdir/rootfs"
 
-mount -t proc proc /proc
-mount -t sysfs sysfs /sys
-mount -t devtmpfs devtmpfs /dev 2>/dev/null || true
+    update_ca_certs "$tmpdir/rootfs"
 
-for x in $(cat /proc/cmdline); do
-    case "$x" in
-    overlay_root=*)  OVERLAY_ROOT="${x#overlay_root=}" ;;
-    real_init=*)     REAL_INIT="${x#real_init=}" ;;
-    esac
-done
+    run_rootfs_config "$tmpdir/rootfs"
 
-if [ -z "$OVERLAY_ROOT" ]; then
-    exec "$REAL_INIT" "$@"
-fi
-
-mkdir -p /overlay
-mount -t ext4 "/dev/${OVERLAY_ROOT}" /overlay
-
-mkdir -p /overlay/upper /overlay/work
-
-mkdir -p /rom
-mount -t overlay overlay \
-    -o "lowerdir=/,upperdir=/overlay/upper,workdir=/overlay/work" \
-    /rom
-
-for dir in dev proc sys; do
-    mkdir -p "/rom/${dir}"
-    mount --move "/${dir}" "/rom/${dir}" 2>/dev/null || true
-done
-
-cd /rom
-pivot_root . overlay
-exec chroot . "$REAL_INIT" "$@" <dev/console >dev/console 2>&1
-OVERLAY_INIT_EOF
-    chmod +x "$tmpdir/rootfs/sbin/overlay-init"
+    install_platform_key "$tmpdir/rootfs"
 
     local backup="${image}.bak"
     info "backing up original image to $backup..."
@@ -251,7 +413,6 @@ OVERLAY_INIT_EOF
     local size
     size="$(du -h "$image" | cut -f1)"
     info "done: $image ($size)"
-    info "platform key fingerprint: $(ssh-keygen -l -f "$platform_key_path" | awk '{print $2}')"
     trap - EXIT
 }
 
@@ -293,11 +454,12 @@ cmd_help() {
 # ── dispatch ─────────────────────────────────────────────────────────────────
 
 case "${1:-help}" in
-    download)     cmd_download ;;
-    build-rootfs) cmd_build_rootfs "${@:2}" ;;
-    setup)                cmd_setup ;;
-    images)               cmd_images ;;
-    inject-platform-key)  cmd_inject_platform_key "${@:2}" ;;
-    help|--help)          cmd_help ;;
+    download)            cmd_download ;;
+    build-rootfs)        cmd_build_rootfs "${@:2}" ;;
+    build-from-image)    cmd_build_from_image "${@:2}" ;;
+    setup)               cmd_setup ;;
+    images)              cmd_images ;;
+    inject-platform-key) cmd_inject_platform_key "${@:2}" ;;
+    help|--help)         cmd_help ;;
     *)            error "unknown command: $1. run 'scripts/spwn help'" ;;
 esac

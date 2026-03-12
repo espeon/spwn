@@ -20,6 +20,7 @@ import { SshKeysPage } from "./pages/SshKeysPage";
 import { CliAuthPage } from "./pages/CliAuthPage";
 import HomePage from "./pages/HomePage";
 import { AdminPage } from "./pages/AdminPage";
+import { ImagesPage } from "./pages/ImagesPage";
 
 const rootRoute = createRootRoute({
   component: RootLayout,
@@ -97,6 +98,12 @@ const vmDetailRoute = createRoute({
   component: VmDetailPage,
 });
 
+const imagesRoute = createRoute({
+  getParentRoute: () => authedRoute,
+  path: "/images",
+  component: ImagesPage,
+});
+
 const accountRoute = createRoute({
   getParentRoute: () => authedRoute,
   path: "/account",
@@ -154,6 +161,7 @@ const routeTree = rootRoute.addChildren([
   authedRoute.addChildren([
     vmListRoute,
     vmDetailRoute,
+    imagesRoute,
     adminRoute,
     accountRoute.addChildren([
       accountIndexRoute,

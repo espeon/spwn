@@ -15,7 +15,6 @@ import (
 
 	cssh "github.com/charmbracelet/ssh"
 	"github.com/charmbracelet/wish"
-	"github.com/charmbracelet/wish/activeterm"
 	"github.com/charmbracelet/wish/logging"
 	gossh "golang.org/x/crypto/ssh"
 	"google.golang.org/grpc"
@@ -90,9 +89,15 @@ func (cfg *gatewayConfig) callAuth(path string, body map[string]string) (*authRe
 	return &out, nil
 }
 
+func looksLikeUUID(s string) bool {
+	return len(s) == 36 && strings.Count(s, "-") == 4
+}
+
 func (cfg *gatewayConfig) lookupVM(username, accountUsername string) (*vmLookupResponse, error) {
 	var query string
-	if strings.Contains(username, ".") {
+	if looksLikeUUID(username) {
+		query = "vm_id=" + neturl.QueryEscape(username)
+	} else if strings.Contains(username, ".") {
 		query = "subdomain=" + neturl.QueryEscape(username)
 	} else if accountUsername != "" {
 		query = "subdomain=" + neturl.QueryEscape(username+"."+accountUsername)
@@ -100,6 +105,7 @@ func (cfg *gatewayConfig) lookupVM(username, accountUsername string) (*vmLookupR
 		query = "vm_id=" + neturl.QueryEscape(username)
 	}
 	url := fmt.Sprintf("%s/internal/gateway/vm?%s", cfg.controlPlaneURL, query)
+	log.Printf("lookupVM: url=%s", url)
 	req, err := http.NewRequestWithContext(context.Background(), "GET", url, nil)
 	if err != nil {
 		return nil, err
@@ -111,7 +117,9 @@ func (cfg *gatewayConfig) lookupVM(username, accountUsername string) (*vmLookupR
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != 200 {
-		return nil, fmt.Errorf("vm lookup failed (status %d)", resp.StatusCode)
+		body, _ := io.ReadAll(resp.Body)
+		log.Printf("lookupVM: non-200 status=%d body=%s url=%s", resp.StatusCode, strings.TrimSpace(string(body)), url)
+		return nil, fmt.Errorf("vm lookup failed (status %d): %s", resp.StatusCode, strings.TrimSpace(string(body)))
 	}
 	var out vmLookupResponse
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
@@ -122,7 +130,7 @@ func (cfg *gatewayConfig) lookupVM(username, accountUsername string) (*vmLookupR
 
 // ── gRPC console relay ────────────────────────────────────────────────────────
 
-func relayConsole(ctx context.Context, agentAddr, vmID string, s cssh.Session) error {
+func relayConsole(ctx context.Context, agentAddr, vmID, command string, s cssh.Session) error {
 	agentAddr = strings.TrimPrefix(agentAddr, "https://")
 	agentAddr = strings.TrimPrefix(agentAddr, "http://")
 	conn, err := grpc.NewClient(agentAddr,
@@ -137,12 +145,13 @@ func relayConsole(ctx context.Context, agentAddr, vmID string, s cssh.Session) e
 		return fmt.Errorf("open stream: %w", err)
 	}
 
-	// First frame: identify the VM.
-	if err := stream.Send(&agentpb.ConsoleInput{VmId: vmID}); err != nil {
+	// First frame: identify the VM and optionally specify a command.
+	if err := stream.Send(&agentpb.ConsoleInput{VmId: vmID, Command: command}); err != nil {
 		return fmt.Errorf("send vm_id: %w", err)
 	}
 
-	errCh := make(chan error, 2)
+	outputDone := make(chan error, 1)
+	inputDone := make(chan error, 1)
 
 	// gRPC output → SSH session
 	go func() {
@@ -150,14 +159,14 @@ func relayConsole(ctx context.Context, agentAddr, vmID string, s cssh.Session) e
 			msg, err := stream.Recv()
 			if err != nil {
 				if err == io.EOF {
-					errCh <- nil
+					outputDone <- nil
 				} else {
-					errCh <- err
+					outputDone <- err
 				}
 				return
 			}
 			if _, err := s.Write(msg.Data); err != nil {
-				errCh <- err
+				outputDone <- err
 				return
 			}
 		}
@@ -170,23 +179,33 @@ func relayConsole(ctx context.Context, agentAddr, vmID string, s cssh.Session) e
 			n, err := s.Read(buf)
 			if n > 0 {
 				if serr := stream.Send(&agentpb.ConsoleInput{Data: buf[:n]}); serr != nil {
-					errCh <- serr
+					inputDone <- serr
 					return
 				}
 			}
 			if err != nil {
+				// stdin EOF or close: signal no more input but don't end the relay —
+				// the output side may still have data to deliver.
 				_ = stream.CloseSend()
-				if err == io.EOF {
-					errCh <- nil
-				} else {
-					errCh <- err
-				}
+				inputDone <- nil
 				return
 			}
 		}
 	}()
 
-	return <-errCh
+	if command != "" {
+		// For exec: stdin EOF is expected and harmless; wait for output to finish.
+		<-inputDone
+		return <-outputDone
+	}
+
+	// For interactive shell: either side closing ends the session.
+	select {
+	case err := <-outputDone:
+		return err
+	case err := <-inputDone:
+		return err
+	}
 }
 
 // ── session handler middleware ────────────────────────────────────────────────
@@ -200,6 +219,10 @@ func sessionMiddleware(cfg *gatewayConfig) wish.Middleware {
 	return func(_ cssh.Handler) cssh.Handler {
 		return func(s cssh.Session) {
 			username := s.User()
+			remoteAddr := s.RemoteAddr().String()
+			command := strings.Join(s.Command(), " ")
+
+			log.Printf("session: remote=%s ssh_user=%q command=%q", remoteAddr, username, command)
 
 			// Prefer pubkey auth: re-resolve the account ID from the key that
 			// was actually used to authenticate this session. The pubkey handler
@@ -208,12 +231,18 @@ func sessionMiddleware(cfg *gatewayConfig) wish.Middleware {
 			var accountID, accountUsername string
 			if pk := s.PublicKey(); pk != nil {
 				fp := gossh.FingerprintSHA256(pk)
+				log.Printf("session: pubkey auth fingerprint=%s", fp)
 				resp, err := cfg.callAuth("/internal/gateway/auth/pubkey", map[string]string{
 					"fingerprint": fp,
 				})
-				if err == nil && resp.OK {
+				if err != nil {
+					log.Printf("session: pubkey auth error: %v", err)
+				} else if resp.OK {
 					accountID = resp.AccountID
 					accountUsername = resp.Username
+					log.Printf("session: pubkey auth ok account_id=%s username=%s", accountID, accountUsername)
+				} else {
+					log.Printf("session: pubkey auth rejected: %s", resp.Error)
 				}
 			}
 
@@ -221,28 +250,42 @@ func sessionMiddleware(cfg *gatewayConfig) wish.Middleware {
 			if accountID == "" {
 				accountID, _ = s.Context().Value(accountIDKey).(string)
 				accountUsername, _ = s.Context().Value(usernameKey).(string)
+				if accountID != "" {
+					log.Printf("session: password auth account_id=%s username=%s", accountID, accountUsername)
+				}
 			}
 
 			if accountID == "" {
+				log.Printf("session: no auth state for remote=%s ssh_user=%q", remoteAddr, username)
 				fmt.Fprintln(s.Stderr(), "error: authentication state missing")
 				_ = s.Exit(1)
 				return
 			}
 
+			log.Printf("session: looking up vm ssh_user=%q account_username=%q", username, accountUsername)
 			vm, err := cfg.lookupVM(username, accountUsername)
 			if err != nil {
+				log.Printf("session: vm lookup failed ssh_user=%q account_username=%q err=%v", username, accountUsername, err)
 				fmt.Fprintf(s.Stderr(), "error: %v\r\n", err)
 				_ = s.Exit(1)
 				return
 			}
+			log.Printf("session: vm found vm_id=%s status=%s host=%s", vm.VMID, vm.Status, vm.HostAgentAddr)
+
 			if vm.Status != "running" {
+				log.Printf("session: vm not running vm_id=%s status=%s", vm.VMID, vm.Status)
 				fmt.Fprintf(s.Stderr(), "vm '%s' is %s (must be running)\r\n", username, vm.Status)
 				_ = s.Exit(1)
 				return
 			}
 
-			if err := relayConsole(s.Context(), vm.HostAgentAddr, vm.VMID, s); err != nil {
+			log.Printf("session: relaying vm_id=%s command=%q", vm.VMID, command)
+			if err := relayConsole(s.Context(), vm.HostAgentAddr, vm.VMID, command, s); err != nil {
 				log.Printf("relay ended: vm=%s err=%v", vm.VMID, err)
+				_ = s.Exit(1)
+			} else {
+				log.Printf("relay ended: vm=%s clean", vm.VMID)
+				_ = s.Exit(0)
 			}
 		}
 	}
@@ -297,7 +340,6 @@ func main() {
 		wish.WithMiddleware(
 			sessionMiddleware(&cfg),
 			logging.Middleware(),
-			activeterm.Middleware(),
 		),
 	)
 	if err != nil {

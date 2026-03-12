@@ -18,9 +18,11 @@ func rootCmd() *cobra.Command {
 		vmCmd(),
 		snapshotCmd(),
 		sshCmd(),
+		execCmd(),
 		tunnelCmd(),
 		keysCmd(),
 		configCmd(),
+		loreCmd(),
 	)
 
 	root.PersistentFlags().Bool("json", false, "output as JSON")

@@ -1,4 +1,4 @@
-import { Server, ShieldCheck } from "lucide-react";
+import { Server, ShieldCheck, Box } from "lucide-react";
 import {
   Sidebar,
   SidebarHeader,
@@ -43,6 +43,12 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
               <Link to="/vms" className={navLinkClass}>
                 <Server className="size-5!" />
                 <span className="text-sm font-medium">vms</span>
+              </Link>
+            </SidebarMenuItem>
+            <SidebarMenuItem className="text-white/0">
+              <Link to="/images" className={navLinkClass}>
+                <Box className="size-5!" />
+                <span className="text-sm font-medium">images</span>
               </Link>
             </SidebarMenuItem>
             {me?.role === "superadmin" && (

@@ -94,6 +94,7 @@ tests live in:
 
 ## gotchas
 
+- **base images need an init system** — the `ubuntu:22.04` docker image ships without systemd or any init. overlay-init defaults to `exec /sbin/init` after pivot_root; if that binary doesn't exist the VM exits immediately (firecracker logs `Requested a vCPU run with immediate_exit enabled`). `scripts/rootfs-config.sh` installs `systemd systemd-sysv dbus openssh-server` via chroot during build — both the bash (`scripts/spwn build-from-image`) and Rust (host-agent `BuildImage` RPC) paths run it. any custom image must include at least a shell or init reachable at the `real_init=` boot arg path
 - **protoc required** — `sudo pacman -S protobuf` (or distro equivalent) for agent-proto build
 - **jailer requires a dedicated unprivileged user** — create `spwn-vm` with `useradd -r -s /sbin/nologin spwn-vm`, or set `JAILER_UID`/`JAILER_GID` explicitly. the agent resolves uid/gid from `/etc/passwd` and `/etc/group` at startup if the env vars are absent
 - **jailer chroot layout** — each VM jail lives at `<JAILER_CHROOT_BASE>/firecracker/<vm_id>/root/`. snapshots are written inside the jail root and their host-side paths (e.g. `/srv/jailer/firecracker/<vm_id>/root/<snap>.snap`) are what gets stored in the DB

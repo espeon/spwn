@@ -28,18 +28,38 @@ func vmCmd() *cobra.Command {
 		vmStatusCmd(),
 		vmRenameCmd(),
 		vmCloneCmd(),
+		vmHistoryCmd(),
 	)
 	return cmd
 }
 
 func resolveVM(c *client.Client, nameOrID string) (client.VM, error) {
-	if !looksLikeID(nameOrID) {
-		vms, err := c.GetVMByName(nameOrID)
+	if looksLikeID(nameOrID) {
+		return c.GetVM(nameOrID)
+	}
+
+	// full subdomain: "epic-vm.nat" — contains a dot
+	if strings.Contains(nameOrID, ".") {
+		vms, err := c.GetVMBySubdomain(nameOrID)
 		if err == nil && len(vms) > 0 {
 			return vms[0], nil
 		}
+		return client.VM{}, fmt.Errorf("no VM with subdomain %q", nameOrID)
 	}
-	return c.GetVM(nameOrID)
+
+	// try name first ("epic vm" or "epic-vm")
+	vms, err := c.GetVMByName(nameOrID)
+	if err == nil && len(vms) > 0 {
+		return vms[0], nil
+	}
+
+	// fall back to bare subdomain prefix ("epic-vm" without the ".username" suffix)
+	vms, err = c.GetVMBySubdomain(nameOrID)
+	if err == nil && len(vms) > 0 {
+		return vms[0], nil
+	}
+
+	return client.VM{}, fmt.Errorf("no VM named or with subdomain %q", nameOrID)
 }
 
 func looksLikeID(s string) bool {

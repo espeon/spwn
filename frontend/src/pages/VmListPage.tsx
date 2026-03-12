@@ -5,6 +5,7 @@ import { toast } from "sonner";
 import { trackVmToast } from "@/hooks/useVmEvents";
 import {
   listVms,
+  listImages,
   createVm,
   startVm,
   stopVm,
@@ -36,14 +37,29 @@ function CreateVmDialog({
 }) {
   const qc = useQueryClient();
   const [name, setName] = useState("");
+  const [image, setImage] = useState("");
   const [vcpus, setVcpus] = useState(1.0);
   const [memoryMb, setMemoryMb] = useState(512);
   const [port, setPort] = useState(8080);
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const [submitError, setSubmitError] = useState<string | null>(null);
 
+  const { data: images = [] } = useQuery({
+    queryKey: ["images"],
+    queryFn: listImages,
+    staleTime: 60_000,
+  });
+
+  useEffect(() => {
+    if (images.length > 0 && !image) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setImage(`${images[0].name}:${images[0].tag}`);
+    }
+  }, [images, image]);
+
   function initAllDefault() {
     setName("");
+    setImage(images.length > 0 ? `${images[0].name}:${images[0].tag}` : "");
     setVcpus(1.0);
     setMemoryMb(512);
     setPort(8080);
@@ -67,8 +83,11 @@ function CreateVmDialog({
     } else if (!/^[a-zA-Z0-9][a-zA-Z0-9\- ]*$/.test(trimmed)) {
       errs.name = "letters, numbers, hyphens, and spaces only";
     }
-    if (vcpus < 0.5 || vcpus > 8) {
-      errs.vcpus = "must be between 0.5 and 8";
+    if (!image.trim()) {
+      errs.image = "select an image";
+    }
+    if (vcpus < 0.125 || vcpus > 8) {
+      errs.vcpus = "must be between 0.125 and 8";
     }
     if (memoryMb < 128 || memoryMb > 12288 || memoryMb % 128 !== 0) {
       errs.memory = "must be 128–12288 mb in multiples of 128";
@@ -99,7 +118,8 @@ function CreateVmDialog({
     setFieldErrors({});
     const req = {
       name: name.trim(),
-      vcpus,
+      image: image.trim(),
+      vcpus: vcpus * 1000, // convert to millicpus
       memory_mb: memoryMb,
       exposed_port: port,
     };
@@ -146,6 +166,47 @@ function CreateVmDialog({
             />
             {fieldErrors.name && (
               <p className="text-xs text-destructive">{fieldErrors.name}</p>
+            )}
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="vm-image">image</Label>
+            {images.length === 0 ? (
+              <p className="text-xs text-muted-foreground py-1">
+                no images available —{" "}
+                <a href="/images" className="underline underline-offset-2">
+                  visit the image catalogue
+                </a>
+              </p>
+            ) : (
+              <div
+                className={`flex flex-wrap gap-1.5 ${fieldErrors.image ? "rounded-md outline outline-1 outline-destructive p-1" : ""}`}
+              >
+                {images.map((img) => {
+                  const val = `${img.name}:${img.tag}`;
+                  return (
+                    <button
+                      key={img.id}
+                      type="button"
+                      onClick={() => {
+                        setImage(val);
+                        if (fieldErrors.image)
+                          setFieldErrors((p) => ({ ...p, image: "" }));
+                      }}
+                      className={`px-2.5 py-1 rounded-md text-xs font-mono border transition-colors ${
+                        image === val
+                          ? "bg-primary text-primary-foreground border-primary"
+                          : "bg-background hover:bg-muted border-input"
+                      }`}
+                    >
+                      {img.name}
+                      <span className="opacity-60">:{img.tag}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+            {fieldErrors.image && (
+              <p className="text-xs text-destructive">{fieldErrors.image}</p>
             )}
           </div>
           <div className="grid grid-cols-2 gap-3">

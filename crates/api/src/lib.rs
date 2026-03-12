@@ -139,6 +139,7 @@ pub struct VmResourcePatchRequest {
 #[derive(Debug, Deserialize)]
 pub struct VmListQuery {
     pub name: Option<String>,
+    pub subdomain: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -246,8 +247,51 @@ pub fn router(ops: Arc<dyn VmOps>) -> Router {
         .route("/api/vms/{id}/restore/{snap_id}", post(restore_snapshot))
         .route("/api/vms/{id}/events", get(list_vm_events))
         .route("/api/account/username", post(change_username))
+        .route("/api/images", get(list_images))
         .route("/healthz", get(|| async { "ok" }))
         .with_state(ops)
+}
+
+#[derive(Serialize)]
+struct ImageResponse {
+    id: String,
+    name: String,
+    tag: String,
+    source: String,
+    status: String,
+    size_bytes: i64,
+    created_at: i64,
+}
+
+impl From<db::ImageRow> for ImageResponse {
+    fn from(i: db::ImageRow) -> Self {
+        Self {
+            id: i.id,
+            name: i.name,
+            tag: i.tag,
+            source: i.source,
+            status: i.status,
+            size_bytes: i.size_bytes,
+            created_at: i.created_at,
+        }
+    }
+}
+
+async fn list_images(
+    Extension(pool): Extension<db::PgPool>,
+    _account_id: AccountId,
+) -> impl IntoResponse {
+    match db::list_images(&pool).await {
+        Ok(images) => Json(
+            images
+                .into_iter()
+                .filter(|i| i.status == "ready")
+                .map(ImageResponse::from)
+                .collect::<Vec<_>>(),
+        )
+        .into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
 }
 
 async fn change_username(
@@ -281,6 +325,15 @@ async fn list_vms(
         return match db::get_vm_by_name(&pool, &account_id.0, &name).await {
             Ok(Some(vm)) => Json(vec![VmResponse::from(vm)]).into_response(),
             Ok(None) => Json(Vec::<VmResponse>::new()).into_response(),
+            Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        };
+    }
+    if let Some(subdomain) = query.subdomain {
+        return match db::get_vm_by_subdomain(&pool, &subdomain).await {
+            Ok(Some(vm)) if vm.account_id == account_id.0 => {
+                Json(vec![VmResponse::from(vm)]).into_response()
+            }
+            Ok(_) => Json(Vec::<VmResponse>::new()).into_response(),
             Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
         };
     }
