@@ -25,7 +25,12 @@ const (
 	HostAgent_DeleteVm_FullMethodName        = "/agent.HostAgent/DeleteVm"
 	HostAgent_TakeSnapshot_FullMethodName    = "/agent.HostAgent/TakeSnapshot"
 	HostAgent_RestoreSnapshot_FullMethodName = "/agent.HostAgent/RestoreSnapshot"
+	HostAgent_CloneVm_FullMethodName         = "/agent.HostAgent/CloneVm"
+	HostAgent_MigrateVm_FullMethodName       = "/agent.HostAgent/MigrateVm"
+	HostAgent_ResizeCpu_FullMethodName       = "/agent.HostAgent/ResizeCpu"
+	HostAgent_ResizeBandwidth_FullMethodName = "/agent.HostAgent/ResizeBandwidth"
 	HostAgent_WatchEvents_FullMethodName     = "/agent.HostAgent/WatchEvents"
+	HostAgent_BuildImage_FullMethodName      = "/agent.HostAgent/BuildImage"
 	HostAgent_StreamConsole_FullMethodName   = "/agent.HostAgent/StreamConsole"
 )
 
@@ -41,7 +46,12 @@ type HostAgentClient interface {
 	DeleteVm(ctx context.Context, in *DeleteVmRequest, opts ...grpc.CallOption) (*DeleteVmResponse, error)
 	TakeSnapshot(ctx context.Context, in *TakeSnapshotRequest, opts ...grpc.CallOption) (*TakeSnapshotResponse, error)
 	RestoreSnapshot(ctx context.Context, in *RestoreRequest, opts ...grpc.CallOption) (*RestoreResponse, error)
+	CloneVm(ctx context.Context, in *CloneVmRequest, opts ...grpc.CallOption) (*CloneVmResponse, error)
+	MigrateVm(ctx context.Context, in *MigrateVmRequest, opts ...grpc.CallOption) (*MigrateVmResponse, error)
+	ResizeCpu(ctx context.Context, in *ResizeCpuRequest, opts ...grpc.CallOption) (*ResizeCpuResponse, error)
+	ResizeBandwidth(ctx context.Context, in *ResizeBandwidthRequest, opts ...grpc.CallOption) (*ResizeBandwidthResponse, error)
 	WatchEvents(ctx context.Context, in *WatchRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[AgentEvent], error)
+	BuildImage(ctx context.Context, in *BuildImageRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[BuildImageEvent], error)
 	// bidirectional SSH console relay; first ConsoleInput frame carries vm_id
 	StreamConsole(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[ConsoleInput, ConsoleOutput], error)
 }
@@ -114,6 +124,46 @@ func (c *hostAgentClient) RestoreSnapshot(ctx context.Context, in *RestoreReques
 	return out, nil
 }
 
+func (c *hostAgentClient) CloneVm(ctx context.Context, in *CloneVmRequest, opts ...grpc.CallOption) (*CloneVmResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(CloneVmResponse)
+	err := c.cc.Invoke(ctx, HostAgent_CloneVm_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *hostAgentClient) MigrateVm(ctx context.Context, in *MigrateVmRequest, opts ...grpc.CallOption) (*MigrateVmResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(MigrateVmResponse)
+	err := c.cc.Invoke(ctx, HostAgent_MigrateVm_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *hostAgentClient) ResizeCpu(ctx context.Context, in *ResizeCpuRequest, opts ...grpc.CallOption) (*ResizeCpuResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ResizeCpuResponse)
+	err := c.cc.Invoke(ctx, HostAgent_ResizeCpu_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *hostAgentClient) ResizeBandwidth(ctx context.Context, in *ResizeBandwidthRequest, opts ...grpc.CallOption) (*ResizeBandwidthResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ResizeBandwidthResponse)
+	err := c.cc.Invoke(ctx, HostAgent_ResizeBandwidth_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *hostAgentClient) WatchEvents(ctx context.Context, in *WatchRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[AgentEvent], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	stream, err := c.cc.NewStream(ctx, &HostAgent_ServiceDesc.Streams[0], HostAgent_WatchEvents_FullMethodName, cOpts...)
@@ -133,9 +183,28 @@ func (c *hostAgentClient) WatchEvents(ctx context.Context, in *WatchRequest, opt
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type HostAgent_WatchEventsClient = grpc.ServerStreamingClient[AgentEvent]
 
+func (c *hostAgentClient) BuildImage(ctx context.Context, in *BuildImageRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[BuildImageEvent], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &HostAgent_ServiceDesc.Streams[1], HostAgent_BuildImage_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[BuildImageRequest, BuildImageEvent]{ClientStream: stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type HostAgent_BuildImageClient = grpc.ServerStreamingClient[BuildImageEvent]
+
 func (c *hostAgentClient) StreamConsole(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[ConsoleInput, ConsoleOutput], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	stream, err := c.cc.NewStream(ctx, &HostAgent_ServiceDesc.Streams[1], HostAgent_StreamConsole_FullMethodName, cOpts...)
+	stream, err := c.cc.NewStream(ctx, &HostAgent_ServiceDesc.Streams[2], HostAgent_StreamConsole_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -158,7 +227,12 @@ type HostAgentServer interface {
 	DeleteVm(context.Context, *DeleteVmRequest) (*DeleteVmResponse, error)
 	TakeSnapshot(context.Context, *TakeSnapshotRequest) (*TakeSnapshotResponse, error)
 	RestoreSnapshot(context.Context, *RestoreRequest) (*RestoreResponse, error)
+	CloneVm(context.Context, *CloneVmRequest) (*CloneVmResponse, error)
+	MigrateVm(context.Context, *MigrateVmRequest) (*MigrateVmResponse, error)
+	ResizeCpu(context.Context, *ResizeCpuRequest) (*ResizeCpuResponse, error)
+	ResizeBandwidth(context.Context, *ResizeBandwidthRequest) (*ResizeBandwidthResponse, error)
 	WatchEvents(*WatchRequest, grpc.ServerStreamingServer[AgentEvent]) error
+	BuildImage(*BuildImageRequest, grpc.ServerStreamingServer[BuildImageEvent]) error
 	// bidirectional SSH console relay; first ConsoleInput frame carries vm_id
 	StreamConsole(grpc.BidiStreamingServer[ConsoleInput, ConsoleOutput]) error
 	mustEmbedUnimplementedHostAgentServer()
@@ -189,8 +263,23 @@ func (UnimplementedHostAgentServer) TakeSnapshot(context.Context, *TakeSnapshotR
 func (UnimplementedHostAgentServer) RestoreSnapshot(context.Context, *RestoreRequest) (*RestoreResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method RestoreSnapshot not implemented")
 }
+func (UnimplementedHostAgentServer) CloneVm(context.Context, *CloneVmRequest) (*CloneVmResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method CloneVm not implemented")
+}
+func (UnimplementedHostAgentServer) MigrateVm(context.Context, *MigrateVmRequest) (*MigrateVmResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method MigrateVm not implemented")
+}
+func (UnimplementedHostAgentServer) ResizeCpu(context.Context, *ResizeCpuRequest) (*ResizeCpuResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ResizeCpu not implemented")
+}
+func (UnimplementedHostAgentServer) ResizeBandwidth(context.Context, *ResizeBandwidthRequest) (*ResizeBandwidthResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ResizeBandwidth not implemented")
+}
 func (UnimplementedHostAgentServer) WatchEvents(*WatchRequest, grpc.ServerStreamingServer[AgentEvent]) error {
 	return status.Error(codes.Unimplemented, "method WatchEvents not implemented")
+}
+func (UnimplementedHostAgentServer) BuildImage(*BuildImageRequest, grpc.ServerStreamingServer[BuildImageEvent]) error {
+	return status.Error(codes.Unimplemented, "method BuildImage not implemented")
 }
 func (UnimplementedHostAgentServer) StreamConsole(grpc.BidiStreamingServer[ConsoleInput, ConsoleOutput]) error {
 	return status.Error(codes.Unimplemented, "method StreamConsole not implemented")
@@ -324,6 +413,78 @@ func _HostAgent_RestoreSnapshot_Handler(srv interface{}, ctx context.Context, de
 	return interceptor(ctx, in, info, handler)
 }
 
+func _HostAgent_CloneVm_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CloneVmRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(HostAgentServer).CloneVm(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: HostAgent_CloneVm_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(HostAgentServer).CloneVm(ctx, req.(*CloneVmRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _HostAgent_MigrateVm_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(MigrateVmRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(HostAgentServer).MigrateVm(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: HostAgent_MigrateVm_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(HostAgentServer).MigrateVm(ctx, req.(*MigrateVmRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _HostAgent_ResizeCpu_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ResizeCpuRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(HostAgentServer).ResizeCpu(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: HostAgent_ResizeCpu_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(HostAgentServer).ResizeCpu(ctx, req.(*ResizeCpuRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _HostAgent_ResizeBandwidth_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ResizeBandwidthRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(HostAgentServer).ResizeBandwidth(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: HostAgent_ResizeBandwidth_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(HostAgentServer).ResizeBandwidth(ctx, req.(*ResizeBandwidthRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _HostAgent_WatchEvents_Handler(srv interface{}, stream grpc.ServerStream) error {
 	m := new(WatchRequest)
 	if err := stream.RecvMsg(m); err != nil {
@@ -334,6 +495,17 @@ func _HostAgent_WatchEvents_Handler(srv interface{}, stream grpc.ServerStream) e
 
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type HostAgent_WatchEventsServer = grpc.ServerStreamingServer[AgentEvent]
+
+func _HostAgent_BuildImage_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(BuildImageRequest)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
+	}
+	return srv.(HostAgentServer).BuildImage(m, &grpc.GenericServerStream[BuildImageRequest, BuildImageEvent]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type HostAgent_BuildImageServer = grpc.ServerStreamingServer[BuildImageEvent]
 
 func _HostAgent_StreamConsole_Handler(srv interface{}, stream grpc.ServerStream) error {
 	return srv.(HostAgentServer).StreamConsole(&grpc.GenericServerStream[ConsoleInput, ConsoleOutput]{ServerStream: stream})
@@ -373,11 +545,32 @@ var HostAgent_ServiceDesc = grpc.ServiceDesc{
 			MethodName: "RestoreSnapshot",
 			Handler:    _HostAgent_RestoreSnapshot_Handler,
 		},
+		{
+			MethodName: "CloneVm",
+			Handler:    _HostAgent_CloneVm_Handler,
+		},
+		{
+			MethodName: "MigrateVm",
+			Handler:    _HostAgent_MigrateVm_Handler,
+		},
+		{
+			MethodName: "ResizeCpu",
+			Handler:    _HostAgent_ResizeCpu_Handler,
+		},
+		{
+			MethodName: "ResizeBandwidth",
+			Handler:    _HostAgent_ResizeBandwidth_Handler,
+		},
 	},
 	Streams: []grpc.StreamDesc{
 		{
 			StreamName:    "WatchEvents",
 			Handler:       _HostAgent_WatchEvents_Handler,
+			ServerStreams: true,
+		},
+		{
+			StreamName:    "BuildImage",
+			Handler:       _HostAgent_BuildImage_Handler,
 			ServerStreams: true,
 		},
 		{

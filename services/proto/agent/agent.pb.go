@@ -21,6 +21,61 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
+type BuildImageEvent_Stage int32
+
+const (
+	BuildImageEvent_PULLING   BuildImageEvent_Stage = 0
+	BuildImageEvent_EXPORTING BuildImageEvent_Stage = 1
+	BuildImageEvent_SQUASHING BuildImageEvent_Stage = 2
+	BuildImageEvent_DONE      BuildImageEvent_Stage = 3
+	BuildImageEvent_ERROR     BuildImageEvent_Stage = 4
+)
+
+// Enum value maps for BuildImageEvent_Stage.
+var (
+	BuildImageEvent_Stage_name = map[int32]string{
+		0: "PULLING",
+		1: "EXPORTING",
+		2: "SQUASHING",
+		3: "DONE",
+		4: "ERROR",
+	}
+	BuildImageEvent_Stage_value = map[string]int32{
+		"PULLING":   0,
+		"EXPORTING": 1,
+		"SQUASHING": 2,
+		"DONE":      3,
+		"ERROR":     4,
+	}
+)
+
+func (x BuildImageEvent_Stage) Enum() *BuildImageEvent_Stage {
+	p := new(BuildImageEvent_Stage)
+	*p = x
+	return p
+}
+
+func (x BuildImageEvent_Stage) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (BuildImageEvent_Stage) Descriptor() protoreflect.EnumDescriptor {
+	return file_agent_proto_enumTypes[0].Descriptor()
+}
+
+func (BuildImageEvent_Stage) Type() protoreflect.EnumType {
+	return &file_agent_proto_enumTypes[0]
+}
+
+func (x BuildImageEvent_Stage) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use BuildImageEvent_Stage.Descriptor instead.
+func (BuildImageEvent_Stage) EnumDescriptor() ([]byte, []int) {
+	return file_agent_proto_rawDescGZIP(), []int{23, 0}
+}
+
 type CreateVmRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	VmId          string                 `protobuf:"bytes,1,opt,name=vm_id,json=vmId,proto3" json:"vm_id,omitempty"`
@@ -28,10 +83,12 @@ type CreateVmRequest struct {
 	Name          string                 `protobuf:"bytes,3,opt,name=name,proto3" json:"name,omitempty"`
 	Subdomain     string                 `protobuf:"bytes,4,opt,name=subdomain,proto3" json:"subdomain,omitempty"`
 	Image         string                 `protobuf:"bytes,5,opt,name=image,proto3" json:"image,omitempty"`
-	Vcpus         float64                `protobuf:"fixed64,6,opt,name=vcpus,proto3" json:"vcpus,omitempty"`
+	Vcpus         int64                  `protobuf:"varint,6,opt,name=vcpus,proto3" json:"vcpus,omitempty"`
 	MemoryMb      int32                  `protobuf:"varint,7,opt,name=memory_mb,json=memoryMb,proto3" json:"memory_mb,omitempty"`
 	ExposedPort   int32                  `protobuf:"varint,8,opt,name=exposed_port,json=exposedPort,proto3" json:"exposed_port,omitempty"`
 	IpAddress     string                 `protobuf:"bytes,9,opt,name=ip_address,json=ipAddress,proto3" json:"ip_address,omitempty"`
+	DiskMb        int32                  `protobuf:"varint,10,opt,name=disk_mb,json=diskMb,proto3" json:"disk_mb,omitempty"`
+	BandwidthMbps int32                  `protobuf:"varint,11,opt,name=bandwidth_mbps,json=bandwidthMbps,proto3" json:"bandwidth_mbps,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -101,7 +158,7 @@ func (x *CreateVmRequest) GetImage() string {
 	return ""
 }
 
-func (x *CreateVmRequest) GetVcpus() float64 {
+func (x *CreateVmRequest) GetVcpus() int64 {
 	if x != nil {
 		return x.Vcpus
 	}
@@ -127,6 +184,20 @@ func (x *CreateVmRequest) GetIpAddress() string {
 		return x.IpAddress
 	}
 	return ""
+}
+
+func (x *CreateVmRequest) GetDiskMb() int32 {
+	if x != nil {
+		return x.DiskMb
+	}
+	return 0
+}
+
+func (x *CreateVmRequest) GetBandwidthMbps() int32 {
+	if x != nil {
+		return x.BandwidthMbps
+	}
+	return 0
 }
 
 type CreateVmResponse struct {
@@ -693,6 +764,560 @@ func (x *RestoreResponse) GetError() string {
 	return ""
 }
 
+type CloneVmRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	SourceVmId    string                 `protobuf:"bytes,1,opt,name=source_vm_id,json=sourceVmId,proto3" json:"source_vm_id,omitempty"`
+	NewVmId       string                 `protobuf:"bytes,2,opt,name=new_vm_id,json=newVmId,proto3" json:"new_vm_id,omitempty"`
+	AccountId     string                 `protobuf:"bytes,3,opt,name=account_id,json=accountId,proto3" json:"account_id,omitempty"`
+	Name          string                 `protobuf:"bytes,4,opt,name=name,proto3" json:"name,omitempty"`
+	Subdomain     string                 `protobuf:"bytes,5,opt,name=subdomain,proto3" json:"subdomain,omitempty"`
+	IpAddress     string                 `protobuf:"bytes,6,opt,name=ip_address,json=ipAddress,proto3" json:"ip_address,omitempty"`
+	ExposedPort   int32                  `protobuf:"varint,7,opt,name=exposed_port,json=exposedPort,proto3" json:"exposed_port,omitempty"`
+	IncludeMemory bool                   `protobuf:"varint,8,opt,name=include_memory,json=includeMemory,proto3" json:"include_memory,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CloneVmRequest) Reset() {
+	*x = CloneVmRequest{}
+	mi := &file_agent_proto_msgTypes[12]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CloneVmRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CloneVmRequest) ProtoMessage() {}
+
+func (x *CloneVmRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_agent_proto_msgTypes[12]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CloneVmRequest.ProtoReflect.Descriptor instead.
+func (*CloneVmRequest) Descriptor() ([]byte, []int) {
+	return file_agent_proto_rawDescGZIP(), []int{12}
+}
+
+func (x *CloneVmRequest) GetSourceVmId() string {
+	if x != nil {
+		return x.SourceVmId
+	}
+	return ""
+}
+
+func (x *CloneVmRequest) GetNewVmId() string {
+	if x != nil {
+		return x.NewVmId
+	}
+	return ""
+}
+
+func (x *CloneVmRequest) GetAccountId() string {
+	if x != nil {
+		return x.AccountId
+	}
+	return ""
+}
+
+func (x *CloneVmRequest) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *CloneVmRequest) GetSubdomain() string {
+	if x != nil {
+		return x.Subdomain
+	}
+	return ""
+}
+
+func (x *CloneVmRequest) GetIpAddress() string {
+	if x != nil {
+		return x.IpAddress
+	}
+	return ""
+}
+
+func (x *CloneVmRequest) GetExposedPort() int32 {
+	if x != nil {
+		return x.ExposedPort
+	}
+	return 0
+}
+
+func (x *CloneVmRequest) GetIncludeMemory() bool {
+	if x != nil {
+		return x.IncludeMemory
+	}
+	return false
+}
+
+type CloneVmResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Ok            bool                   `protobuf:"varint,1,opt,name=ok,proto3" json:"ok,omitempty"`
+	Error         string                 `protobuf:"bytes,2,opt,name=error,proto3" json:"error,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CloneVmResponse) Reset() {
+	*x = CloneVmResponse{}
+	mi := &file_agent_proto_msgTypes[13]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CloneVmResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CloneVmResponse) ProtoMessage() {}
+
+func (x *CloneVmResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_agent_proto_msgTypes[13]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CloneVmResponse.ProtoReflect.Descriptor instead.
+func (*CloneVmResponse) Descriptor() ([]byte, []int) {
+	return file_agent_proto_rawDescGZIP(), []int{13}
+}
+
+func (x *CloneVmResponse) GetOk() bool {
+	if x != nil {
+		return x.Ok
+	}
+	return false
+}
+
+func (x *CloneVmResponse) GetError() string {
+	if x != nil {
+		return x.Error
+	}
+	return ""
+}
+
+// MigrateVm: pull snapshot from source and restore as a new VM on this host.
+// The source snapshot files are fetched from source_snapshot_url via HTTP.
+type MigrateVmRequest struct {
+	state             protoimpl.MessageState `protogen:"open.v1"`
+	VmId              string                 `protobuf:"bytes,1,opt,name=vm_id,json=vmId,proto3" json:"vm_id,omitempty"`                                          // VM id (already created in DB by control-plane)
+	SnapId            string                 `protobuf:"bytes,2,opt,name=snap_id,json=snapId,proto3" json:"snap_id,omitempty"`                                    // snapshot id to pull
+	SourceSnapshotUrl string                 `protobuf:"bytes,3,opt,name=source_snapshot_url,json=sourceSnapshotUrl,proto3" json:"source_snapshot_url,omitempty"` // HTTP base URL of source agent's snapshot server
+	AccountId         string                 `protobuf:"bytes,4,opt,name=account_id,json=accountId,proto3" json:"account_id,omitempty"`
+	Name              string                 `protobuf:"bytes,5,opt,name=name,proto3" json:"name,omitempty"`
+	Subdomain         string                 `protobuf:"bytes,6,opt,name=subdomain,proto3" json:"subdomain,omitempty"`
+	Vcpus             int64                  `protobuf:"varint,7,opt,name=vcpus,proto3" json:"vcpus,omitempty"`
+	MemoryMb          int32                  `protobuf:"varint,8,opt,name=memory_mb,json=memoryMb,proto3" json:"memory_mb,omitempty"`
+	IpAddress         string                 `protobuf:"bytes,9,opt,name=ip_address,json=ipAddress,proto3" json:"ip_address,omitempty"`
+	ExposedPort       int32                  `protobuf:"varint,10,opt,name=exposed_port,json=exposedPort,proto3" json:"exposed_port,omitempty"`
+	Image             string                 `protobuf:"bytes,11,opt,name=image,proto3" json:"image,omitempty"`
+	DiskMb            int32                  `protobuf:"varint,12,opt,name=disk_mb,json=diskMb,proto3" json:"disk_mb,omitempty"`
+	BandwidthMbps     int32                  `protobuf:"varint,13,opt,name=bandwidth_mbps,json=bandwidthMbps,proto3" json:"bandwidth_mbps,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
+}
+
+func (x *MigrateVmRequest) Reset() {
+	*x = MigrateVmRequest{}
+	mi := &file_agent_proto_msgTypes[14]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *MigrateVmRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*MigrateVmRequest) ProtoMessage() {}
+
+func (x *MigrateVmRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_agent_proto_msgTypes[14]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use MigrateVmRequest.ProtoReflect.Descriptor instead.
+func (*MigrateVmRequest) Descriptor() ([]byte, []int) {
+	return file_agent_proto_rawDescGZIP(), []int{14}
+}
+
+func (x *MigrateVmRequest) GetVmId() string {
+	if x != nil {
+		return x.VmId
+	}
+	return ""
+}
+
+func (x *MigrateVmRequest) GetSnapId() string {
+	if x != nil {
+		return x.SnapId
+	}
+	return ""
+}
+
+func (x *MigrateVmRequest) GetSourceSnapshotUrl() string {
+	if x != nil {
+		return x.SourceSnapshotUrl
+	}
+	return ""
+}
+
+func (x *MigrateVmRequest) GetAccountId() string {
+	if x != nil {
+		return x.AccountId
+	}
+	return ""
+}
+
+func (x *MigrateVmRequest) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *MigrateVmRequest) GetSubdomain() string {
+	if x != nil {
+		return x.Subdomain
+	}
+	return ""
+}
+
+func (x *MigrateVmRequest) GetVcpus() int64 {
+	if x != nil {
+		return x.Vcpus
+	}
+	return 0
+}
+
+func (x *MigrateVmRequest) GetMemoryMb() int32 {
+	if x != nil {
+		return x.MemoryMb
+	}
+	return 0
+}
+
+func (x *MigrateVmRequest) GetIpAddress() string {
+	if x != nil {
+		return x.IpAddress
+	}
+	return ""
+}
+
+func (x *MigrateVmRequest) GetExposedPort() int32 {
+	if x != nil {
+		return x.ExposedPort
+	}
+	return 0
+}
+
+func (x *MigrateVmRequest) GetImage() string {
+	if x != nil {
+		return x.Image
+	}
+	return ""
+}
+
+func (x *MigrateVmRequest) GetDiskMb() int32 {
+	if x != nil {
+		return x.DiskMb
+	}
+	return 0
+}
+
+func (x *MigrateVmRequest) GetBandwidthMbps() int32 {
+	if x != nil {
+		return x.BandwidthMbps
+	}
+	return 0
+}
+
+type MigrateVmResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Ok            bool                   `protobuf:"varint,1,opt,name=ok,proto3" json:"ok,omitempty"`
+	Error         string                 `protobuf:"bytes,2,opt,name=error,proto3" json:"error,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *MigrateVmResponse) Reset() {
+	*x = MigrateVmResponse{}
+	mi := &file_agent_proto_msgTypes[15]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *MigrateVmResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*MigrateVmResponse) ProtoMessage() {}
+
+func (x *MigrateVmResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_agent_proto_msgTypes[15]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use MigrateVmResponse.ProtoReflect.Descriptor instead.
+func (*MigrateVmResponse) Descriptor() ([]byte, []int) {
+	return file_agent_proto_rawDescGZIP(), []int{15}
+}
+
+func (x *MigrateVmResponse) GetOk() bool {
+	if x != nil {
+		return x.Ok
+	}
+	return false
+}
+
+func (x *MigrateVmResponse) GetError() string {
+	if x != nil {
+		return x.Error
+	}
+	return ""
+}
+
+type ResizeCpuRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	VmId          string                 `protobuf:"bytes,1,opt,name=vm_id,json=vmId,proto3" json:"vm_id,omitempty"`
+	Vcpus         int64                  `protobuf:"varint,2,opt,name=vcpus,proto3" json:"vcpus,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ResizeCpuRequest) Reset() {
+	*x = ResizeCpuRequest{}
+	mi := &file_agent_proto_msgTypes[16]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ResizeCpuRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ResizeCpuRequest) ProtoMessage() {}
+
+func (x *ResizeCpuRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_agent_proto_msgTypes[16]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ResizeCpuRequest.ProtoReflect.Descriptor instead.
+func (*ResizeCpuRequest) Descriptor() ([]byte, []int) {
+	return file_agent_proto_rawDescGZIP(), []int{16}
+}
+
+func (x *ResizeCpuRequest) GetVmId() string {
+	if x != nil {
+		return x.VmId
+	}
+	return ""
+}
+
+func (x *ResizeCpuRequest) GetVcpus() int64 {
+	if x != nil {
+		return x.Vcpus
+	}
+	return 0
+}
+
+type ResizeCpuResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Ok            bool                   `protobuf:"varint,1,opt,name=ok,proto3" json:"ok,omitempty"`
+	Error         string                 `protobuf:"bytes,2,opt,name=error,proto3" json:"error,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ResizeCpuResponse) Reset() {
+	*x = ResizeCpuResponse{}
+	mi := &file_agent_proto_msgTypes[17]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ResizeCpuResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ResizeCpuResponse) ProtoMessage() {}
+
+func (x *ResizeCpuResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_agent_proto_msgTypes[17]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ResizeCpuResponse.ProtoReflect.Descriptor instead.
+func (*ResizeCpuResponse) Descriptor() ([]byte, []int) {
+	return file_agent_proto_rawDescGZIP(), []int{17}
+}
+
+func (x *ResizeCpuResponse) GetOk() bool {
+	if x != nil {
+		return x.Ok
+	}
+	return false
+}
+
+func (x *ResizeCpuResponse) GetError() string {
+	if x != nil {
+		return x.Error
+	}
+	return ""
+}
+
+type ResizeBandwidthRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	VmId          string                 `protobuf:"bytes,1,opt,name=vm_id,json=vmId,proto3" json:"vm_id,omitempty"`
+	BandwidthMbps int32                  `protobuf:"varint,2,opt,name=bandwidth_mbps,json=bandwidthMbps,proto3" json:"bandwidth_mbps,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ResizeBandwidthRequest) Reset() {
+	*x = ResizeBandwidthRequest{}
+	mi := &file_agent_proto_msgTypes[18]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ResizeBandwidthRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ResizeBandwidthRequest) ProtoMessage() {}
+
+func (x *ResizeBandwidthRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_agent_proto_msgTypes[18]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ResizeBandwidthRequest.ProtoReflect.Descriptor instead.
+func (*ResizeBandwidthRequest) Descriptor() ([]byte, []int) {
+	return file_agent_proto_rawDescGZIP(), []int{18}
+}
+
+func (x *ResizeBandwidthRequest) GetVmId() string {
+	if x != nil {
+		return x.VmId
+	}
+	return ""
+}
+
+func (x *ResizeBandwidthRequest) GetBandwidthMbps() int32 {
+	if x != nil {
+		return x.BandwidthMbps
+	}
+	return 0
+}
+
+type ResizeBandwidthResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Ok            bool                   `protobuf:"varint,1,opt,name=ok,proto3" json:"ok,omitempty"`
+	Error         string                 `protobuf:"bytes,2,opt,name=error,proto3" json:"error,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ResizeBandwidthResponse) Reset() {
+	*x = ResizeBandwidthResponse{}
+	mi := &file_agent_proto_msgTypes[19]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ResizeBandwidthResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ResizeBandwidthResponse) ProtoMessage() {}
+
+func (x *ResizeBandwidthResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_agent_proto_msgTypes[19]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ResizeBandwidthResponse.ProtoReflect.Descriptor instead.
+func (*ResizeBandwidthResponse) Descriptor() ([]byte, []int) {
+	return file_agent_proto_rawDescGZIP(), []int{19}
+}
+
+func (x *ResizeBandwidthResponse) GetOk() bool {
+	if x != nil {
+		return x.Ok
+	}
+	return false
+}
+
+func (x *ResizeBandwidthResponse) GetError() string {
+	if x != nil {
+		return x.Error
+	}
+	return ""
+}
+
 type WatchRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	unknownFields protoimpl.UnknownFields
@@ -701,7 +1326,7 @@ type WatchRequest struct {
 
 func (x *WatchRequest) Reset() {
 	*x = WatchRequest{}
-	mi := &file_agent_proto_msgTypes[12]
+	mi := &file_agent_proto_msgTypes[20]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -713,7 +1338,7 @@ func (x *WatchRequest) String() string {
 func (*WatchRequest) ProtoMessage() {}
 
 func (x *WatchRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_proto_msgTypes[12]
+	mi := &file_agent_proto_msgTypes[20]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -726,7 +1351,7 @@ func (x *WatchRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use WatchRequest.ProtoReflect.Descriptor instead.
 func (*WatchRequest) Descriptor() ([]byte, []int) {
-	return file_agent_proto_rawDescGZIP(), []int{12}
+	return file_agent_proto_rawDescGZIP(), []int{20}
 }
 
 type AgentEvent struct {
@@ -741,7 +1366,7 @@ type AgentEvent struct {
 
 func (x *AgentEvent) Reset() {
 	*x = AgentEvent{}
-	mi := &file_agent_proto_msgTypes[13]
+	mi := &file_agent_proto_msgTypes[21]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -753,7 +1378,7 @@ func (x *AgentEvent) String() string {
 func (*AgentEvent) ProtoMessage() {}
 
 func (x *AgentEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_proto_msgTypes[13]
+	mi := &file_agent_proto_msgTypes[21]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -766,7 +1391,7 @@ func (x *AgentEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AgentEvent.ProtoReflect.Descriptor instead.
 func (*AgentEvent) Descriptor() ([]byte, []int) {
-	return file_agent_proto_rawDescGZIP(), []int{13}
+	return file_agent_proto_rawDescGZIP(), []int{21}
 }
 
 func (x *AgentEvent) GetVmId() string {
@@ -797,17 +1422,146 @@ func (x *AgentEvent) GetTimestamp() int64 {
 	return 0
 }
 
+type BuildImageRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	ImageId       string                 `protobuf:"bytes,1,opt,name=image_id,json=imageId,proto3" json:"image_id,omitempty"` // DB id, used to name the output file
+	Source        string                 `protobuf:"bytes,2,opt,name=source,proto3" json:"source,omitempty"`                  // docker image ref, e.g. "ubuntu:22.04"
+	Name          string                 `protobuf:"bytes,3,opt,name=name,proto3" json:"name,omitempty"`                      // logical name, e.g. "ubuntu"
+	Tag           string                 `protobuf:"bytes,4,opt,name=tag,proto3" json:"tag,omitempty"`                        // e.g. "22.04"
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *BuildImageRequest) Reset() {
+	*x = BuildImageRequest{}
+	mi := &file_agent_proto_msgTypes[22]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *BuildImageRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*BuildImageRequest) ProtoMessage() {}
+
+func (x *BuildImageRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_agent_proto_msgTypes[22]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use BuildImageRequest.ProtoReflect.Descriptor instead.
+func (*BuildImageRequest) Descriptor() ([]byte, []int) {
+	return file_agent_proto_rawDescGZIP(), []int{22}
+}
+
+func (x *BuildImageRequest) GetImageId() string {
+	if x != nil {
+		return x.ImageId
+	}
+	return ""
+}
+
+func (x *BuildImageRequest) GetSource() string {
+	if x != nil {
+		return x.Source
+	}
+	return ""
+}
+
+func (x *BuildImageRequest) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *BuildImageRequest) GetTag() string {
+	if x != nil {
+		return x.Tag
+	}
+	return ""
+}
+
+type BuildImageEvent struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Stage         BuildImageEvent_Stage  `protobuf:"varint,1,opt,name=stage,proto3,enum=agent.BuildImageEvent_Stage" json:"stage,omitempty"`
+	Message       string                 `protobuf:"bytes,2,opt,name=message,proto3" json:"message,omitempty"`
+	SizeBytes     int64                  `protobuf:"varint,3,opt,name=size_bytes,json=sizeBytes,proto3" json:"size_bytes,omitempty"` // set on DONE
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *BuildImageEvent) Reset() {
+	*x = BuildImageEvent{}
+	mi := &file_agent_proto_msgTypes[23]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *BuildImageEvent) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*BuildImageEvent) ProtoMessage() {}
+
+func (x *BuildImageEvent) ProtoReflect() protoreflect.Message {
+	mi := &file_agent_proto_msgTypes[23]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use BuildImageEvent.ProtoReflect.Descriptor instead.
+func (*BuildImageEvent) Descriptor() ([]byte, []int) {
+	return file_agent_proto_rawDescGZIP(), []int{23}
+}
+
+func (x *BuildImageEvent) GetStage() BuildImageEvent_Stage {
+	if x != nil {
+		return x.Stage
+	}
+	return BuildImageEvent_PULLING
+}
+
+func (x *BuildImageEvent) GetMessage() string {
+	if x != nil {
+		return x.Message
+	}
+	return ""
+}
+
+func (x *BuildImageEvent) GetSizeBytes() int64 {
+	if x != nil {
+		return x.SizeBytes
+	}
+	return 0
+}
+
 type ConsoleInput struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	VmId          string                 `protobuf:"bytes,1,opt,name=vm_id,json=vmId,proto3" json:"vm_id,omitempty"` // set only in the first frame to identify the target VM
 	Data          []byte                 `protobuf:"bytes,2,opt,name=data,proto3" json:"data,omitempty"`
+	Command       string                 `protobuf:"bytes,3,opt,name=command,proto3" json:"command,omitempty"` // set only in the first frame to exec instead of a shell
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *ConsoleInput) Reset() {
 	*x = ConsoleInput{}
-	mi := &file_agent_proto_msgTypes[14]
+	mi := &file_agent_proto_msgTypes[24]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -819,7 +1573,7 @@ func (x *ConsoleInput) String() string {
 func (*ConsoleInput) ProtoMessage() {}
 
 func (x *ConsoleInput) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_proto_msgTypes[14]
+	mi := &file_agent_proto_msgTypes[24]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -832,7 +1586,7 @@ func (x *ConsoleInput) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ConsoleInput.ProtoReflect.Descriptor instead.
 func (*ConsoleInput) Descriptor() ([]byte, []int) {
-	return file_agent_proto_rawDescGZIP(), []int{14}
+	return file_agent_proto_rawDescGZIP(), []int{24}
 }
 
 func (x *ConsoleInput) GetVmId() string {
@@ -849,6 +1603,13 @@ func (x *ConsoleInput) GetData() []byte {
 	return nil
 }
 
+func (x *ConsoleInput) GetCommand() string {
+	if x != nil {
+		return x.Command
+	}
+	return ""
+}
+
 type ConsoleOutput struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Data          []byte                 `protobuf:"bytes,1,opt,name=data,proto3" json:"data,omitempty"`
@@ -858,7 +1619,7 @@ type ConsoleOutput struct {
 
 func (x *ConsoleOutput) Reset() {
 	*x = ConsoleOutput{}
-	mi := &file_agent_proto_msgTypes[15]
+	mi := &file_agent_proto_msgTypes[25]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -870,7 +1631,7 @@ func (x *ConsoleOutput) String() string {
 func (*ConsoleOutput) ProtoMessage() {}
 
 func (x *ConsoleOutput) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_proto_msgTypes[15]
+	mi := &file_agent_proto_msgTypes[25]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -883,7 +1644,7 @@ func (x *ConsoleOutput) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ConsoleOutput.ProtoReflect.Descriptor instead.
 func (*ConsoleOutput) Descriptor() ([]byte, []int) {
-	return file_agent_proto_rawDescGZIP(), []int{15}
+	return file_agent_proto_rawDescGZIP(), []int{25}
 }
 
 func (x *ConsoleOutput) GetData() []byte {
@@ -898,19 +1659,20 @@ type RegisterRequest struct {
 	HostId        string                 `protobuf:"bytes,1,opt,name=host_id,json=hostId,proto3" json:"host_id,omitempty"`
 	Name          string                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
 	Address       string                 `protobuf:"bytes,3,opt,name=address,proto3" json:"address,omitempty"` // gRPC address control-plane uses to reach this agent
-	VcpuTotal     uint32                 `protobuf:"varint,4,opt,name=vcpu_total,json=vcpuTotal,proto3" json:"vcpu_total,omitempty"`
+	VcpuTotal     uint64                 `protobuf:"varint,4,opt,name=vcpu_total,json=vcpuTotal,proto3" json:"vcpu_total,omitempty"`
 	MemTotalMb    uint32                 `protobuf:"varint,5,opt,name=mem_total_mb,json=memTotalMb,proto3" json:"mem_total_mb,omitempty"`
 	ImagesDir     string                 `protobuf:"bytes,6,opt,name=images_dir,json=imagesDir,proto3" json:"images_dir,omitempty"`
 	OverlayDir    string                 `protobuf:"bytes,7,opt,name=overlay_dir,json=overlayDir,proto3" json:"overlay_dir,omitempty"`
 	SnapshotDir   string                 `protobuf:"bytes,8,opt,name=snapshot_dir,json=snapshotDir,proto3" json:"snapshot_dir,omitempty"`
 	KernelPath    string                 `protobuf:"bytes,9,opt,name=kernel_path,json=kernelPath,proto3" json:"kernel_path,omitempty"`
+	SnapshotAddr  string                 `protobuf:"bytes,10,opt,name=snapshot_addr,json=snapshotAddr,proto3" json:"snapshot_addr,omitempty"` // HTTP base URL for snapshot file serving
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *RegisterRequest) Reset() {
 	*x = RegisterRequest{}
-	mi := &file_agent_proto_msgTypes[16]
+	mi := &file_agent_proto_msgTypes[26]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -922,7 +1684,7 @@ func (x *RegisterRequest) String() string {
 func (*RegisterRequest) ProtoMessage() {}
 
 func (x *RegisterRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_proto_msgTypes[16]
+	mi := &file_agent_proto_msgTypes[26]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -935,7 +1697,7 @@ func (x *RegisterRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RegisterRequest.ProtoReflect.Descriptor instead.
 func (*RegisterRequest) Descriptor() ([]byte, []int) {
-	return file_agent_proto_rawDescGZIP(), []int{16}
+	return file_agent_proto_rawDescGZIP(), []int{26}
 }
 
 func (x *RegisterRequest) GetHostId() string {
@@ -959,7 +1721,7 @@ func (x *RegisterRequest) GetAddress() string {
 	return ""
 }
 
-func (x *RegisterRequest) GetVcpuTotal() uint32 {
+func (x *RegisterRequest) GetVcpuTotal() uint64 {
 	if x != nil {
 		return x.VcpuTotal
 	}
@@ -1001,6 +1763,13 @@ func (x *RegisterRequest) GetKernelPath() string {
 	return ""
 }
 
+func (x *RegisterRequest) GetSnapshotAddr() string {
+	if x != nil {
+		return x.SnapshotAddr
+	}
+	return ""
+}
+
 type RegisterResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Ok            bool                   `protobuf:"varint,1,opt,name=ok,proto3" json:"ok,omitempty"`
@@ -1010,7 +1779,7 @@ type RegisterResponse struct {
 
 func (x *RegisterResponse) Reset() {
 	*x = RegisterResponse{}
-	mi := &file_agent_proto_msgTypes[17]
+	mi := &file_agent_proto_msgTypes[27]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1022,7 +1791,7 @@ func (x *RegisterResponse) String() string {
 func (*RegisterResponse) ProtoMessage() {}
 
 func (x *RegisterResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_proto_msgTypes[17]
+	mi := &file_agent_proto_msgTypes[27]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1035,7 +1804,7 @@ func (x *RegisterResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RegisterResponse.ProtoReflect.Descriptor instead.
 func (*RegisterResponse) Descriptor() ([]byte, []int) {
-	return file_agent_proto_rawDescGZIP(), []int{17}
+	return file_agent_proto_rawDescGZIP(), []int{27}
 }
 
 func (x *RegisterResponse) GetOk() bool {
@@ -1049,7 +1818,7 @@ type HeartbeatRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	HostId        string                 `protobuf:"bytes,1,opt,name=host_id,json=hostId,proto3" json:"host_id,omitempty"`
 	RunningVmIds  []string               `protobuf:"bytes,2,rep,name=running_vm_ids,json=runningVmIds,proto3" json:"running_vm_ids,omitempty"`
-	VcpuUsed      uint32                 `protobuf:"varint,3,opt,name=vcpu_used,json=vcpuUsed,proto3" json:"vcpu_used,omitempty"`
+	VcpuUsed      uint64                 `protobuf:"varint,3,opt,name=vcpu_used,json=vcpuUsed,proto3" json:"vcpu_used,omitempty"`
 	MemUsedMb     uint32                 `protobuf:"varint,4,opt,name=mem_used_mb,json=memUsedMb,proto3" json:"mem_used_mb,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -1057,7 +1826,7 @@ type HeartbeatRequest struct {
 
 func (x *HeartbeatRequest) Reset() {
 	*x = HeartbeatRequest{}
-	mi := &file_agent_proto_msgTypes[18]
+	mi := &file_agent_proto_msgTypes[28]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1069,7 +1838,7 @@ func (x *HeartbeatRequest) String() string {
 func (*HeartbeatRequest) ProtoMessage() {}
 
 func (x *HeartbeatRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_proto_msgTypes[18]
+	mi := &file_agent_proto_msgTypes[28]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1082,7 +1851,7 @@ func (x *HeartbeatRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HeartbeatRequest.ProtoReflect.Descriptor instead.
 func (*HeartbeatRequest) Descriptor() ([]byte, []int) {
-	return file_agent_proto_rawDescGZIP(), []int{18}
+	return file_agent_proto_rawDescGZIP(), []int{28}
 }
 
 func (x *HeartbeatRequest) GetHostId() string {
@@ -1099,7 +1868,7 @@ func (x *HeartbeatRequest) GetRunningVmIds() []string {
 	return nil
 }
 
-func (x *HeartbeatRequest) GetVcpuUsed() uint32 {
+func (x *HeartbeatRequest) GetVcpuUsed() uint64 {
 	if x != nil {
 		return x.VcpuUsed
 	}
@@ -1121,7 +1890,7 @@ type HeartbeatResponse struct {
 
 func (x *HeartbeatResponse) Reset() {
 	*x = HeartbeatResponse{}
-	mi := &file_agent_proto_msgTypes[19]
+	mi := &file_agent_proto_msgTypes[29]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1133,7 +1902,7 @@ func (x *HeartbeatResponse) String() string {
 func (*HeartbeatResponse) ProtoMessage() {}
 
 func (x *HeartbeatResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_proto_msgTypes[19]
+	mi := &file_agent_proto_msgTypes[29]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1146,14 +1915,14 @@ func (x *HeartbeatResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HeartbeatResponse.ProtoReflect.Descriptor instead.
 func (*HeartbeatResponse) Descriptor() ([]byte, []int) {
-	return file_agent_proto_rawDescGZIP(), []int{19}
+	return file_agent_proto_rawDescGZIP(), []int{29}
 }
 
 var File_agent_proto protoreflect.FileDescriptor
 
 const file_agent_proto_rawDesc = "" +
 	"\n" +
-	"\vagent.proto\x12\x05agent\"\x82\x02\n" +
+	"\vagent.proto\x12\x05agent\"\xc2\x02\n" +
 	"\x0fCreateVmRequest\x12\x13\n" +
 	"\x05vm_id\x18\x01 \x01(\tR\x04vmId\x12\x1d\n" +
 	"\n" +
@@ -1161,11 +1930,14 @@ const file_agent_proto_rawDesc = "" +
 	"\x04name\x18\x03 \x01(\tR\x04name\x12\x1c\n" +
 	"\tsubdomain\x18\x04 \x01(\tR\tsubdomain\x12\x14\n" +
 	"\x05image\x18\x05 \x01(\tR\x05image\x12\x14\n" +
-	"\x05vcpus\x18\x06 \x01(\x01R\x05vcpus\x12\x1b\n" +
+	"\x05vcpus\x18\x06 \x01(\x03R\x05vcpus\x12\x1b\n" +
 	"\tmemory_mb\x18\a \x01(\x05R\bmemoryMb\x12!\n" +
 	"\fexposed_port\x18\b \x01(\x05R\vexposedPort\x12\x1d\n" +
 	"\n" +
-	"ip_address\x18\t \x01(\tR\tipAddress\"8\n" +
+	"ip_address\x18\t \x01(\tR\tipAddress\x12\x17\n" +
+	"\adisk_mb\x18\n" +
+	" \x01(\x05R\x06diskMb\x12%\n" +
+	"\x0ebandwidth_mbps\x18\v \x01(\x05R\rbandwidthMbps\"8\n" +
 	"\x10CreateVmResponse\x12\x0e\n" +
 	"\x02ok\x18\x01 \x01(\bR\x02ok\x12\x14\n" +
 	"\x05error\x18\x02 \x01(\tR\x05error\"%\n" +
@@ -1198,6 +1970,53 @@ const file_agent_proto_rawDesc = "" +
 	"\asnap_id\x18\x02 \x01(\tR\x06snapId\"7\n" +
 	"\x0fRestoreResponse\x12\x0e\n" +
 	"\x02ok\x18\x01 \x01(\bR\x02ok\x12\x14\n" +
+	"\x05error\x18\x02 \x01(\tR\x05error\"\x88\x02\n" +
+	"\x0eCloneVmRequest\x12 \n" +
+	"\fsource_vm_id\x18\x01 \x01(\tR\n" +
+	"sourceVmId\x12\x1a\n" +
+	"\tnew_vm_id\x18\x02 \x01(\tR\anewVmId\x12\x1d\n" +
+	"\n" +
+	"account_id\x18\x03 \x01(\tR\taccountId\x12\x12\n" +
+	"\x04name\x18\x04 \x01(\tR\x04name\x12\x1c\n" +
+	"\tsubdomain\x18\x05 \x01(\tR\tsubdomain\x12\x1d\n" +
+	"\n" +
+	"ip_address\x18\x06 \x01(\tR\tipAddress\x12!\n" +
+	"\fexposed_port\x18\a \x01(\x05R\vexposedPort\x12%\n" +
+	"\x0einclude_memory\x18\b \x01(\bR\rincludeMemory\"7\n" +
+	"\x0fCloneVmResponse\x12\x0e\n" +
+	"\x02ok\x18\x01 \x01(\bR\x02ok\x12\x14\n" +
+	"\x05error\x18\x02 \x01(\tR\x05error\"\x8c\x03\n" +
+	"\x10MigrateVmRequest\x12\x13\n" +
+	"\x05vm_id\x18\x01 \x01(\tR\x04vmId\x12\x17\n" +
+	"\asnap_id\x18\x02 \x01(\tR\x06snapId\x12.\n" +
+	"\x13source_snapshot_url\x18\x03 \x01(\tR\x11sourceSnapshotUrl\x12\x1d\n" +
+	"\n" +
+	"account_id\x18\x04 \x01(\tR\taccountId\x12\x12\n" +
+	"\x04name\x18\x05 \x01(\tR\x04name\x12\x1c\n" +
+	"\tsubdomain\x18\x06 \x01(\tR\tsubdomain\x12\x14\n" +
+	"\x05vcpus\x18\a \x01(\x03R\x05vcpus\x12\x1b\n" +
+	"\tmemory_mb\x18\b \x01(\x05R\bmemoryMb\x12\x1d\n" +
+	"\n" +
+	"ip_address\x18\t \x01(\tR\tipAddress\x12!\n" +
+	"\fexposed_port\x18\n" +
+	" \x01(\x05R\vexposedPort\x12\x14\n" +
+	"\x05image\x18\v \x01(\tR\x05image\x12\x17\n" +
+	"\adisk_mb\x18\f \x01(\x05R\x06diskMb\x12%\n" +
+	"\x0ebandwidth_mbps\x18\r \x01(\x05R\rbandwidthMbps\"9\n" +
+	"\x11MigrateVmResponse\x12\x0e\n" +
+	"\x02ok\x18\x01 \x01(\bR\x02ok\x12\x14\n" +
+	"\x05error\x18\x02 \x01(\tR\x05error\"=\n" +
+	"\x10ResizeCpuRequest\x12\x13\n" +
+	"\x05vm_id\x18\x01 \x01(\tR\x04vmId\x12\x14\n" +
+	"\x05vcpus\x18\x02 \x01(\x03R\x05vcpus\"9\n" +
+	"\x11ResizeCpuResponse\x12\x0e\n" +
+	"\x02ok\x18\x01 \x01(\bR\x02ok\x12\x14\n" +
+	"\x05error\x18\x02 \x01(\tR\x05error\"T\n" +
+	"\x16ResizeBandwidthRequest\x12\x13\n" +
+	"\x05vm_id\x18\x01 \x01(\tR\x04vmId\x12%\n" +
+	"\x0ebandwidth_mbps\x18\x02 \x01(\x05R\rbandwidthMbps\"?\n" +
+	"\x17ResizeBandwidthResponse\x12\x0e\n" +
+	"\x02ok\x18\x01 \x01(\bR\x02ok\x12\x14\n" +
 	"\x05error\x18\x02 \x01(\tR\x05error\"\x0e\n" +
 	"\fWatchRequest\"m\n" +
 	"\n" +
@@ -1205,18 +2024,35 @@ const file_agent_proto_rawDesc = "" +
 	"\x05vm_id\x18\x01 \x01(\tR\x04vmId\x12\x14\n" +
 	"\x05event\x18\x02 \x01(\tR\x05event\x12\x16\n" +
 	"\x06detail\x18\x03 \x01(\tR\x06detail\x12\x1c\n" +
-	"\ttimestamp\x18\x04 \x01(\x03R\ttimestamp\"7\n" +
+	"\ttimestamp\x18\x04 \x01(\x03R\ttimestamp\"l\n" +
+	"\x11BuildImageRequest\x12\x19\n" +
+	"\bimage_id\x18\x01 \x01(\tR\aimageId\x12\x16\n" +
+	"\x06source\x18\x02 \x01(\tR\x06source\x12\x12\n" +
+	"\x04name\x18\x03 \x01(\tR\x04name\x12\x10\n" +
+	"\x03tag\x18\x04 \x01(\tR\x03tag\"\xc7\x01\n" +
+	"\x0fBuildImageEvent\x122\n" +
+	"\x05stage\x18\x01 \x01(\x0e2\x1c.agent.BuildImageEvent.StageR\x05stage\x12\x18\n" +
+	"\amessage\x18\x02 \x01(\tR\amessage\x12\x1d\n" +
+	"\n" +
+	"size_bytes\x18\x03 \x01(\x03R\tsizeBytes\"G\n" +
+	"\x05Stage\x12\v\n" +
+	"\aPULLING\x10\x00\x12\r\n" +
+	"\tEXPORTING\x10\x01\x12\r\n" +
+	"\tSQUASHING\x10\x02\x12\b\n" +
+	"\x04DONE\x10\x03\x12\t\n" +
+	"\x05ERROR\x10\x04\"Q\n" +
 	"\fConsoleInput\x12\x13\n" +
 	"\x05vm_id\x18\x01 \x01(\tR\x04vmId\x12\x12\n" +
-	"\x04data\x18\x02 \x01(\fR\x04data\"#\n" +
+	"\x04data\x18\x02 \x01(\fR\x04data\x12\x18\n" +
+	"\acommand\x18\x03 \x01(\tR\acommand\"#\n" +
 	"\rConsoleOutput\x12\x12\n" +
-	"\x04data\x18\x01 \x01(\fR\x04data\"\x9d\x02\n" +
+	"\x04data\x18\x01 \x01(\fR\x04data\"\xc2\x02\n" +
 	"\x0fRegisterRequest\x12\x17\n" +
 	"\ahost_id\x18\x01 \x01(\tR\x06hostId\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12\x18\n" +
 	"\aaddress\x18\x03 \x01(\tR\aaddress\x12\x1d\n" +
 	"\n" +
-	"vcpu_total\x18\x04 \x01(\rR\tvcpuTotal\x12 \n" +
+	"vcpu_total\x18\x04 \x01(\x04R\tvcpuTotal\x12 \n" +
 	"\fmem_total_mb\x18\x05 \x01(\rR\n" +
 	"memTotalMb\x12\x1d\n" +
 	"\n" +
@@ -1225,23 +2061,31 @@ const file_agent_proto_rawDesc = "" +
 	"overlayDir\x12!\n" +
 	"\fsnapshot_dir\x18\b \x01(\tR\vsnapshotDir\x12\x1f\n" +
 	"\vkernel_path\x18\t \x01(\tR\n" +
-	"kernelPath\"\"\n" +
+	"kernelPath\x12#\n" +
+	"\rsnapshot_addr\x18\n" +
+	" \x01(\tR\fsnapshotAddr\"\"\n" +
 	"\x10RegisterResponse\x12\x0e\n" +
 	"\x02ok\x18\x01 \x01(\bR\x02ok\"\x8e\x01\n" +
 	"\x10HeartbeatRequest\x12\x17\n" +
 	"\ahost_id\x18\x01 \x01(\tR\x06hostId\x12$\n" +
 	"\x0erunning_vm_ids\x18\x02 \x03(\tR\frunningVmIds\x12\x1b\n" +
-	"\tvcpu_used\x18\x03 \x01(\rR\bvcpuUsed\x12\x1e\n" +
+	"\tvcpu_used\x18\x03 \x01(\x04R\bvcpuUsed\x12\x1e\n" +
 	"\vmem_used_mb\x18\x04 \x01(\rR\tmemUsedMb\"\x13\n" +
-	"\x11HeartbeatResponse2\xfa\x03\n" +
+	"\x11HeartbeatResponse2\xc8\x06\n" +
 	"\tHostAgent\x12;\n" +
 	"\bCreateVm\x12\x16.agent.CreateVmRequest\x1a\x17.agent.CreateVmResponse\x128\n" +
 	"\aStartVm\x12\x15.agent.StartVmRequest\x1a\x16.agent.StartVmResponse\x125\n" +
 	"\x06StopVm\x12\x14.agent.StopVmRequest\x1a\x15.agent.StopVmResponse\x12;\n" +
 	"\bDeleteVm\x12\x16.agent.DeleteVmRequest\x1a\x17.agent.DeleteVmResponse\x12G\n" +
 	"\fTakeSnapshot\x12\x1a.agent.TakeSnapshotRequest\x1a\x1b.agent.TakeSnapshotResponse\x12@\n" +
-	"\x0fRestoreSnapshot\x12\x15.agent.RestoreRequest\x1a\x16.agent.RestoreResponse\x127\n" +
-	"\vWatchEvents\x12\x13.agent.WatchRequest\x1a\x11.agent.AgentEvent0\x01\x12>\n" +
+	"\x0fRestoreSnapshot\x12\x15.agent.RestoreRequest\x1a\x16.agent.RestoreResponse\x128\n" +
+	"\aCloneVm\x12\x15.agent.CloneVmRequest\x1a\x16.agent.CloneVmResponse\x12>\n" +
+	"\tMigrateVm\x12\x17.agent.MigrateVmRequest\x1a\x18.agent.MigrateVmResponse\x12>\n" +
+	"\tResizeCpu\x12\x17.agent.ResizeCpuRequest\x1a\x18.agent.ResizeCpuResponse\x12P\n" +
+	"\x0fResizeBandwidth\x12\x1d.agent.ResizeBandwidthRequest\x1a\x1e.agent.ResizeBandwidthResponse\x127\n" +
+	"\vWatchEvents\x12\x13.agent.WatchRequest\x1a\x11.agent.AgentEvent0\x01\x12@\n" +
+	"\n" +
+	"BuildImage\x12\x18.agent.BuildImageRequest\x1a\x16.agent.BuildImageEvent0\x01\x12>\n" +
 	"\rStreamConsole\x12\x13.agent.ConsoleInput\x1a\x14.agent.ConsoleOutput(\x010\x012\x8b\x01\n" +
 	"\fControlPlane\x12;\n" +
 	"\bRegister\x12\x16.agent.RegisterRequest\x1a\x17.agent.RegisterResponse\x12>\n" +
@@ -1259,55 +2103,78 @@ func file_agent_proto_rawDescGZIP() []byte {
 	return file_agent_proto_rawDescData
 }
 
-var file_agent_proto_msgTypes = make([]protoimpl.MessageInfo, 20)
+var file_agent_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
+var file_agent_proto_msgTypes = make([]protoimpl.MessageInfo, 30)
 var file_agent_proto_goTypes = []any{
-	(*CreateVmRequest)(nil),      // 0: agent.CreateVmRequest
-	(*CreateVmResponse)(nil),     // 1: agent.CreateVmResponse
-	(*StartVmRequest)(nil),       // 2: agent.StartVmRequest
-	(*StartVmResponse)(nil),      // 3: agent.StartVmResponse
-	(*StopVmRequest)(nil),        // 4: agent.StopVmRequest
-	(*StopVmResponse)(nil),       // 5: agent.StopVmResponse
-	(*DeleteVmRequest)(nil),      // 6: agent.DeleteVmRequest
-	(*DeleteVmResponse)(nil),     // 7: agent.DeleteVmResponse
-	(*TakeSnapshotRequest)(nil),  // 8: agent.TakeSnapshotRequest
-	(*TakeSnapshotResponse)(nil), // 9: agent.TakeSnapshotResponse
-	(*RestoreRequest)(nil),       // 10: agent.RestoreRequest
-	(*RestoreResponse)(nil),      // 11: agent.RestoreResponse
-	(*WatchRequest)(nil),         // 12: agent.WatchRequest
-	(*AgentEvent)(nil),           // 13: agent.AgentEvent
-	(*ConsoleInput)(nil),         // 14: agent.ConsoleInput
-	(*ConsoleOutput)(nil),        // 15: agent.ConsoleOutput
-	(*RegisterRequest)(nil),      // 16: agent.RegisterRequest
-	(*RegisterResponse)(nil),     // 17: agent.RegisterResponse
-	(*HeartbeatRequest)(nil),     // 18: agent.HeartbeatRequest
-	(*HeartbeatResponse)(nil),    // 19: agent.HeartbeatResponse
+	(BuildImageEvent_Stage)(0),      // 0: agent.BuildImageEvent.Stage
+	(*CreateVmRequest)(nil),         // 1: agent.CreateVmRequest
+	(*CreateVmResponse)(nil),        // 2: agent.CreateVmResponse
+	(*StartVmRequest)(nil),          // 3: agent.StartVmRequest
+	(*StartVmResponse)(nil),         // 4: agent.StartVmResponse
+	(*StopVmRequest)(nil),           // 5: agent.StopVmRequest
+	(*StopVmResponse)(nil),          // 6: agent.StopVmResponse
+	(*DeleteVmRequest)(nil),         // 7: agent.DeleteVmRequest
+	(*DeleteVmResponse)(nil),        // 8: agent.DeleteVmResponse
+	(*TakeSnapshotRequest)(nil),     // 9: agent.TakeSnapshotRequest
+	(*TakeSnapshotResponse)(nil),    // 10: agent.TakeSnapshotResponse
+	(*RestoreRequest)(nil),          // 11: agent.RestoreRequest
+	(*RestoreResponse)(nil),         // 12: agent.RestoreResponse
+	(*CloneVmRequest)(nil),          // 13: agent.CloneVmRequest
+	(*CloneVmResponse)(nil),         // 14: agent.CloneVmResponse
+	(*MigrateVmRequest)(nil),        // 15: agent.MigrateVmRequest
+	(*MigrateVmResponse)(nil),       // 16: agent.MigrateVmResponse
+	(*ResizeCpuRequest)(nil),        // 17: agent.ResizeCpuRequest
+	(*ResizeCpuResponse)(nil),       // 18: agent.ResizeCpuResponse
+	(*ResizeBandwidthRequest)(nil),  // 19: agent.ResizeBandwidthRequest
+	(*ResizeBandwidthResponse)(nil), // 20: agent.ResizeBandwidthResponse
+	(*WatchRequest)(nil),            // 21: agent.WatchRequest
+	(*AgentEvent)(nil),              // 22: agent.AgentEvent
+	(*BuildImageRequest)(nil),       // 23: agent.BuildImageRequest
+	(*BuildImageEvent)(nil),         // 24: agent.BuildImageEvent
+	(*ConsoleInput)(nil),            // 25: agent.ConsoleInput
+	(*ConsoleOutput)(nil),           // 26: agent.ConsoleOutput
+	(*RegisterRequest)(nil),         // 27: agent.RegisterRequest
+	(*RegisterResponse)(nil),        // 28: agent.RegisterResponse
+	(*HeartbeatRequest)(nil),        // 29: agent.HeartbeatRequest
+	(*HeartbeatResponse)(nil),       // 30: agent.HeartbeatResponse
 }
 var file_agent_proto_depIdxs = []int32{
-	0,  // 0: agent.HostAgent.CreateVm:input_type -> agent.CreateVmRequest
-	2,  // 1: agent.HostAgent.StartVm:input_type -> agent.StartVmRequest
-	4,  // 2: agent.HostAgent.StopVm:input_type -> agent.StopVmRequest
-	6,  // 3: agent.HostAgent.DeleteVm:input_type -> agent.DeleteVmRequest
-	8,  // 4: agent.HostAgent.TakeSnapshot:input_type -> agent.TakeSnapshotRequest
-	10, // 5: agent.HostAgent.RestoreSnapshot:input_type -> agent.RestoreRequest
-	12, // 6: agent.HostAgent.WatchEvents:input_type -> agent.WatchRequest
-	14, // 7: agent.HostAgent.StreamConsole:input_type -> agent.ConsoleInput
-	16, // 8: agent.ControlPlane.Register:input_type -> agent.RegisterRequest
-	18, // 9: agent.ControlPlane.Heartbeat:input_type -> agent.HeartbeatRequest
-	1,  // 10: agent.HostAgent.CreateVm:output_type -> agent.CreateVmResponse
-	3,  // 11: agent.HostAgent.StartVm:output_type -> agent.StartVmResponse
-	5,  // 12: agent.HostAgent.StopVm:output_type -> agent.StopVmResponse
-	7,  // 13: agent.HostAgent.DeleteVm:output_type -> agent.DeleteVmResponse
-	9,  // 14: agent.HostAgent.TakeSnapshot:output_type -> agent.TakeSnapshotResponse
-	11, // 15: agent.HostAgent.RestoreSnapshot:output_type -> agent.RestoreResponse
-	13, // 16: agent.HostAgent.WatchEvents:output_type -> agent.AgentEvent
-	15, // 17: agent.HostAgent.StreamConsole:output_type -> agent.ConsoleOutput
-	17, // 18: agent.ControlPlane.Register:output_type -> agent.RegisterResponse
-	19, // 19: agent.ControlPlane.Heartbeat:output_type -> agent.HeartbeatResponse
-	10, // [10:20] is the sub-list for method output_type
-	0,  // [0:10] is the sub-list for method input_type
-	0,  // [0:0] is the sub-list for extension type_name
-	0,  // [0:0] is the sub-list for extension extendee
-	0,  // [0:0] is the sub-list for field type_name
+	0,  // 0: agent.BuildImageEvent.stage:type_name -> agent.BuildImageEvent.Stage
+	1,  // 1: agent.HostAgent.CreateVm:input_type -> agent.CreateVmRequest
+	3,  // 2: agent.HostAgent.StartVm:input_type -> agent.StartVmRequest
+	5,  // 3: agent.HostAgent.StopVm:input_type -> agent.StopVmRequest
+	7,  // 4: agent.HostAgent.DeleteVm:input_type -> agent.DeleteVmRequest
+	9,  // 5: agent.HostAgent.TakeSnapshot:input_type -> agent.TakeSnapshotRequest
+	11, // 6: agent.HostAgent.RestoreSnapshot:input_type -> agent.RestoreRequest
+	13, // 7: agent.HostAgent.CloneVm:input_type -> agent.CloneVmRequest
+	15, // 8: agent.HostAgent.MigrateVm:input_type -> agent.MigrateVmRequest
+	17, // 9: agent.HostAgent.ResizeCpu:input_type -> agent.ResizeCpuRequest
+	19, // 10: agent.HostAgent.ResizeBandwidth:input_type -> agent.ResizeBandwidthRequest
+	21, // 11: agent.HostAgent.WatchEvents:input_type -> agent.WatchRequest
+	23, // 12: agent.HostAgent.BuildImage:input_type -> agent.BuildImageRequest
+	25, // 13: agent.HostAgent.StreamConsole:input_type -> agent.ConsoleInput
+	27, // 14: agent.ControlPlane.Register:input_type -> agent.RegisterRequest
+	29, // 15: agent.ControlPlane.Heartbeat:input_type -> agent.HeartbeatRequest
+	2,  // 16: agent.HostAgent.CreateVm:output_type -> agent.CreateVmResponse
+	4,  // 17: agent.HostAgent.StartVm:output_type -> agent.StartVmResponse
+	6,  // 18: agent.HostAgent.StopVm:output_type -> agent.StopVmResponse
+	8,  // 19: agent.HostAgent.DeleteVm:output_type -> agent.DeleteVmResponse
+	10, // 20: agent.HostAgent.TakeSnapshot:output_type -> agent.TakeSnapshotResponse
+	12, // 21: agent.HostAgent.RestoreSnapshot:output_type -> agent.RestoreResponse
+	14, // 22: agent.HostAgent.CloneVm:output_type -> agent.CloneVmResponse
+	16, // 23: agent.HostAgent.MigrateVm:output_type -> agent.MigrateVmResponse
+	18, // 24: agent.HostAgent.ResizeCpu:output_type -> agent.ResizeCpuResponse
+	20, // 25: agent.HostAgent.ResizeBandwidth:output_type -> agent.ResizeBandwidthResponse
+	22, // 26: agent.HostAgent.WatchEvents:output_type -> agent.AgentEvent
+	24, // 27: agent.HostAgent.BuildImage:output_type -> agent.BuildImageEvent
+	26, // 28: agent.HostAgent.StreamConsole:output_type -> agent.ConsoleOutput
+	28, // 29: agent.ControlPlane.Register:output_type -> agent.RegisterResponse
+	30, // 30: agent.ControlPlane.Heartbeat:output_type -> agent.HeartbeatResponse
+	16, // [16:31] is the sub-list for method output_type
+	1,  // [1:16] is the sub-list for method input_type
+	1,  // [1:1] is the sub-list for extension type_name
+	1,  // [1:1] is the sub-list for extension extendee
+	0,  // [0:1] is the sub-list for field type_name
 }
 
 func init() { file_agent_proto_init() }
@@ -1320,13 +2187,14 @@ func file_agent_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_agent_proto_rawDesc), len(file_agent_proto_rawDesc)),
-			NumEnums:      0,
-			NumMessages:   20,
+			NumEnums:      1,
+			NumMessages:   30,
 			NumExtensions: 0,
 			NumServices:   2,
 		},
 		GoTypes:           file_agent_proto_goTypes,
 		DependencyIndexes: file_agent_proto_depIdxs,
+		EnumInfos:         file_agent_proto_enumTypes,
 		MessageInfos:      file_agent_proto_msgTypes,
 	}.Build()
 	File_agent_proto = out.File
