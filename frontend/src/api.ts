@@ -325,6 +325,20 @@ export function adminMigrateVm(
   });
 }
 
+// ── vm events ─────────────────────────────────────────────────────────────────
+
+export interface VmEvent {
+  id: string;
+  vm_id: string;
+  event: string;
+  metadata: string | null;
+  created_at: number;
+}
+
+export function listVmEvents(vmId: string, limit = 20): Promise<VmEvent[]> {
+  return request(`/api/vms/${vmId}/events?limit=${limit}`);
+}
+
 // ── images ────────────────────────────────────────────────────────────────────
 
 export function listImages(): Promise<Image[]> {

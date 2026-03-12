@@ -169,6 +169,9 @@ impl VmManager {
 
         if let Err(e) = self.start_vm_inner(vm_id).await {
             db::set_vm_status(&self.pool, vm_id, "error").await.ok();
+            db::log_event(&self.pool, vm_id, "error", Some(&format!("{e:#}")))
+                .await
+                .ok();
             return Err(e);
         }
         Ok(())

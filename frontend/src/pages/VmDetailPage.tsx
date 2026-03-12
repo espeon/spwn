@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { useParams, useNavigate } from "@tanstack/react-router";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -14,7 +14,9 @@ import {
   listSnapshots,
   deleteSnapshot,
   restoreSnapshot,
+  listVmEvents,
   ApiError,
+  type VmEvent,
 } from "@/api";
 import { StatusBadge } from "@/components/StatusBadge";
 import { Button } from "@/components/ui/button";
@@ -112,7 +114,9 @@ export function VmDetailPage() {
 
   const resizeMutation = useMutation({
     mutationFn: () => {
-      const vcpus = resizeVcpus ? Math.round(parseFloat(resizeVcpus) * 1000) : undefined;
+      const vcpus = resizeVcpus
+        ? Math.round(parseFloat(resizeVcpus) * 1000)
+        : undefined;
       return resizeVmResources(vmId, vcpus, undefined);
     },
     onSuccess: () => {
@@ -411,6 +415,8 @@ export function VmDetailPage() {
         </Button>
       </div>
 
+      <EventLog vmId={vmId} status={vm.status} />
+
       <div className="mt-8">
         <h2 className="text-sm font-medium mb-3">snapshots</h2>
         {snapshotsLoading ? (
@@ -471,5 +477,91 @@ export function VmDetailPage() {
         )}
       </div>
     </>
+  );
+}
+
+function eventColor(event: string): string {
+  switch (event) {
+    case "started":
+      return "text-green-500";
+    case "stopped":
+      return "text-muted-foreground";
+    case "error":
+      return "text-destructive";
+    case "snapshot_taken":
+      return "text-blue-400";
+    default:
+      return "text-muted-foreground";
+  }
+}
+
+function EventLog({ vmId, status }: { vmId: string; status: string }) {
+  const isError = status === "error";
+
+  const { data: events = [], isLoading } = useQuery({
+    queryKey: ["vm-events", vmId],
+    queryFn: () => listVmEvents(vmId, 20),
+    refetchInterval: isError ? false : 10_000,
+  });
+
+  const latestError = useMemo(() => {
+    if (!isError) return null;
+    return events.find((e) => e.event === "error") ?? null;
+  }, [events, isError]);
+
+  return (
+    <div className="mt-8">
+      <h2 className="text-sm font-medium mb-3">events</h2>
+
+      {isError && latestError && (
+        <div className="mb-3 rounded-md border border-destructive/40 bg-destructive/10 px-4 py-3">
+          <p className="text-xs font-medium text-destructive mb-1">
+            start failed
+          </p>
+          <p className="text-xs font-mono text-destructive/90 break-all">
+            {latestError.metadata ?? "unknown error"}
+          </p>
+        </div>
+      )}
+
+      {isLoading ? (
+        <p className="text-xs text-muted-foreground">loading...</p>
+      ) : events.length === 0 ? (
+        <p className="text-xs text-muted-foreground">no events yet</p>
+      ) : (
+        <div className="rounded-md border divide-y divide-border text-xs">
+          {events.map((ev) => (
+            <EventRow key={ev.id} event={ev} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function EventRow({ event }: { event: VmEvent }) {
+  const [expanded, setExpanded] = useState(false);
+  const time = useMemo(
+    () => new Date(event.created_at * 1000).toLocaleString(),
+    [event.created_at],
+  );
+
+  return (
+    <div
+      className={`px-4 py-2.5 ${event.metadata ? "cursor-pointer hover:bg-muted/40" : ""}`}
+      onClick={() => event.metadata && setExpanded((e) => !e)}
+    >
+      <div className="flex items-center justify-between gap-3">
+        <span className={`font-medium ${eventColor(event.event)}`}>
+          {event.event}
+        </span>
+        <span className="text-muted-foreground shrink-0">{time}</span>
+      </div>
+      {expanded && event.metadata && (
+        <p className="mt-1.5 font-mono text-muted-foreground break-all">
+          {event.metadata}
+        </p>
+      )}
+    </div>
   );
 }
