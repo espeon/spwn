@@ -339,7 +339,7 @@ function ImageRow({
             </span>
           </div>
           {image.status === "error" && image.error && (
-            <p className="text-xs text-destructive mt-0.5 truncate">
+            <p className="text-xs text-destructive mt-0.5 break-all">
               {image.error}
             </p>
           )}
