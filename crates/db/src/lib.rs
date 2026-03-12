@@ -1219,6 +1219,121 @@ pub async fn authorize_cli_auth_code(pool: &PgPool, code: &str, account_id: &str
     Ok(())
 }
 
+// ── Images ────────────────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone)]
+pub struct ImageRow {
+    pub id: String,
+    pub name: String,
+    pub tag: String,
+    pub source: String,
+    pub status: String,
+    pub size_bytes: i64,
+    pub error: Option<String>,
+    pub created_at: i64,
+}
+
+fn row_to_image(r: &sqlx::postgres::PgRow) -> ImageRow {
+    ImageRow {
+        id: r.get("id"),
+        name: r.get("name"),
+        tag: r.get("tag"),
+        source: r.get("source"),
+        status: r.get("status"),
+        size_bytes: r.get("size_bytes"),
+        error: r.get("error"),
+        created_at: r.get("created_at"),
+    }
+}
+
+pub async fn create_image(
+    pool: &PgPool,
+    id: &str,
+    name: &str,
+    tag: &str,
+    source: &str,
+) -> Result<ImageRow> {
+    let created_at = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as i64;
+    sqlx::query(
+        "INSERT INTO images (id, name, tag, source, status, size_bytes, created_at)
+         VALUES ($1, $2, $3, $4, 'building', 0, $5)",
+    )
+    .bind(id)
+    .bind(name)
+    .bind(tag)
+    .bind(source)
+    .bind(created_at)
+    .execute(pool)
+    .await?;
+    Ok(get_image(pool, id).await?.expect("image just inserted"))
+}
+
+pub async fn get_image(pool: &PgPool, id: &str) -> Result<Option<ImageRow>> {
+    let row = sqlx::query(
+        "SELECT id, name, tag, source, status, size_bytes, error, created_at
+         FROM images WHERE id = $1",
+    )
+    .bind(id)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row.as_ref().map(row_to_image))
+}
+
+pub async fn get_image_by_name_tag(
+    pool: &PgPool,
+    name: &str,
+    tag: &str,
+) -> Result<Option<ImageRow>> {
+    let row = sqlx::query(
+        "SELECT id, name, tag, source, status, size_bytes, error, created_at
+         FROM images WHERE name = $1 AND tag = $2",
+    )
+    .bind(name)
+    .bind(tag)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row.as_ref().map(row_to_image))
+}
+
+pub async fn list_images(pool: &PgPool) -> Result<Vec<ImageRow>> {
+    let rows = sqlx::query(
+        "SELECT id, name, tag, source, status, size_bytes, error, created_at
+         FROM images ORDER BY created_at DESC",
+    )
+    .fetch_all(pool)
+    .await?;
+    Ok(rows.iter().map(row_to_image).collect())
+}
+
+pub async fn update_image_ready(pool: &PgPool, id: &str, size_bytes: i64) -> Result<()> {
+    sqlx::query("UPDATE images SET status = 'ready', size_bytes = $1, error = NULL WHERE id = $2")
+        .bind(size_bytes)
+        .bind(id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+pub async fn update_image_error(pool: &PgPool, id: &str, error: &str) -> Result<()> {
+    sqlx::query("UPDATE images SET status = 'error', error = $1 WHERE id = $2")
+        .bind(error)
+        .bind(id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+pub async fn delete_image(pool: &PgPool, id: &str) -> Result<()> {
+    sqlx::query("DELETE FROM images WHERE id = $1")
+        .bind(id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
 pub async fn deny_cli_auth_code(pool: &PgPool, code: &str) -> Result<()> {
     sqlx::query("UPDATE cli_auth_codes SET status = 'denied' WHERE code = $1")
         .bind(code)
