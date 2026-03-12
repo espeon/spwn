@@ -214,13 +214,32 @@ async fn build_image_inner(
     }
 
     // ── bake in overlay-init, resolv.conf, CA bundle ─────────────────────────
-    for dir in &["sbin", "overlay", "rom"] {
+
+    // Create /overlay and /rom unconditionally — these must exist as real dirs
+    // in the squashfs since the rootfs is mounted read-only at boot.
+    for dir in &["overlay", "rom"] {
         if let Err(e) = tokio::fs::create_dir_all(rootfs.join(dir)).await {
             send(event_error(format!("mkdir {dir}: {e}"))).await;
             return;
         }
     }
-    let sbin = rootfs.join("sbin");
+
+    // Resolve /sbin without creating a real directory — on usrmerge distros
+    // (Ubuntu 22.04+) /sbin is a symlink to usr/sbin. We must follow it rather
+    // than creating a real /sbin directory, which would shadow the symlink in
+    // the squashfs and leave /sbin empty at boot.
+    let sbin_link = rootfs.join("sbin");
+    let sbin = match tokio::fs::canonicalize(&sbin_link).await {
+        Ok(real) => real,
+        Err(_) => {
+            // No sbin at all — create it as a real directory.
+            if let Err(e) = tokio::fs::create_dir_all(&sbin_link).await {
+                send(event_error(format!("mkdir sbin: {e}"))).await;
+                return;
+            }
+            sbin_link
+        }
+    };
     let overlay_init_path = sbin.join("overlay-init");
     if let Err(e) = tokio::fs::write(&overlay_init_path, OVERLAY_INIT).await {
         send(event_error(format!("write overlay-init: {e}"))).await;
