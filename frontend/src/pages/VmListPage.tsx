@@ -66,6 +66,12 @@ function CreateVmDialog({
   }, [images, image]);
 
   useEffect(() => {
+    if (regions.length > 0 && !region) {
+      setRegion(regions[0]);
+    }
+  }, [regions, region]);
+
+  useEffect(() => {
     const initAllDefault = () => {
       setName("");
       setImage(images.length > 0 ? `${images[0].name}:${images[0].tag}` : "");
@@ -124,12 +130,13 @@ function CreateVmDialog({
       return;
     }
     setFieldErrors({});
-    const req = {
+    const req: CreateVmRequest = {
       name: name.trim(),
       image: image.trim(),
-      vcpus: vcpus * 1000, // convert to millicpus
+      vcpus: vcpus * 1000,
       memory_mb: memoryMb,
       exposed_port: port,
+      ...(region ? { region } : {}),
     };
     const toastId = toast.loading("creating vm...");
     mutation
@@ -297,32 +304,40 @@ function CreateVmDialog({
               <p className="text-xs text-destructive">{fieldErrors.port}</p>
             )}
           </div>
-          <div>
-            <Label htmlFor="vm-region">region</Label>
-            <select
-              id="vm-region"
-              value={region}
-              onChange={(e) => {
-                setRegion(e.target.value);
-                if (fieldErrors.region)
-                  setFieldErrors((p) => ({ ...p, region: "" }));
-              }}
-              className={`w-full rounded-md border px-3 py-2 ${
-                fieldErrors.region
-                  ? "border-destructive focus-visible:ring-destructive"
-                  : "border-input"
-              }`}
-            >
-              {regions.map((r) => (
-                <option key={r} value={r}>
-                  {r}
-                </option>
-              ))}
-            </select>
-            {fieldErrors.region && (
-              <p className="text-xs text-destructive">{fieldErrors.region}</p>
-            )}
-          </div>
+          {regions.length > 0 && (
+            <div>
+              <Label htmlFor="vm-region">region</Label>
+              {regions.length === 1 ? (
+                <p className="text-sm py-1 text-muted-foreground font-mono">
+                  {regions[0]}
+                </p>
+              ) : (
+                <select
+                  id="vm-region"
+                  value={region}
+                  onChange={(e) => {
+                    setRegion(e.target.value);
+                    if (fieldErrors.region)
+                      setFieldErrors((p) => ({ ...p, region: "" }));
+                  }}
+                  className={`w-full rounded-md border px-3 py-2 ${
+                    fieldErrors.region
+                      ? "border-destructive focus-visible:ring-destructive"
+                      : "border-input"
+                  }`}
+                >
+                  {regions.map((r) => (
+                    <option key={r} value={r}>
+                      {r}
+                    </option>
+                  ))}
+                </select>
+              )}
+              {fieldErrors.region && (
+                <p className="text-xs text-destructive">{fieldErrors.region}</p>
+              )}
+            </div>
+          )}
           {submitError && (
             <p className="text-sm text-destructive">{submitError}</p>
           )}
