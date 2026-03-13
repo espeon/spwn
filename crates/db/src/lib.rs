@@ -110,6 +110,13 @@ pub struct AdminVmRecord {
     pub memory_mb: i32,
     pub disk_usage_mb: i32,
     pub subdomain: String,
+    pub region: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct RegionInfo {
+    pub name: String,
+    pub active: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -236,7 +243,7 @@ pub async fn list_vms(pool: &PgPool, account_id: &str) -> Result<Vec<VmRow>> {
 pub async fn list_all_vms_admin(pool: &PgPool) -> Result<Vec<AdminVmRecord>> {
     let rows = sqlx::query(
         "SELECT v.id, v.name, v.status, v.host_id, v.account_id, a.username,
-         v.vcpus, v.memory_mb, v.disk_usage_mb, v.subdomain
+         v.vcpus, v.memory_mb, v.disk_usage_mb, v.subdomain, v.region
          FROM vms v
          JOIN accounts a ON v.account_id = a.id
          ORDER BY v.host_id NULLS LAST, v.name",
@@ -257,6 +264,7 @@ pub async fn list_all_vms_admin(pool: &PgPool) -> Result<Vec<AdminVmRecord>> {
             memory_mb: r.get("memory_mb"),
             disk_usage_mb: r.get("disk_usage_mb"),
             subdomain: r.get("subdomain"),
+            region: r.get("region"),
         })
         .collect())
 }
@@ -365,8 +373,9 @@ pub async fn delete_vm(pool: &PgPool, id: &str) -> Result<()> {
     Ok(())
 }
 
-pub async fn get_used_ips(pool: &PgPool) -> Result<Vec<String>> {
-    let rows = sqlx::query("SELECT ip_address FROM vms")
+pub async fn get_used_ips_for_host(pool: &PgPool, host_id: &str) -> Result<Vec<String>> {
+    let rows = sqlx::query("SELECT ip_address FROM vms WHERE host_id = $1")
+        .bind(host_id)
         .fetch_all(pool)
         .await?;
     Ok(rows
@@ -435,15 +444,25 @@ pub async fn set_vm_region(pool: &PgPool, vm_id: &str, region: &str) -> Result<(
     Ok(())
 }
 
-pub async fn list_active_regions(pool: &PgPool) -> Result<Vec<String>> {
+pub async fn list_regions(pool: &PgPool) -> Result<Vec<RegionInfo>> {
     let rows = sqlx::query(
-        "SELECT DISTINCT labels->>'region' AS region FROM hosts
-         WHERE status = 'active' AND labels->>'region' IS NOT NULL
-         ORDER BY region",
+        "SELECT
+             labels->>'region' AS name,
+             BOOL_OR(status = 'active') AS active
+         FROM hosts
+         WHERE labels->>'region' IS NOT NULL
+         GROUP BY labels->>'region'
+         ORDER BY labels->>'region'",
     )
     .fetch_all(pool)
     .await?;
-    Ok(rows.iter().map(|r| r.get("region")).collect())
+    Ok(rows
+        .iter()
+        .map(|r| RegionInfo {
+            name: r.get("name"),
+            active: r.get("active"),
+        })
+        .collect())
 }
 
 pub async fn update_disk_usage_mb(pool: &PgPool, vm_id: &str, disk_usage_mb: i32) -> Result<()> {

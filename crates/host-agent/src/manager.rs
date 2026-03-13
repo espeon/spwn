@@ -160,6 +160,7 @@ impl VmManager {
                 cloned_from: None,
                 placement_strategy: "best_fit".into(),
                 required_labels: None,
+                region: None,
             },
         )
         .await?;
@@ -875,6 +876,7 @@ impl VmManager {
                 cloned_from: Some(source_vm_id.to_string()),
                 placement_strategy: source.placement_strategy.clone(),
                 required_labels: source.required_labels.clone(),
+                region: source.region.clone(),
             },
         )
         .await?;
@@ -982,6 +984,7 @@ impl VmManager {
                 cloned_from: None,
                 placement_strategy: "best_fit".into(),
                 required_labels: None,
+                region: None,
             },
         )
         .await?;

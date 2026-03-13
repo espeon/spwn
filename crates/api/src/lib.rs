@@ -299,12 +299,27 @@ async fn list_images(
     }
 }
 
+#[derive(Serialize)]
+struct RegionResponse {
+    name: String,
+    active: bool,
+}
+
 async fn list_regions(
     Extension(pool): Extension<db::PgPool>,
     _account_id: AccountId,
 ) -> impl IntoResponse {
-    match db::list_active_regions(&pool).await {
-        Ok(regions) => Json(regions).into_response(),
+    match db::list_regions(&pool).await {
+        Ok(regions) => Json(
+            regions
+                .into_iter()
+                .map(|r| RegionResponse {
+                    name: r.name,
+                    active: r.active,
+                })
+                .collect::<Vec<_>>(),
+        )
+        .into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     }
 }

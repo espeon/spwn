@@ -89,6 +89,7 @@ struct AdminVmResponse {
     memory_mb: i32,
     disk_usage_mb: i32,
     subdomain: String,
+    region: Option<String>,
 }
 
 impl From<db::AdminVmRecord> for AdminVmResponse {
@@ -104,6 +105,7 @@ impl From<db::AdminVmRecord> for AdminVmResponse {
             memory_mb: v.memory_mb,
             disk_usage_mb: v.disk_usage_mb,
             subdomain: v.subdomain,
+            region: v.region,
         }
     }
 }

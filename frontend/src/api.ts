@@ -187,7 +187,12 @@ export function stopVm(id: string): Promise<void> {
   return request(`/api/vms/${id}/stop`, { method: "POST" });
 }
 
-export function listRegions(): Promise<string[]> {
+export interface RegionInfo {
+  name: string;
+  active: boolean;
+}
+
+export function listRegions(): Promise<RegionInfo[]> {
   return request("/api/regions");
 }
 
@@ -308,6 +313,7 @@ export interface AdminVm {
   memory_mb: number;
   disk_usage_mb: number;
   subdomain: string;
+  region: string | null;
 }
 
 export function listAdminVms(): Promise<AdminVm[]> {

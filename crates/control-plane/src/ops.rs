@@ -91,7 +91,7 @@ impl api::VmOps for ControlPlaneOps {
         )
         .await?;
         let vm_id = uuid::Uuid::new_v4().to_string();
-        let used_ips = db::get_used_ips(&self.pool).await?;
+        let used_ips = db::get_used_ips_for_host(&self.pool, &host.id).await?;
         let slot = scheduler::next_free_slot(&used_ips);
         let ip_address = format!("172.16.{slot}.2");
         let sub = subdomain::generate(&self.pool, &req.name, &account.username).await?;
@@ -415,7 +415,7 @@ impl api::VmOps for ControlPlaneOps {
             .ok_or_else(|| anyhow!("host {host_id} not found"))?;
 
         let new_vm_id = uuid::Uuid::new_v4().to_string();
-        let used_ips = db::get_used_ips(&self.pool).await?;
+        let used_ips = db::get_used_ips_for_host(&self.pool, host_id).await?;
         let slot = scheduler::next_free_slot(&used_ips);
         let ip_address = format!("172.16.{slot}.2");
         let name = req.name.clone();

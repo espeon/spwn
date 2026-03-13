@@ -11,6 +11,7 @@ import {
   startVm,
   stopVm,
   type CreateVmRequest,
+  type RegionInfo,
   type Vm,
 } from "@/api";
 import { StatusBadge } from "@/components/StatusBadge";
@@ -41,7 +42,7 @@ function CreateVmDialog({
   const [image, setImage] = useState("");
   const [vcpus, setVcpus] = useState(1.0);
   const [memoryMb, setMemoryMb] = useState(512);
-  const [region, setRegion] = useState("");
+  const [region, setRegion] = useState<string>("");
   const [port, setPort] = useState(8080);
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const [submitError, setSubmitError] = useState<string | null>(null);
@@ -52,11 +53,13 @@ function CreateVmDialog({
     staleTime: 60_000,
   });
 
-  const { data: regions = [] } = useQuery({
+  const { data: regions = [] } = useQuery<RegionInfo[]>({
     queryKey: ["regions"],
     queryFn: listRegions,
     staleTime: 60_000,
   });
+
+  const activeRegions = regions.filter((r) => r.active);
 
   useEffect(() => {
     if (images.length > 0 && !image) {
@@ -66,10 +69,10 @@ function CreateVmDialog({
   }, [images, image]);
 
   useEffect(() => {
-    if (regions.length > 0 && !region) {
-      setRegion(regions[0]);
+    if (activeRegions.length > 0 && !region) {
+      setRegion(activeRegions[0].name);
     }
-  }, [regions, region]);
+  }, [activeRegions, region]);
 
   useEffect(() => {
     const initAllDefault = () => {
@@ -78,14 +81,14 @@ function CreateVmDialog({
       setVcpus(1.0);
       setMemoryMb(512);
       setPort(8080);
-      setRegion(regions.length > 0 ? regions[0] : "");
+      setRegion(activeRegions.length > 0 ? activeRegions[0].name : "");
       setFieldErrors({});
       setSubmitError(null);
     };
     if (!open) {
       initAllDefault();
     }
-  }, [open, images, regions]);
+  }, [open, images, activeRegions]);
 
   function validate(): Record<string, string> {
     const errs: Record<string, string> = {};
@@ -304,12 +307,12 @@ function CreateVmDialog({
               <p className="text-xs text-destructive">{fieldErrors.port}</p>
             )}
           </div>
-          {regions.length > 0 && (
+          {activeRegions.length > 0 && (
             <div>
               <Label htmlFor="vm-region">region</Label>
-              {regions.length === 1 ? (
+              {activeRegions.length === 1 ? (
                 <p className="text-sm py-1 text-muted-foreground font-mono">
-                  {regions[0]}
+                  {activeRegions[0].name}
                 </p>
               ) : (
                 <select
@@ -326,9 +329,9 @@ function CreateVmDialog({
                       : "border-input"
                   }`}
                 >
-                  {regions.map((r) => (
-                    <option key={r} value={r}>
-                      {r}
+                  {activeRegions.map((r) => (
+                    <option key={r.name} value={r.name}>
+                      {r.name}
                     </option>
                   ))}
                 </select>
@@ -499,6 +502,11 @@ function VmRow({ vm }: { vm: Vm }) {
               <IconAccessPoint size={16} />
               Port {vm.exposed_port}
             </span>
+            {vm.region && (
+              <span className="font-mono bg-secondary px-1.5 py-0.5 rounded">
+                {vm.region}
+              </span>
+            )}
           </div>
         </div>
       </div>
