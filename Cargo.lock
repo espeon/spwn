@@ -90,13 +90,19 @@ dependencies = [
  "async-trait",
  "auth",
  "axum 0.8.8",
+ "bytes",
  "common",
  "db",
+ "http-body-util",
  "serde",
  "serde_json",
+ "testcontainers",
+ "testcontainers-modules",
  "thiserror 2.0.18",
  "tokio",
+ "tower 0.5.3",
  "tracing",
+ "uuid",
 ]
 
 [[package]]

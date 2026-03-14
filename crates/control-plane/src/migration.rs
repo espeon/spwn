@@ -121,8 +121,16 @@ pub async fn migrate_vm(
         return Err(anyhow!("migrate_vm on target failed: {}", resp.error));
     }
 
-    // Update host assignment.
+    // Update host assignment and region.
     db::set_vm_host(pool, vm_id, target_host_id).await?;
+    if let Some(region) = tgt_host
+        .labels
+        .as_object()
+        .and_then(|m| m.get("region"))
+        .and_then(|v| v.as_str())
+    {
+        let _ = db::set_vm_region(pool, vm_id, region).await;
+    }
 
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
