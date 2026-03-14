@@ -110,11 +110,18 @@ frontend:
 setup:
     scripts/spwn setup
 
-# run tests (sets DOCKER_HOST for testcontainers + podman)
-test:
+# run all tests (unit + integration) via cargo-nextest
+test: test-unit test-integration
+
+# run unit tests (no external dependencies)
+test-unit:
+    cargo nextest run --bin spwn-control-plane
+
+# run integration tests (requires podman socket for testcontainers)
+test-integration:
     DOCKER_HOST=unix:///run/user/$(id -u)/podman/podman.sock \
     TESTCONTAINERS_RYUK_DISABLED=true \
-    cargo test -p db -p auth
+    cargo nextest run --test '*'
 
 # check cargo workspace compiles cleanly
 check: check-protoc

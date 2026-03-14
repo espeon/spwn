@@ -68,16 +68,30 @@ impl api::VmOps for ControlPlaneOps {
             ));
         }
 
+        // Merge an explicit `region` field into required_labels so callers
+        // don't have to know the label key name.
+        let effective_labels = match (&req.region, &req.required_labels) {
+            (Some(r), Some(labels)) => {
+                let mut merged = labels.clone();
+                if let Some(map) = merged.as_object_mut() {
+                    map.insert("region".to_string(), serde_json::Value::String(r.clone()));
+                }
+                Some(merged)
+            }
+            (Some(r), None) => Some(serde_json::json!({"region": r})),
+            (None, labels) => labels.clone(),
+        };
+
         let host = scheduler::pick_host(
             &self.pool,
             req.vcpus,
             req.memory_mb,
             &req.placement_strategy,
-            req.required_labels.as_ref(),
+            effective_labels.as_ref(),
         )
         .await?;
         let vm_id = uuid::Uuid::new_v4().to_string();
-        let used_ips = db::get_used_ips(&self.pool).await?;
+        let used_ips = db::get_used_ips_for_host(&self.pool, &host.id).await?;
         let slot = scheduler::next_free_slot(&used_ips);
         let ip_address = format!("172.16.{slot}.2");
         let sub = subdomain::generate(&self.pool, &req.name, &account.username).await?;
@@ -106,6 +120,16 @@ impl api::VmOps for ControlPlaneOps {
 
         if !resp.ok {
             return Err(anyhow!("agent failed to create vm: {}", resp.error));
+        }
+
+        // Persist the region the VM actually landed in (from the placed host's labels).
+        if let Some(region) = host
+            .labels
+            .as_object()
+            .and_then(|m| m.get("region"))
+            .and_then(|v| v.as_str())
+        {
+            let _ = db::set_vm_region(&self.pool, &vm_id, region).await;
         }
 
         let vm = db::get_vm(&self.pool, &vm_id)
@@ -391,7 +415,7 @@ impl api::VmOps for ControlPlaneOps {
             .ok_or_else(|| anyhow!("host {host_id} not found"))?;
 
         let new_vm_id = uuid::Uuid::new_v4().to_string();
-        let used_ips = db::get_used_ips(&self.pool).await?;
+        let used_ips = db::get_used_ips_for_host(&self.pool, host_id).await?;
         let slot = scheduler::next_free_slot(&used_ips);
         let ip_address = format!("172.16.{slot}.2");
         let name = req.name.clone();

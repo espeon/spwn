@@ -54,6 +54,7 @@ export interface Vm {
   ip_address: string;
   exposed_port: number;
   created_at: number;
+  region: string | null;
 }
 
 export interface CreateVmRequest {
@@ -62,6 +63,7 @@ export interface CreateVmRequest {
   vcpus: number;
   memory_mb: number;
   exposed_port: number;
+  region?: string;
 }
 
 class ApiError extends Error {
@@ -185,6 +187,15 @@ export function stopVm(id: string): Promise<void> {
   return request(`/api/vms/${id}/stop`, { method: "POST" });
 }
 
+export interface RegionInfo {
+  name: string;
+  active: boolean;
+}
+
+export function listRegions(): Promise<RegionInfo[]> {
+  return request("/api/regions");
+}
+
 export interface Snapshot {
   id: string;
   vm_id: string;
@@ -302,6 +313,7 @@ export interface AdminVm {
   memory_mb: number;
   disk_usage_mb: number;
   subdomain: string;
+  region: string | null;
 }
 
 export function listAdminVms(): Promise<AdminVm[]> {

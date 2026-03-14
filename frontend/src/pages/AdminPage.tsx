@@ -110,6 +110,11 @@ function VmRow({
         </div>
       </div>
       <div className="flex items-center gap-4 shrink-0 text-xs text-muted-foreground">
+        {vm.region && (
+          <span className="font-mono bg-secondary px-1.5 py-0.5 rounded text-xs">
+            {vm.region}
+          </span>
+        )}
         <span className="w-16 text-right">{(vm.vcpus / 1000).toFixed(1)}c</span>
         <span className="w-14 text-right">{vm.memory_mb}mb</span>
         <span className="w-16 text-right">{vm.disk_usage_mb}mb disk</span>
@@ -171,7 +176,14 @@ function HostCard({
       <div className="p-4 flex flex-col gap-3">
         <div className="flex items-center justify-between">
           <div className="flex flex-col">
-            <span className="font-medium">{host.name}</span>
+            <div className="flex items-center gap-2">
+              <span className="font-medium">{host.name}</span>
+              {host.labels["region"] && (
+                <span className="font-mono bg-secondary px-1.5 py-0.5 rounded text-xs text-muted-foreground">
+                  {host.labels["region"]}
+                </span>
+              )}
+            </div>
             <span className="text-xs text-muted-foreground font-mono">
               {host.address}
             </span>
@@ -654,12 +666,39 @@ export function AdminPage() {
               <option value="">select host...</option>
               {hosts
                 ?.filter((h) => h.id !== migrateVm?.host_id)
-                .map((h) => (
-                  <option key={h.id} value={h.id}>
-                    {h.name} ({h.status})
-                  </option>
-                ))}
+                .map((h) => {
+                  const hostRegion = h.labels["region"] ?? null;
+                  const vmRegion = migrateVm?.region ?? null;
+                  const crossRegion =
+                    vmRegion && hostRegion && hostRegion !== vmRegion;
+                  return (
+                    <option key={h.id} value={h.id}>
+                      {h.name}
+                      {hostRegion ? ` [${hostRegion}]` : ""} ({h.status})
+                      {crossRegion ? " ⚠ cross-region" : ""}
+                    </option>
+                  );
+                })}
             </select>
+            {(() => {
+              const target = hosts?.find((h) => h.id === migrateTarget);
+              const targetRegion = target?.labels["region"] ?? null;
+              const vmRegion = migrateVm?.region ?? null;
+              if (
+                target &&
+                vmRegion &&
+                targetRegion &&
+                targetRegion !== vmRegion
+              ) {
+                return (
+                  <p className="text-xs text-yellow-500">
+                    warning: target host is in region {targetRegion}, vm is in{" "}
+                    {vmRegion}. the vm will be reassigned to {targetRegion}.
+                  </p>
+                );
+              }
+              return null;
+            })()}
           </div>
           <DialogFooter>
             <Button

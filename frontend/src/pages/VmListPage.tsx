@@ -1,4 +1,4 @@
-import { useState, useEffect, type FormEvent } from "react";
+import { useState, useEffect } from "react";
 import { Link } from "@tanstack/react-router";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -6,10 +6,12 @@ import { trackVmToast } from "@/hooks/useVmEvents";
 import {
   listVms,
   listImages,
+  listRegions,
   createVm,
   startVm,
   stopVm,
   type CreateVmRequest,
+  type RegionInfo,
   type Vm,
 } from "@/api";
 import { StatusBadge } from "@/components/StatusBadge";
@@ -40,6 +42,7 @@ function CreateVmDialog({
   const [image, setImage] = useState("");
   const [vcpus, setVcpus] = useState(1.0);
   const [memoryMb, setMemoryMb] = useState(512);
+  const [region, setRegion] = useState<string>("");
   const [port, setPort] = useState(8080);
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const [submitError, setSubmitError] = useState<string | null>(null);
@@ -50,25 +53,31 @@ function CreateVmDialog({
     staleTime: 60_000,
   });
 
-  useEffect(() => {
-    if (images.length > 0 && !image) {
-      // eslint-disable-next-line react-hooks/set-state-in-effect
-      setImage(`${images[0].name}:${images[0].tag}`);
-    }
-  }, [images, image]);
+  const { data: regions = [] } = useQuery<RegionInfo[]>({
+    queryKey: ["regions"],
+    queryFn: listRegions,
+    staleTime: 60_000,
+  });
 
-  function initAllDefault() {
-    setName("");
-    setImage(images.length > 0 ? `${images[0].name}:${images[0].tag}` : "");
-    setVcpus(1.0);
-    setMemoryMb(512);
-    setPort(8080);
-    setFieldErrors({});
-    setSubmitError(null);
-  }
+  const activeRegions = regions.filter((r) => r.active);
+  const defaultImage =
+    images.length > 0 ? `${images[0].name}:${images[0].tag}` : "";
+  const defaultRegion = activeRegions.length > 0 ? activeRegions[0].name : "";
+  const selectedImage = image || defaultImage;
+  const selectedRegion = region || defaultRegion;
+
   useEffect(() => {
+    const initAllDefault = () => {
+      setName("");
+      setImage("");
+      setVcpus(1.0);
+      setMemoryMb(512);
+      setPort(8080);
+      setRegion("");
+      setFieldErrors({});
+      setSubmitError(null);
+    };
     if (!open) {
-      // eslint-disable-next-line react-hooks/set-state-in-effect
       initAllDefault();
     }
   }, [open]);
@@ -83,7 +92,7 @@ function CreateVmDialog({
     } else if (!/^[a-zA-Z0-9][a-zA-Z0-9\- ]*$/.test(trimmed)) {
       errs.name = "letters, numbers, hyphens, and spaces only";
     }
-    if (!image.trim()) {
+    if (!selectedImage.trim()) {
       errs.image = "select an image";
     }
     if (vcpus < 0.125 || vcpus > 8) {
@@ -107,7 +116,7 @@ function CreateVmDialog({
     onError: () => {},
   });
 
-  function submit(e: FormEvent) {
+  function submit(e: React.SubmitEvent<HTMLFormElement>) {
     e.preventDefault();
     setSubmitError(null);
     const errs = validate();
@@ -116,12 +125,13 @@ function CreateVmDialog({
       return;
     }
     setFieldErrors({});
-    const req = {
+    const req: CreateVmRequest = {
       name: name.trim(),
-      image: image.trim(),
-      vcpus: vcpus * 1000, // convert to millicpus
+      image: selectedImage.trim(),
+      vcpus: vcpus * 1000,
       memory_mb: memoryMb,
       exposed_port: port,
+      ...(selectedRegion ? { region: selectedRegion } : {}),
     };
     const toastId = toast.loading("creating vm...");
     mutation
@@ -179,7 +189,7 @@ function CreateVmDialog({
               </p>
             ) : (
               <div
-                className={`flex flex-wrap gap-1.5 ${fieldErrors.image ? "rounded-md outline outline-1 outline-destructive p-1" : ""}`}
+                className={`flex flex-wrap gap-1.5 ${fieldErrors.image ? "rounded-md outline outline-destructive p-1" : ""}`}
               >
                 {images.map((img) => {
                   const val = `${img.name}:${img.tag}`;
@@ -193,7 +203,7 @@ function CreateVmDialog({
                           setFieldErrors((p) => ({ ...p, image: "" }));
                       }}
                       className={`px-2.5 py-1 rounded-md text-xs font-mono border transition-colors ${
-                        image === val
+                        selectedImage === val
                           ? "bg-primary text-primary-foreground border-primary"
                           : "bg-background hover:bg-muted border-input"
                       }`}
@@ -289,6 +299,40 @@ function CreateVmDialog({
               <p className="text-xs text-destructive">{fieldErrors.port}</p>
             )}
           </div>
+          {activeRegions.length > 0 && (
+            <div>
+              <Label htmlFor="vm-region">region</Label>
+              {activeRegions.length === 1 ? (
+                <p className="text-sm py-1 text-muted-foreground font-mono">
+                  {activeRegions[0].name}
+                </p>
+              ) : (
+                <select
+                  id="vm-region"
+                  value={selectedRegion}
+                  onChange={(e) => {
+                    setRegion(e.target.value);
+                    if (fieldErrors.region)
+                      setFieldErrors((p) => ({ ...p, region: "" }));
+                  }}
+                  className={`w-full rounded-md border px-3 py-2 ${
+                    fieldErrors.region
+                      ? "border-destructive focus-visible:ring-destructive"
+                      : "border-input"
+                  }`}
+                >
+                  {activeRegions.map((r) => (
+                    <option key={r.name} value={r.name}>
+                      {r.name}
+                    </option>
+                  ))}
+                </select>
+              )}
+              {fieldErrors.region && (
+                <p className="text-xs text-destructive">{fieldErrors.region}</p>
+              )}
+            </div>
+          )}
           {submitError && (
             <p className="text-sm text-destructive">{submitError}</p>
           )}
@@ -450,6 +494,11 @@ function VmRow({ vm }: { vm: Vm }) {
               <IconAccessPoint size={16} />
               Port {vm.exposed_port}
             </span>
+            {vm.region && (
+              <span className="font-mono bg-secondary px-1.5 py-0.5 rounded">
+                {vm.region}
+              </span>
+            )}
           </div>
         </div>
       </div>

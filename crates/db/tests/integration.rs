@@ -1,5 +1,6 @@
 use testcontainers::{ContainerAsync, runners::AsyncRunner};
 use testcontainers_modules::postgres::Postgres;
+use uuid::Uuid;
 
 async fn setup() -> (ContainerAsync<Postgres>, db::PgPool) {
     let container = Postgres::default().start().await.expect("start postgres");
@@ -401,4 +402,154 @@ async fn test_quota_only_counts_active_vms() {
     db::check_quota_and_reserve(&pool, &acct.id, &candidate, 2000, 512)
         .await
         .expect("stopped vms should not count against quota");
+}
+
+// ── vms ───────────────────────────────────────────────────────────────────────
+
+fn new_vm(account_id: &str) -> db::NewVm {
+    db::NewVm {
+        id: Uuid::new_v4().to_string(),
+        account_id: account_id.to_string(),
+        name: "test-vm".into(),
+        subdomain: Uuid::new_v4().to_string(),
+        vcpus: 1000,
+        memory_mb: 512,
+        disk_mb: 5120,
+        bandwidth_mbps: 100,
+        kernel_path: "/vmlinux".into(),
+        rootfs_path: "/images/ubuntu.sqfs".into(),
+        overlay_path: "/overlay/vm".into(),
+        real_init: "/sbin/init".into(),
+        ip_address: "172.16.1.2".into(),
+        exposed_port: 8080,
+        base_image: "ubuntu".into(),
+        cloned_from: None,
+        placement_strategy: "best_fit".into(),
+        required_labels: None,
+        region: None,
+    }
+}
+
+#[tokio::test]
+async fn test_create_and_get_vm() {
+    let (_c, pool) = setup().await;
+    let acct = new_account("vm-create@example.com");
+    db::create_account(&pool, &acct).await.expect("create account");
+
+    let vm = new_vm(&acct.id);
+    let vm_id = vm.id.clone();
+    db::create_vm(&pool, &vm).await.expect("create vm");
+
+    let fetched = db::get_vm(&pool, &vm_id)
+        .await
+        .expect("get vm")
+        .expect("should exist");
+    assert_eq!(fetched.id, vm_id);
+    assert_eq!(fetched.account_id, acct.id);
+    assert_eq!(fetched.status, "stopped");
+    assert_eq!(fetched.vcpus, 1000);
+    assert!(fetched.region.is_none());
+}
+
+#[tokio::test]
+async fn test_get_vm_missing_returns_none() {
+    let (_c, pool) = setup().await;
+    let result = db::get_vm(&pool, "nonexistent-id")
+        .await
+        .expect("query ok");
+    assert!(result.is_none());
+}
+
+#[tokio::test]
+async fn test_list_vms_by_account() {
+    let (_c, pool) = setup().await;
+    let acct_a = new_account_with_username("a@example.com", "a");
+    let acct_b = new_account_with_username("b@example.com", "b");
+    db::create_account(&pool, &acct_a).await.expect("create a");
+    db::create_account(&pool, &acct_b).await.expect("create b");
+
+    let mut vm_a = new_vm(&acct_a.id);
+    vm_a.subdomain = "a-vm".into();
+    let mut vm_b = new_vm(&acct_b.id);
+    vm_b.subdomain = "b-vm".into();
+
+    db::create_vm(&pool, &vm_a).await.expect("create vm_a");
+    db::create_vm(&pool, &vm_b).await.expect("create vm_b");
+
+    let vms = db::list_vms(&pool, &acct_a.id).await.expect("list vms");
+    assert_eq!(vms.len(), 1);
+    assert_eq!(vms[0].account_id, acct_a.id);
+}
+
+#[tokio::test]
+async fn test_set_and_read_vm_region() {
+    let (_c, pool) = setup().await;
+    let acct = new_account("region@example.com");
+    db::create_account(&pool, &acct).await.expect("create account");
+
+    let vm = new_vm(&acct.id);
+    let vm_id = vm.id.clone();
+    db::create_vm(&pool, &vm).await.expect("create vm");
+
+    db::set_vm_region(&pool, &vm_id, "us-east")
+        .await
+        .expect("set region");
+
+    let fetched = db::get_vm(&pool, &vm_id)
+        .await
+        .expect("get vm")
+        .expect("should exist");
+    assert_eq!(fetched.region.as_deref(), Some("us-east"));
+}
+
+// ── regions ───────────────────────────────────────────────────────────────────
+
+async fn insert_host_with_region(pool: &db::PgPool, id: &str, region: &str, status: &str) {
+    sqlx::query(
+        "INSERT INTO hosts (id, name, address, vcpu_total, mem_total_mb, images_dir, overlay_dir,
+         snapshot_dir, kernel_path, snapshot_addr, last_seen_at, labels)
+         VALUES ($1,$1,'http://h:4000',4000,4096,'/img','/ovl','/snap','/vmlinux','http://h:8080',0,$2)",
+    )
+    .bind(id)
+    .bind(serde_json::json!({"region": region}))
+    .execute(pool)
+    .await
+    .expect("insert host");
+
+    sqlx::query("UPDATE hosts SET status=$1 WHERE id=$2")
+        .bind(status)
+        .bind(id)
+        .execute(pool)
+        .await
+        .expect("set status");
+}
+
+#[tokio::test]
+async fn test_list_regions_returns_host_regions() {
+    let (_c, pool) = setup().await;
+
+    insert_host_with_region(&pool, "h-us", "us-east", "active").await;
+    insert_host_with_region(&pool, "h-eu", "eu-west", "active").await;
+
+    let regions = db::list_regions(&pool).await.expect("list regions");
+    assert_eq!(regions.len(), 2);
+
+    let names: std::collections::HashSet<_> = regions.iter().map(|r| r.name.as_str()).collect();
+    assert!(names.contains("us-east"));
+    assert!(names.contains("eu-west"));
+    assert!(regions.iter().all(|r| r.active));
+}
+
+#[tokio::test]
+async fn test_list_regions_active_flag() {
+    let (_c, pool) = setup().await;
+
+    insert_host_with_region(&pool, "h-active", "us-east", "active").await;
+    insert_host_with_region(&pool, "h-offline", "eu-west", "offline").await;
+
+    let regions = db::list_regions(&pool).await.expect("list regions");
+    let us = regions.iter().find(|r| r.name == "us-east").expect("us-east");
+    let eu = regions.iter().find(|r| r.name == "eu-west").expect("eu-west");
+    assert!(us.active);
+    assert!(!eu.active);
 }
