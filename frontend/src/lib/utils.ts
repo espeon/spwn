@@ -13,6 +13,17 @@ export function timeAgo(ts: number): string {
   return `${Math.floor(diff / 86400)}d ago`;
 }
 
+export function formatUptime(startedAt: number): string {
+  const diff = Math.max(0, Math.floor(Date.now() / 1000 - startedAt));
+  if (diff < 60) return `${diff}s`;
+  if (diff < 3600) return `${Math.floor(diff / 60)}m`;
+  const h = Math.floor(diff / 3600);
+  const m = Math.floor((diff % 3600) / 60);
+  if (diff < 86400) return m > 0 ? `${h}h ${m}m` : `${h}h`;
+  const d = Math.floor(diff / 86400);
+  return `${d}d ${h % 24}h`;
+}
+
 export async function copyToClipboard(text: string): Promise<boolean> {
   try {
     await navigator.clipboard.writeText(text);

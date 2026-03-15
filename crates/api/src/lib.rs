@@ -164,6 +164,8 @@ struct VmResponse {
     cloned_from: Option<String>,
     disk_usage_mb: i32,
     region: Option<String>,
+    created_at: i64,
+    last_started_at: Option<i64>,
 }
 
 impl From<db::VmRow> for VmResponse {
@@ -189,6 +191,8 @@ impl From<db::VmRow> for VmResponse {
             cloned_from: v.cloned_from,
             disk_usage_mb: v.disk_usage_mb,
             region: v.region,
+            created_at: v.created_at,
+            last_started_at: v.last_started_at,
         }
     }
 }
@@ -258,6 +262,7 @@ pub fn router(ops: Arc<dyn VmOps>) -> Router {
         .route("/api/regions", get(list_regions))
         .route("/api/namespaces", get(list_namespaces).post(create_namespace))
         .route("/api/namespaces/{id}", get(get_namespace).patch(update_namespace))
+        .route("/api/namespaces/{id}/usage", get(get_namespace_usage))
         .route(
             "/api/namespaces/{id}/members",
             get(list_namespace_members).post(add_namespace_member),
@@ -771,6 +776,26 @@ async fn get_namespace(
     match db::get_namespace(&pool, &id).await {
         Ok(Some(ns)) => Json(NamespaceResponse::from(ns)).into_response(),
         Ok(None) => StatusCode::NOT_FOUND.into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+async fn get_namespace_usage(
+    Extension(pool): Extension<db::PgPool>,
+    account_id: AccountId,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    let member = db::get_namespace_member(&pool, &id, &account_id.0).await;
+    if !matches!(member, Ok(Some(_))) {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    match db::get_namespace_usage(&pool, &id).await {
+        Ok(u) => Json(serde_json::json!({
+            "used_vcpus": u.used_vcpus,
+            "used_mem_mb": u.used_mem_mb,
+            "used_vms": u.used_vms,
+        }))
+        .into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     }
 }

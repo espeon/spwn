@@ -171,9 +171,12 @@ async fn vm_events_sse(
     Extension(tx): Extension<events::EventBroadcast>,
 ) -> Sse<impl tokio_stream::Stream<Item = Result<Event, Infallible>>> {
     let stream = BroadcastStream::new(tx.subscribe()).filter_map(|result| match result {
-        Ok(event) => serde_json::to_string(&event)
-            .ok()
-            .map(|data| Ok(Event::default().event("vm_status").data(data))),
+        Ok(event) => {
+            let name = event.event_name();
+            serde_json::to_string(&event)
+                .ok()
+                .map(|data| Ok(Event::default().event(name).data(data)))
+        }
         Err(_) => None,
     });
     Sse::new(stream).keep_alive(KeepAlive::default())

@@ -98,11 +98,13 @@ pub fn auth_router(state: AuthState) -> Router {
 #[derive(Serialize)]
 struct ServerConfig {
     ssh_gateway_addr: String,
+    public_url: String,
 }
 
 async fn server_config(State(state): State<AuthState>) -> impl IntoResponse {
     Json(ServerConfig {
         ssh_gateway_addr: state.ssh_gateway_addr.clone(),
+        public_url: state.public_url.clone(),
     })
 }
 
@@ -451,7 +453,7 @@ async fn update_profile(
     let update = db::UpdateAccountProfile {
         display_name: req.display_name,
         avatar_bytes: acc.avatar_bytes,
-        dotfiles_repo: req.dotfiles_repo.or(acc.dotfiles_repo),
+        dotfiles_repo: req.dotfiles_repo,
     };
 
     match db::update_account_profile(&state.pool, &account_id.0, &update).await {

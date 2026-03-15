@@ -1200,6 +1200,30 @@ pub async fn get_namespace_member(
     }))
 }
 
+pub struct NamespaceUsage {
+    pub used_vcpus: i64,
+    pub used_mem_mb: i32,
+    pub used_vms: i32,
+}
+
+pub async fn get_namespace_usage(pool: &PgPool, namespace_id: &str) -> Result<NamespaceUsage> {
+    let row = sqlx::query(
+        "SELECT COALESCE(SUM(vcpus),0)::bigint AS used_vcpus,
+                COALESCE(SUM(memory_mb),0)::int AS used_mem,
+                COUNT(*)::int AS used_vms
+         FROM vms
+         WHERE namespace_id = $1 AND status NOT IN ('deleted')",
+    )
+    .bind(namespace_id)
+    .fetch_one(pool)
+    .await?;
+    Ok(NamespaceUsage {
+        used_vcpus: row.get("used_vcpus"),
+        used_mem_mb: row.get("used_mem"),
+        used_vms: row.get("used_vms"),
+    })
+}
+
 pub async fn delete_expired_sessions(pool: &PgPool) -> Result<u64> {
     let now = unix_now();
     let result = sqlx::query("DELETE FROM sessions WHERE expires_at < $1")

@@ -8,6 +8,7 @@ import {
   listNamespaceMembers,
   addNamespaceMember,
   removeNamespaceMember,
+  getNamespaceUsage,
   getMe,
   ApiError,
   type NamespaceMember,
@@ -15,6 +16,8 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Skeleton } from "@/components/ui/skeleton";
+import { Card, CardContent } from "@/components/ui/card";
 import {
   Dialog,
   DialogContent,
@@ -107,6 +110,12 @@ export function NamespaceDetailPage() {
     queryKey: ["namespace-members", nsId],
     queryFn: () => listNamespaceMembers(nsId),
   });
+  const { data: usage } = useQuery({
+    queryKey: ["namespace-usage", nsId],
+    queryFn: () => getNamespaceUsage(nsId),
+    enabled: !nsLoading && !!ns,
+    refetchInterval: 30_000,
+  });
 
   const removeMutation = useMutation({
     mutationFn: (accountId: string) => removeNamespaceMember(nsId, accountId),
@@ -119,7 +128,22 @@ export function NamespaceDetailPage() {
     },
   });
 
-  if (nsLoading || membersLoading) return <p className="text-muted-foreground text-sm">loading...</p>;
+  if (nsLoading || membersLoading)
+    return (
+      <div className="flex flex-col gap-6">
+        <Skeleton className="h-14 w-80" />
+        <div className="grid grid-cols-3 gap-3">
+          {Array.from({ length: 3 }).map((_, i) => (
+            <Skeleton key={i} className="h-[62px] rounded-lg" />
+          ))}
+        </div>
+        <div className="flex flex-col gap-2">
+          {Array.from({ length: 2 }).map((_, i) => (
+            <Skeleton key={i} className="h-[56px] rounded-lg" />
+          ))}
+        </div>
+      </div>
+    );
   if (!ns) return <p className="text-destructive text-sm">namespace not found</p>;
 
   const myMembership = members.find((m) => m.account_id === me?.id);
@@ -136,9 +160,6 @@ export function NamespaceDetailPage() {
             </span>
             <span className="text-xs text-muted-foreground">{ns.kind}</span>
           </div>
-          <p className="text-sm text-muted-foreground mt-1">
-            {ns.vcpu_limit / 1000} vCPUs · {ns.mem_limit_mb / 1024} GB RAM · {ns.vm_limit} VMs
-          </p>
         </div>
         {isOwner && ns.kind !== "personal" && (
           <Button size="sm" onClick={() => setAddOpen(true)}>
@@ -146,6 +167,50 @@ export function NamespaceDetailPage() {
             add member
           </Button>
         )}
+      </div>
+
+      <div className="grid grid-cols-3 gap-3">
+        {([
+          {
+            label: "vcpus",
+            used: usage ? usage.used_vcpus / 1000 : null,
+            limit: ns.vcpu_limit / 1000,
+            fmt: (v: number) => String(v),
+          },
+          {
+            label: "memory",
+            used: usage ? usage.used_mem_mb / 1024 : null,
+            limit: ns.mem_limit_mb / 1024,
+            fmt: (v: number) => `${v} gb`,
+          },
+          {
+            label: "vms",
+            used: usage ? usage.used_vms : null,
+            limit: ns.vm_limit,
+            fmt: (v: number) => String(v),
+          },
+        ]).map(({ label, used, limit, fmt }) => {
+          const pct = used !== null ? Math.min(100, (used / limit) * 100) : 0;
+          const warn = pct >= 80;
+          return (
+            <Card key={label}>
+              <CardContent className="px-4 py-3">
+                <div className="flex items-baseline justify-between mb-1.5">
+                  <p className="text-xs text-muted-foreground">{label}</p>
+                  <p className="font-mono text-xs text-muted-foreground">
+                    {used !== null ? fmt(used) : "…"} / {fmt(limit)}
+                  </p>
+                </div>
+                <div className="h-1.5 rounded-full bg-secondary overflow-hidden">
+                  <div
+                    className={`h-full rounded-full transition-all ${warn ? "bg-yellow-500" : "bg-primary"}`}
+                    style={{ width: `${pct}%` }}
+                  />
+                </div>
+              </CardContent>
+            </Card>
+          );
+        })}
       </div>
 
       <div className="flex flex-col gap-2">
@@ -159,10 +224,9 @@ export function NamespaceDetailPage() {
           >
             <div className="flex items-center gap-3">
               <IconUser className="size-5 text-muted-foreground opacity-60" />
-              <div>
+              <div className="flex items-center gap-2">
                 <span className="text-sm font-medium">{m.username}</span>
-                <span className="ml-2 text-xs font-mono text-muted-foreground">{m.account_id}</span>
-                <span className="ml-2 text-xs text-muted-foreground">{m.role}</span>
+                <span className="text-xs font-mono bg-secondary px-1.5 py-0.5 rounded text-muted-foreground">{m.role}</span>
               </div>
             </div>
             {isOwner && ns.kind !== "personal" && m.account_id !== me?.id && (

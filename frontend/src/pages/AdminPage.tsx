@@ -26,7 +26,8 @@ import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import { IconBox, IconTrash, IconLoader2 } from "@tabler/icons-react";
-import { formatDataSize } from "@/lib/utils";
+import { formatDataSize, timeAgo } from "@/lib/utils";
+import { Skeleton } from "@/components/ui/skeleton";
 
 function resourcePercent(used: number, total: number): number {
   if (total === 0) return 0;
@@ -314,14 +315,6 @@ function imageStatusColor(status: string): string {
   }
 }
 
-function timeAgo(ts: number): string {
-  const diff = Math.max(0, Math.floor(Date.now() / 1000 - ts));
-  if (diff < 60) return `${diff}s ago`;
-  if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
-  if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
-  return `${Math.floor(diff / 86400)}d ago`;
-}
-
 function ImageRow({
   image,
   onDelete,
@@ -548,7 +541,11 @@ function ImagesPanel() {
         </div>
 
         {isLoading ? (
-          <p className="text-sm text-muted-foreground">loading...</p>
+          <div className="flex flex-col gap-2">
+            {Array.from({ length: 3 }).map((_, i) => (
+              <Skeleton key={i} className="h-[58px] rounded-lg" />
+            ))}
+          </div>
         ) : images.length === 0 ? (
           <div className="flex flex-col items-center gap-2 py-16 text-muted-foreground rounded-lg border">
             <IconBox className="size-8 opacity-30" />
@@ -615,8 +612,40 @@ export function AdminPage() {
     onError: (e) => toast.error(e.message),
   });
 
+  // Group hosts by region label; hosts without a region go under "".
+  const regionGroups = useMemo(() => {
+    const map = new Map<string, Host[]>();
+    for (const h of hosts ?? []) {
+      const r = h.labels["region"] ?? "";
+      map.set(r, [...(map.get(r) ?? []), h]);
+    }
+    // Sort: named regions first (alphabetically), then unregioned.
+    return [...map.entries()].sort(([a], [b]) => {
+      if (a === "") return 1;
+      if (b === "") return -1;
+      return a.localeCompare(b);
+    });
+  }, [hosts]);
+
   if (hostsLoading || vmsLoading) {
-    return <div className="p-6 text-muted-foreground text-sm">loading...</div>;
+    return (
+      <div className="p-6 flex flex-col gap-6">
+        <div className="flex items-start justify-between">
+          <Skeleton className="h-8 w-32" />
+          <div className="flex gap-6">
+            {Array.from({ length: 4 }).map((_, i) => (
+              <Skeleton key={i} className="h-8 w-16" />
+            ))}
+          </div>
+        </div>
+        <Skeleton className="h-8 w-48" />
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          {Array.from({ length: 4 }).map((_, i) => (
+            <Skeleton key={i} className="h-44 rounded-lg" />
+          ))}
+        </div>
+      </div>
+    );
   }
 
   if (hostsError) {
@@ -643,6 +672,8 @@ export function AdminPage() {
   const totalVms = vms?.length ?? 0;
   const totalDisk = vms?.reduce((s, v) => s + v.disk_usage_mb, 0) ?? 0;
   const activeHosts = hosts?.filter((h) => h.status === "active").length ?? 0;
+
+  const regionCount = regionGroups.filter(([r]) => r !== "").length;
 
   const tabClass = (t: AdminTab) =>
     `px-3 py-1.5 text-sm rounded-md transition-colors ${
@@ -748,6 +779,12 @@ export function AdminPage() {
           </div>
           {tab === "hosts" && (
             <div className="flex gap-6 text-right">
+              {regionCount > 0 && (
+                <div>
+                  <p className="text-sm font-medium">{regionCount}</p>
+                  <p className="text-xs text-muted-foreground">regions</p>
+                </div>
+              )}
               <div>
                 <p className="text-sm font-medium">
                   {activeHosts}/{hosts?.length ?? 0}
@@ -788,16 +825,74 @@ export function AdminPage() {
               </p>
             )}
 
-            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-              {hosts?.map((h) => (
-                <HostCard
-                  key={h.id}
-                  host={h}
-                  vms={vmsByHost.get(h.id) ?? []}
-                  hosts={hosts}
-                  onMigrateVm={setMigrateVm}
-                />
-              ))}
+            <div className="flex flex-col gap-8">
+              {regionGroups.map(([region, regionHosts]) => {
+                const regionVms = regionHosts.flatMap(
+                  (h) => vmsByHost.get(h.id) ?? [],
+                );
+                const regionActive = regionHosts.filter(
+                  (h) => h.status === "active",
+                ).length;
+                const regionVcpuTotal = regionHosts.reduce(
+                  (s, h) => s + h.vcpu_total,
+                  0,
+                );
+                const regionVcpuUsed = regionHosts.reduce(
+                  (s, h) => s + h.vcpu_used,
+                  0,
+                );
+                const regionMemTotal = regionHosts.reduce(
+                  (s, h) => s + h.mem_total_mb,
+                  0,
+                );
+                const regionMemUsed = regionHosts.reduce(
+                  (s, h) => s + h.mem_used_mb,
+                  0,
+                );
+                const regionDisk = regionVms.reduce(
+                  (s, v) => s + v.disk_usage_mb,
+                  0,
+                );
+
+                return (
+                  <div key={region} className="flex flex-col gap-3">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs font-mono font-medium text-muted-foreground tracking-wider">
+                          {region || "Default region"}
+                        </span>
+                        <span className="text-xs text-muted-foreground/60">
+                          {regionActive}/{regionHosts.length} hosts active ·{" "}
+                          {regionVms.length} vm
+                          {regionVms.length !== 1 ? "s" : ""}
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-4 text-xs text-muted-foreground/60">
+                        <span>
+                          {(regionVcpuUsed / 1000).toFixed(1)}/
+                          {(regionVcpuTotal / 1000).toFixed(1)}c
+                        </span>
+                        <span>
+                          {(regionMemUsed / 1024).toFixed(1)}/
+                          {(regionMemTotal / 1024).toFixed(1)}gb ram
+                        </span>
+                        <span>{(regionDisk / 1024).toFixed(1)}gb disk</span>
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      {regionHosts.map((h) => (
+                        <HostCard
+                          key={h.id}
+                          host={h}
+                          vms={vmsByHost.get(h.id) ?? []}
+                          hosts={hosts ?? []}
+                          onMigrateVm={setMigrateVm}
+                        />
+                      ))}
+                    </div>
+                  </div>
+                );
+              })}
             </div>
 
             <UnassignedVms

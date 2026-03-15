@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { listImages, type Image } from "@/api";
 import { IconBox } from "@tabler/icons-react";
 import { formatDataSize } from "@/lib/utils";
+import { Skeleton } from "@/components/ui/skeleton";
 
 function statusColor(status: string): string {
   switch (status) {
@@ -72,7 +73,13 @@ export function ImagesPage() {
   });
 
   if (isLoading) {
-    return <p className="text-muted-foreground text-sm">loading...</p>;
+    return (
+      <div className="flex flex-col gap-2">
+        {Array.from({ length: 3 }).map((_, i) => (
+          <Skeleton key={i} className="h-[72px] rounded-lg" />
+        ))}
+      </div>
+    );
   }
 
   if (error) {

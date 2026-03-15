@@ -57,6 +57,7 @@ export interface Vm {
   ip_address: string;
   exposed_port: number;
   created_at: number;
+  last_started_at: number | null;
   region: string | null;
 }
 
@@ -102,6 +103,7 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
 
 export interface ServerConfig {
   ssh_gateway_addr: string;
+  public_url: string;
 }
 
 export function getConfig(): Promise<ServerConfig> {
@@ -244,6 +246,10 @@ export function resizeVmResources(
     method: "POST",
     body: JSON.stringify({ vcpus, memory_mb }),
   });
+}
+
+export function patchVm(id: string, patch: { name?: string; exposed_port?: number }): Promise<Vm> {
+  return request(`/api/vms/${id}`, { method: "PATCH", body: JSON.stringify(patch) });
 }
 
 export function cloneVm(
@@ -471,6 +477,16 @@ export function addNamespaceMember(id: string, username: string, role: string): 
 
 export function removeNamespaceMember(id: string, account_id: string): Promise<void> {
   return request(`/api/namespaces/${id}/members/${account_id}`, { method: "DELETE" });
+}
+
+export interface NamespaceUsage {
+  used_vcpus: number;
+  used_mem_mb: number;
+  used_vms: number;
+}
+
+export function getNamespaceUsage(id: string): Promise<NamespaceUsage> {
+  return request(`/api/namespaces/${id}/usage`);
 }
 
 export { ApiError };

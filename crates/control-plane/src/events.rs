@@ -10,12 +10,31 @@ use tracing::{info, warn};
 use crate::caddy_router::CaddyRouter;
 
 #[derive(Clone, Debug, Serialize)]
-pub struct VmStatusEvent {
-    pub vm_id: String,
-    pub status: String,
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum AppEvent {
+    VmStatus {
+        vm_id: String,
+        status: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        last_started_at: Option<i64>,
+    },
+    SnapshotComplete {
+        vm_id: String,
+        snap_id: String,
+    },
 }
 
-pub type EventBroadcast = broadcast::Sender<VmStatusEvent>;
+impl AppEvent {
+    /// SSE event name used on the wire.
+    pub fn event_name(&self) -> &'static str {
+        match self {
+            AppEvent::VmStatus { .. } => "vm_status",
+            AppEvent::SnapshotComplete { .. } => "snapshot_complete",
+        }
+    }
+}
+
+pub type EventBroadcast = broadcast::Sender<AppEvent>;
 
 #[derive(Clone)]
 pub struct EventWatcher {
@@ -104,7 +123,7 @@ async fn connect_and_stream(
             .await
             .ok();
 
-        let new_status = match event.event.as_str() {
+        let app_event: Option<AppEvent> = match event.event.as_str() {
             "started" => {
                 if let Ok(Some(vm)) = db::get_vm(pool, vm_id).await {
                     db::set_vm_status(pool, vm_id, "running").await.ok();
@@ -115,31 +134,61 @@ async fn connect_and_stream(
                             vm.exposed_port as u16,
                         )
                         .await;
+                    Some(AppEvent::VmStatus {
+                        vm_id: vm_id.clone(),
+                        status: "running".into(),
+                        last_started_at: vm.last_started_at,
+                    })
+                } else {
+                    Some(AppEvent::VmStatus {
+                        vm_id: vm_id.clone(),
+                        status: "running".into(),
+                        last_started_at: None,
+                    })
                 }
-                Some("running")
             }
             "stopped" => {
                 if let Ok(Some(vm)) = db::get_vm(pool, vm_id).await {
                     db::set_vm_status(pool, vm_id, "stopped").await.ok();
                     caddy.broadcast_set_stopped_route(&vm.subdomain).await;
                 }
-                Some("stopped")
+                Some(AppEvent::VmStatus {
+                    vm_id: vm_id.clone(),
+                    status: "stopped".into(),
+                    last_started_at: None,
+                })
             }
             "crashed" => {
                 if let Ok(Some(vm)) = db::get_vm(pool, vm_id).await {
                     db::set_vm_status(pool, vm_id, "error").await.ok();
                     caddy.broadcast_set_stopped_route(&vm.subdomain).await;
                 }
-                Some("error")
+                Some(AppEvent::VmStatus {
+                    vm_id: vm_id.clone(),
+                    status: "error".into(),
+                    last_started_at: None,
+                })
+            }
+            "snapshot_taken" => {
+                // Snapshot is complete; VM should be running again.
+                db::set_vm_status(pool, vm_id, "running").await.ok();
+                let snap_id = event.detail.clone();
+                // Emit both a status update and a snapshot notification.
+                let _ = tx.send(AppEvent::VmStatus {
+                    vm_id: vm_id.clone(),
+                    status: "running".into(),
+                    last_started_at: None,
+                });
+                Some(AppEvent::SnapshotComplete {
+                    vm_id: vm_id.clone(),
+                    snap_id,
+                })
             }
             _ => None,
         };
 
-        if let Some(status) = new_status {
-            let _ = tx.send(VmStatusEvent {
-                vm_id: vm_id.clone(),
-                status: status.to_string(),
-            });
+        if let Some(ev) = app_event {
+            let _ = tx.send(ev);
         }
 
         info!("[{}] event: {} {}", host_id, event.event, vm_id);
@@ -147,4 +196,3 @@ async fn connect_and_stream(
 
     Ok(())
 }
-

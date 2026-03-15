@@ -7,6 +7,7 @@ import { listNamespaces, createNamespace, type Namespace, ApiError } from "@/api
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Skeleton } from "@/components/ui/skeleton";
 import {
   Dialog,
   DialogContent,
@@ -115,7 +116,14 @@ export function NamespacesPage() {
     queryFn: listNamespaces,
   });
 
-  if (isLoading) return <p className="text-muted-foreground text-sm">loading...</p>;
+  if (isLoading)
+    return (
+      <div className="flex flex-col gap-2">
+        {Array.from({ length: 3 }).map((_, i) => (
+          <Skeleton key={i} className="h-[68px] rounded-lg" />
+        ))}
+      </div>
+    );
   if (error) return <p className="text-destructive text-sm">failed to load namespaces</p>;
 
   const orgs = namespaces.filter((n) => n.kind !== "personal");

@@ -30,7 +30,7 @@ import { Copy, FileQuestion, MemoryStick, Pause, Play } from "lucide-react";
 import { Loader } from "@/components/ui/loader";
 import { Skeleton } from "@/components/ui/skeleton";
 import { IconAccessPoint, IconCpu } from "@tabler/icons-react";
-import { copyToClipboard, formatDataSize, timeAgo } from "@/lib/utils";
+import { copyToClipboard, formatDataSize, timeAgo, formatUptime } from "@/lib/utils";
 
 function CreateVmDialog({
   open,
@@ -155,6 +155,15 @@ function CreateVmDialog({
       });
   }
 
+  const TEMPLATES: Array<{ label: string; vcpus: number; memoryMb: number; port: number }> = [
+    { label: "tiny",     vcpus: 0.125, memoryMb: 128,  port: 8080 },
+    { label: "small",    vcpus: 0.5,   memoryMb: 256,  port: 8080 },
+    { label: "standard", vcpus: 1,     memoryMb: 512,  port: 8080 },
+    { label: "large",    vcpus: 2,     memoryMb: 1024, port: 8080 },
+    { label: "web",      vcpus: 1,     memoryMb: 512,  port: 80   },
+    { label: "jupyter",  vcpus: 2,     memoryMb: 2048, port: 8888 },
+  ];
+
   return (
     <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
       <DialogContent className="sm:max-w-md">
@@ -162,6 +171,30 @@ function CreateVmDialog({
           <DialogTitle>new vm</DialogTitle>
         </DialogHeader>
         <form id="create-vm-form" onSubmit={submit} className="space-y-4">
+          <div className="space-y-1.5">
+            <Label className="text-muted-foreground">template</Label>
+            <div className="flex flex-wrap gap-1.5">
+              {TEMPLATES.map((t) => (
+                <button
+                  key={t.label}
+                  type="button"
+                  onClick={() => {
+                    setVcpus(t.vcpus);
+                    setMemoryMb(t.memoryMb);
+                    setPort(t.port);
+                    setFieldErrors({});
+                  }}
+                  className={`px-2.5 py-1 rounded-md text-xs font-mono border transition-colors ${
+                    vcpus === t.vcpus && memoryMb === t.memoryMb && port === t.port
+                      ? "bg-primary text-primary-foreground border-primary"
+                      : "bg-background hover:bg-muted border-input"
+                  }`}
+                >
+                  {t.label}
+                </button>
+              ))}
+            </div>
+          </div>
           <div className="space-y-1.5">
             <Label htmlFor="vm-name">name</Label>
             <Input
@@ -305,33 +338,33 @@ function CreateVmDialog({
             )}
           </div>
           {activeRegions.length > 0 && (
-            <div>
-              <Label htmlFor="vm-region">region</Label>
+            <div className="space-y-1.5">
+              <Label>region</Label>
               {activeRegions.length === 1 ? (
                 <p className="text-sm py-1 text-muted-foreground font-mono">
                   {activeRegions[0].name}
                 </p>
               ) : (
-                <select
-                  id="vm-region"
-                  value={selectedRegion}
-                  onChange={(e) => {
-                    setRegion(e.target.value);
-                    if (fieldErrors.region)
-                      setFieldErrors((p) => ({ ...p, region: "" }));
-                  }}
-                  className={`w-full rounded-md border px-3 py-2 ${
-                    fieldErrors.region
-                      ? "border-destructive focus-visible:ring-destructive"
-                      : "border-input"
-                  }`}
-                >
+                <div className={`flex flex-wrap gap-1.5 ${fieldErrors.region ? "rounded-md outline outline-destructive p-1" : ""}`}>
                   {activeRegions.map((r) => (
-                    <option key={r.name} value={r.name}>
+                    <button
+                      key={r.name}
+                      type="button"
+                      onClick={() => {
+                        setRegion(r.name);
+                        if (fieldErrors.region)
+                          setFieldErrors((p) => ({ ...p, region: "" }));
+                      }}
+                      className={`px-2.5 py-1 rounded-md text-xs font-mono border transition-colors ${
+                        selectedRegion === r.name
+                          ? "bg-primary text-primary-foreground border-primary"
+                          : "bg-background hover:bg-muted border-input"
+                      }`}
+                    >
                       {r.name}
-                    </option>
+                    </button>
                   ))}
-                </select>
+                </div>
               )}
               {fieldErrors.region && (
                 <p className="text-xs text-destructive">{fieldErrors.region}</p>
@@ -552,11 +585,16 @@ function VmRow({ vm }: { vm: Vm }) {
             </span>
             <span className="flex items-center gap-1">
               <IconAccessPoint size={16} />
-              Port {vm.exposed_port}
+              :{vm.exposed_port}
             </span>
             {vm.region && (
               <span className="font-mono bg-secondary px-1.5 py-0.5 rounded">
                 {vm.region}
+              </span>
+            )}
+            {vm.status === "running" && vm.last_started_at && (
+              <span className="text-green-500/70" title="uptime">
+                ↑{formatUptime(vm.last_started_at)}
               </span>
             )}
           </div>

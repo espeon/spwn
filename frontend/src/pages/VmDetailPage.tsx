@@ -1,8 +1,9 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { useParams, useNavigate } from "@tanstack/react-router";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { trackVmToast } from "@/hooks/useVmEvents";
+import { addRecentVm } from "@/hooks/useRecentVms";
 import {
   getVm,
   getConfig,
@@ -11,6 +12,7 @@ import {
   snapshotVm,
   deleteVm,
   cloneVm,
+  patchVm,
   resizeVmResources,
   listSnapshots,
   deleteSnapshot,
@@ -25,6 +27,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Skeleton } from "@/components/ui/skeleton";
 import {
   Dialog,
   DialogContent,
@@ -33,7 +36,8 @@ import {
   DialogDescription,
   DialogFooter,
 } from "@/components/ui/dialog";
-import { Copy, Terminal } from "lucide-react";
+import { Copy, Terminal, Pencil, Check, X, ExternalLink } from "lucide-react";
+import { formatUptime, timeAgo } from "@/lib/utils";
 import { copyToClipboard } from "@/lib/utils";
 
 export function VmDetailPage() {
@@ -44,11 +48,17 @@ export function VmDetailPage() {
   const [consoleOpen, setConsoleOpen] = useState(false);
   const [copiedSubdomain, setCopiedSubdomain] = useState(false);
   const [copiedSsh, setCopiedSsh] = useState(false);
+  const [copiedUrl, setCopiedUrl] = useState(false);
   const [cloneOpen, setCloneOpen] = useState(false);
   const [cloneName, setCloneName] = useState("");
   const [cloneMemory, setCloneMemory] = useState(false);
   const [resizeOpen, setResizeOpen] = useState(false);
   const [resizeVcpus, setResizeVcpus] = useState("");
+  const [resizeMemory, setResizeMemory] = useState("");
+  const [portEditing, setPortEditing] = useState(false);
+  const [portValue, setPortValue] = useState("");
+  const [renaming, setRenaming] = useState(false);
+  const [renameName, setRenameName] = useState("");
 
   const { data: config } = useQuery({
     queryKey: ["config"],
@@ -64,6 +74,25 @@ export function VmDetailPage() {
     queryKey: ["vms", vmId],
     queryFn: () => getVm(vmId),
   });
+
+  useEffect(() => {
+    if (vm) {
+      addRecentVm({
+        id: vm.id,
+        name: vm.name,
+        status: vm.status,
+        subdomain: vm.subdomain,
+      });
+    }
+  }, [vm?.id]);
+
+  useEffect(() => {
+    const prev = document.title;
+    document.title = vm ? `${vm.name} — spwn` : "spwn";
+    return () => {
+      document.title = prev;
+    };
+  }, [vm?.name]);
 
   const { data: snapshots, isLoading: snapshotsLoading } = useQuery({
     queryKey: ["snapshots", vmId],
@@ -130,7 +159,8 @@ export function VmDetailPage() {
       const vcpus = resizeVcpus
         ? Math.round(parseFloat(resizeVcpus) * 1000)
         : undefined;
-      return resizeVmResources(vmId, vcpus, undefined);
+      const memory_mb = resizeMemory ? parseInt(resizeMemory, 10) : undefined;
+      return resizeVmResources(vmId, vcpus, memory_mb);
     },
     onSuccess: () => {
       invalidate();
@@ -138,6 +168,42 @@ export function VmDetailPage() {
       toast.success("resources updated");
     },
     onError: (err) => toast.error(`resize failed: ${err.message}`),
+  });
+
+  const patchPortMutation = useMutation({
+    mutationFn: (port: number) => patchVm(vmId, { exposed_port: port }),
+    onSuccess: (updated) => {
+      qc.setQueryData(["vms", vmId], updated);
+      qc.setQueriesData<{ id: string; exposed_port: number }[]>(
+        { queryKey: ["vms"] },
+        (old) => {
+          if (!Array.isArray(old)) return old;
+          return old.map((v) =>
+            v.id === vmId ? { ...v, exposed_port: updated.exposed_port } : v,
+          );
+        },
+      );
+      setPortEditing(false);
+    },
+    onError: (err) => toast.error(`port update failed: ${err.message}`),
+  });
+
+  const renameMutation = useMutation({
+    mutationFn: (name: string) => patchVm(vmId, { name }),
+    onSuccess: (updated) => {
+      qc.setQueryData(["vms", vmId], updated);
+      qc.setQueriesData<{ id: string; name: string }[]>(
+        { queryKey: ["vms"] },
+        (old) => {
+          if (!Array.isArray(old)) return old;
+          return old.map((v) =>
+            v.id === vmId ? { ...v, name: updated.name } : v,
+          );
+        },
+      );
+      setRenaming(false);
+    },
+    onError: (err) => toast.error(`rename failed: ${err.message}`),
   });
 
   const deleteSnapMutation = useMutation({
@@ -160,7 +226,30 @@ export function VmDetailPage() {
   });
 
   if (isLoading)
-    return <p className="text-muted-foreground text-sm">loading...</p>;
+    return (
+      <div className="space-y-6">
+        <div className="flex items-start justify-between">
+          <div className="space-y-2">
+            <div className="flex items-center gap-3">
+              <Skeleton className="h-7 w-40" />
+              <Skeleton className="h-5 w-16 rounded-full" />
+            </div>
+            <Skeleton className="h-4 w-56" />
+          </div>
+        </div>
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+          {Array.from({ length: 4 }).map((_, i) => (
+            <Skeleton key={i} className="h-[62px] rounded-lg" />
+          ))}
+        </div>
+        <Skeleton className="h-10 w-full rounded-md" />
+        <div className="flex gap-3">
+          {Array.from({ length: 5 }).map((_, i) => (
+            <Skeleton key={i} className="h-9 w-20 rounded-md" />
+          ))}
+        </div>
+      </div>
+    );
 
   if (error) {
     const status = error instanceof ApiError ? error.status : null;
@@ -201,6 +290,7 @@ export function VmDetailPage() {
   function openResize() {
     if (!vm) return console.error("VM not found");
     setResizeVcpus(String(vm.vcpus / 1000));
+    setResizeMemory(String(vm.memory_mb));
     setResizeOpen(true);
   }
 
@@ -273,21 +363,36 @@ export function VmDetailPage() {
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4 py-2">
-            <div className="space-y-1.5">
-              <Label htmlFor="resize-vcpus">vcpus</Label>
-              <Input
-                id="resize-vcpus"
-                type="number"
-                min="0.1"
-                step="0.1"
-                value={resizeVcpus}
-                onChange={(e) => setResizeVcpus(e.target.value)}
-                placeholder="1"
-                autoFocus
-              />
-              <p className="text-xs text-muted-foreground">
-                e.g. 0.5, 1, 2 — fractional vCPUs allowed
-              </p>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <Label htmlFor="resize-vcpus">vcpus</Label>
+                <Input
+                  id="resize-vcpus"
+                  type="number"
+                  min="0.1"
+                  step="0.1"
+                  value={resizeVcpus}
+                  onChange={(e) => setResizeVcpus(e.target.value)}
+                  placeholder="1"
+                  autoFocus
+                />
+                <p className="text-xs text-muted-foreground">fractional ok</p>
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="resize-memory">memory (mb)</Label>
+                <Input
+                  id="resize-memory"
+                  type="number"
+                  min="128"
+                  step="128"
+                  value={resizeMemory}
+                  onChange={(e) => setResizeMemory(e.target.value)}
+                  placeholder="512"
+                />
+                <p className="text-xs text-muted-foreground">
+                  multiples of 128
+                </p>
+              </div>
             </div>
           </div>
           <DialogFooter>
@@ -300,7 +405,9 @@ export function VmDetailPage() {
             </Button>
             <Button
               onClick={() => resizeMutation.mutate()}
-              disabled={!resizeVcpus || resizeMutation.isPending}
+              disabled={
+                (!resizeVcpus && !resizeMemory) || resizeMutation.isPending
+              }
             >
               {resizeMutation.isPending ? "resizing..." : "apply"}
             </Button>
@@ -311,7 +418,55 @@ export function VmDetailPage() {
       <div className="flex items-start justify-between mb-6">
         <div>
           <div className="flex items-center gap-3 mb-1">
-            <h1 className="text-xl font-semibold">{vm.name}</h1>
+            {renaming ? (
+              <form
+                className="flex items-center gap-1"
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  const trimmed = renameName.trim();
+                  if (trimmed && trimmed !== vm.name)
+                    renameMutation.mutate(trimmed);
+                  else setRenaming(false);
+                }}
+              >
+                <Input
+                  autoFocus
+                  className="h-7 text-xl font-semibold px-1 w-48"
+                  value={renameName}
+                  onChange={(e) => setRenameName(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Escape") setRenaming(false);
+                  }}
+                  disabled={renameMutation.isPending}
+                />
+                <button
+                  type="submit"
+                  className="p-1 hover:text-green-500 transition-colors"
+                  disabled={renameMutation.isPending}
+                >
+                  <Check className="size-3.5" />
+                </button>
+                <button
+                  type="button"
+                  className="p-1 hover:text-destructive transition-colors"
+                  onClick={() => setRenaming(false)}
+                >
+                  <X className="size-3.5" />
+                </button>
+              </form>
+            ) : (
+              <button
+                className="group flex items-center gap-1.5"
+                onClick={() => {
+                  setRenameName(vm.name);
+                  setRenaming(true);
+                }}
+                title="rename vm"
+              >
+                <h1 className="text-xl font-semibold">{vm.name}</h1>
+                <Pencil className="size-3.5 opacity-0 group-hover:opacity-40 transition-opacity text-muted-foreground" />
+              </button>
+            )}
             <StatusBadge status={vm.status} />
           </div>
           <button
@@ -326,7 +481,9 @@ export function VmDetailPage() {
             title="copy subdomain"
           >
             {vm.subdomain}
-            <Copy className={`h-3.5 w-3.5 shrink-0 transition-opacity ${copiedSubdomain ? "opacity-100 text-green-500" : "opacity-0 group-hover:opacity-60"}`} />
+            <Copy
+              className={`h-3.5 w-3.5 shrink-0 transition-opacity ${copiedSubdomain ? "opacity-100 text-green-500" : "opacity-0 group-hover:opacity-60"}`}
+            />
           </button>
         </div>
         <Button
@@ -340,22 +497,79 @@ export function VmDetailPage() {
         </Button>
       </div>
 
-      <div className="grid grid-cols-2 gap-3 mb-6 sm:grid-cols-4">
+      <div className="grid grid-cols-2 gap-3 mb-6 sm:grid-cols-3 lg:grid-cols-6">
         {(
           [
-            ["vcpus", vm.vcpus / 1000],
+            ["vcpus", String(vm.vcpus / 1000)],
             ["memory", `${vm.memory_mb} mb`],
             ["ip", vm.ip_address],
-            ["port", vm.exposed_port],
+            ["image", vm.image],
+            ["region", vm.region ?? "—"],
           ] as const
         ).map(([label, value]) => (
           <Card key={label}>
             <CardContent className="px-4 py-3">
               <p className="text-xs text-muted-foreground mb-1">{label}</p>
-              <p className="font-mono text-sm">{value}</p>
+              <p className="font-mono text-sm truncate" title={value}>
+                {value}
+              </p>
             </CardContent>
           </Card>
         ))}
+        <Card className="group">
+          <CardContent className="px-4 py-3">
+            <p className="text-xs text-muted-foreground mb-1">port</p>
+            {portEditing ? (
+              <form
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  const p = parseInt(portValue, 10);
+                  if (p >= 1 && p <= 65535 && p !== vm.exposed_port)
+                    patchPortMutation.mutate(p);
+                  else setPortEditing(false);
+                }}
+              >
+                <Input
+                  autoFocus
+                  type="number"
+                  min={1}
+                  max={65535}
+                  className="h-6 text-sm font-mono px-1 w-full"
+                  value={portValue}
+                  onChange={(e) => setPortValue(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Escape") setPortEditing(false);
+                  }}
+                  onBlur={() => setPortEditing(false)}
+                  disabled={patchPortMutation.isPending}
+                />
+              </form>
+            ) : (
+              <button
+                className="flex items-center gap-1 w-full group/port"
+                onClick={() => {
+                  setPortValue(String(vm.exposed_port));
+                  setPortEditing(true);
+                }}
+                title="edit exposed port"
+              >
+                <span className="font-mono text-sm truncate">
+                  {vm.exposed_port}
+                </span>
+                <Pencil className="size-3 shrink-0 opacity-0 group-hover/port:opacity-40 transition-opacity text-muted-foreground" />
+              </button>
+            )}
+          </CardContent>
+        </Card>
+      </div>
+
+      <div className="flex gap-4 text-xs text-muted-foreground mb-6">
+        <span>created {timeAgo(vm.created_at)}</span>
+        {vm.status === "running" && vm.last_started_at && (
+          <span className="text-green-500/70">
+            up {formatUptime(vm.last_started_at)}
+          </span>
+        )}
       </div>
 
       <Dialog open={confirmDelete} onOpenChange={setConfirmDelete}>
@@ -391,27 +605,59 @@ export function VmDetailPage() {
         </DialogContent>
       </Dialog>
 
-      {config && (() => {
-        const [gwHost, gwPort] = config.ssh_gateway_addr.split(":");
-        const sshCmd = `ssh ${vm.id}@${gwHost} -p ${gwPort ?? "22"}`;
-        return (
-          <button
-            className="group flex items-center gap-2 w-full rounded-md border bg-muted/40 px-4 py-2.5 text-xs font-mono text-muted-foreground hover:text-foreground hover:bg-muted transition-colors mb-6"
-            onClick={async () => {
-              const ok = await copyToClipboard(sshCmd);
-              if (ok) {
-                setCopiedSsh(true);
-                setTimeout(() => setCopiedSsh(false), 1500);
-              }
-            }}
-            title="copy ssh command"
-          >
-            <Terminal className="h-3.5 w-3.5 shrink-0 opacity-60" />
-            <span className="flex-1 text-left">{sshCmd}</span>
-            <Copy className={`h-3.5 w-3.5 shrink-0 transition-opacity ${copiedSsh ? "opacity-100 text-green-500" : "opacity-0 group-hover:opacity-60"}`} />
-          </button>
-        );
-      })()}
+      {config &&
+        (() => {
+          const [gwHost, gwPort] = config.ssh_gateway_addr.split(":");
+          const sshCmd = `ssh ${vm.id}@${gwHost} -p ${gwPort ?? "22"}`;
+          // const publicUrl = `${config.public_url.replace(/\/$/, "")}`;
+          const vmUrl = `https://${vm.subdomain}`;
+          return (
+            <div className="flex flex-col gap-2 mb-6">
+              <button
+                className="group flex items-center gap-2 w-full rounded-md border bg-muted/40 px-4 py-2.5 text-xs font-mono text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+                onClick={async () => {
+                  const ok = await copyToClipboard(sshCmd);
+                  if (ok) {
+                    setCopiedSsh(true);
+                    setTimeout(() => setCopiedSsh(false), 1500);
+                  }
+                }}
+                title="copy ssh command"
+              >
+                <Terminal className="h-3.5 w-3.5 shrink-0 opacity-60" />
+                <span className="flex-1 text-left">{sshCmd}</span>
+                <Copy
+                  className={`h-3.5 w-3.5 shrink-0 transition-opacity ${copiedSsh ? "opacity-100 text-green-500" : "opacity-0 group-hover:opacity-60"}`}
+                />
+              </button>
+              <div className="group flex items-center gap-2 w-full rounded-md border bg-muted/40 px-4 py-2.5 text-xs font-mono text-muted-foreground">
+                <ExternalLink className="h-3.5 w-3.5 shrink-0 opacity-60" />
+                <a
+                  href={vmUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex-1 text-left hover:text-foreground transition-colors truncate"
+                >
+                  {vmUrl}
+                </a>
+                <button
+                  onClick={async () => {
+                    const ok = await copyToClipboard(vmUrl);
+                    if (ok) {
+                      setCopiedUrl(true);
+                      setTimeout(() => setCopiedUrl(false), 1500);
+                    }
+                  }}
+                  title="copy url"
+                >
+                  <Copy
+                    className={`h-3.5 w-3.5 shrink-0 transition-opacity ${copiedUrl ? "opacity-100 text-green-500" : "opacity-0 group-hover:opacity-60"}`}
+                  />
+                </button>
+              </div>
+            </div>
+          );
+        })()}
 
       <div className="flex gap-3">
         <Button
