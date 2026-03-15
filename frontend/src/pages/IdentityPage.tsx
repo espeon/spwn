@@ -61,7 +61,7 @@ function QuotaBar({
 export function IdentityPage() {
   const qc = useQueryClient();
   const { data: me } = useQuery({ queryKey: ["me"], queryFn: getMe });
-  const { data: vms } = useQuery({ queryKey: ["vms"], queryFn: listVms });
+  const { data: vms } = useQuery({ queryKey: ["vms"], queryFn: () => listVms() });
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -73,6 +73,9 @@ export function IdentityPage() {
   const [usernameConfirm, setUsernameConfirm] = useState("");
   const [usernameError, setUsernameError] = useState<string | null>(null);
 
+  const [dotfilesDialogOpen, setDotfilesDialogOpen] = useState(false);
+  const [dotfilesRepo, setDotfilesRepo] = useState("");
+
   const activeVms =
     vms?.filter((v) => v.status === "running" || v.status === "starting") ?? [];
   const usedVcpus = activeVms.reduce((s, v) => s + v.vcpus, 0);
@@ -83,6 +86,18 @@ export function IdentityPage() {
     onSuccess: async () => {
       await qc.invalidateQueries({ queryKey: ["me"] });
       setDisplayNameDialogOpen(false);
+    },
+  });
+
+  const dotfilesMutation = useMutation({
+    mutationFn: () =>
+      updateProfile({
+        display_name: me?.display_name ?? null,
+        dotfiles_repo: dotfilesRepo || null,
+      }),
+    onSuccess: async () => {
+      await qc.invalidateQueries({ queryKey: ["me"] });
+      setDotfilesDialogOpen(false);
     },
   });
 
@@ -107,6 +122,11 @@ export function IdentityPage() {
   function openDisplayNameDialog() {
     setDisplayName(me?.display_name ?? "");
     setDisplayNameDialogOpen(true);
+  }
+
+  function openDotfilesDialog() {
+    setDotfilesRepo(me?.dotfiles_repo ?? "");
+    setDotfilesDialogOpen(true);
   }
 
   function openUsernameDialog() {
@@ -268,12 +288,57 @@ export function IdentityPage() {
         </DialogContent>
       </Dialog>
 
+      <Dialog open={dotfilesDialogOpen} onOpenChange={setDotfilesDialogOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>dotfiles repository</DialogTitle>
+            <DialogDescription>
+              git URL cloned to /root/.dotfiles on first VM boot. if an
+              install.sh exists it will be run automatically.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-2">
+            <div className="space-y-1.5">
+              <Label htmlFor="dotfiles-repo-input">repository URL</Label>
+              <Input
+                id="dotfiles-repo-input"
+                value={dotfilesRepo}
+                onChange={(e) => setDotfilesRepo(e.target.value)}
+                placeholder="https://github.com/you/dotfiles"
+                autoFocus
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button
+              variant="ghost"
+              onClick={() => setDotfilesDialogOpen(false)}
+              disabled={dotfilesMutation.isPending}
+            >
+              cancel
+            </Button>
+            <Button
+              onClick={() =>
+                toast.promise(dotfilesMutation.mutateAsync(), {
+                  loading: "saving...",
+                  success: "dotfiles repo updated",
+                  error: "failed to update dotfiles repo",
+                })
+              }
+              disabled={dotfilesMutation.isPending}
+            >
+              {dotfilesMutation.isPending ? "saving..." : "save"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       <div className="space-y-5 mt-0.5">
         <h2 className="text-2xl font-semibold">identity</h2>
         <div className="rounded-lg border bg-card">
           <div className="flex items-center gap-4 p-4">
             <div className="relative group shrink-0">
-              <div className="w-12 h-12 rounded-full overflow-hidden bg-secondary flex items-center justify-center">
+              <div className="w-18 h-18 rounded-full overflow-hidden bg-secondary flex items-center justify-center">
                 {me?.has_avatar ? (
                   <img
                     src={avatarUrl(me.id)}
@@ -303,13 +368,13 @@ export function IdentityPage() {
             </div>
 
             <div className="min-w-0">
-              <p className="text-sm font-medium leading-tight">
+              <p className="text-base font-medium leading-tight">
                 {me?.display_name || me?.username}
               </p>
-              <p className="text-xs text-muted-foreground font-mono">
+              <p className="text-sm text-muted-foreground font-mono">
                 @{me?.username}
               </p>
-              <p className="text-xs text-muted-foreground mt-0.5">
+              <p className="text-sm text-muted-foreground mt-0.5">
                 {me?.email}
               </p>
             </div>
@@ -320,15 +385,15 @@ export function IdentityPage() {
           <div className="divide-y divide-border">
             <div className="flex items-center justify-between px-4 py-3">
               <div>
-                <p className="text-xs font-medium">display name</p>
-                <p className="text-xs text-muted-foreground">
+                <p className="text-sm font-medium">display name</p>
+                <p className="text text-muted-foreground">
                   {me?.display_name || <span className="italic">not set</span>}
                 </p>
               </div>
               <Button
                 variant="ghost"
                 size="sm"
-                className="h-7 text-xs px-2"
+                className="h-7 text-sm px-2"
                 onClick={openDisplayNameDialog}
               >
                 change
@@ -337,45 +402,63 @@ export function IdentityPage() {
 
             <div className="flex items-center justify-between px-4 py-3">
               <div>
-                <p className="text-xs font-medium">username</p>
-                <p className="text-xs text-muted-foreground font-mono">
+                <p className="text-sm font-medium">username</p>
+                <p className="text text-muted-foreground font-mono">
                   @{me?.username}
                 </p>
               </div>
               <Button
                 variant="ghost"
                 size="sm"
-                className="h-7 text-xs px-2"
+                className="h-7 text-sm px-2"
                 onClick={openUsernameDialog}
+              >
+                change
+              </Button>
+            </div>
+
+            <div className="flex items-center justify-between px-4 py-3">
+              <div className="min-w-0 flex-1">
+                <p className="text-sm font-medium">dotfiles repo</p>
+                <p className="text text-muted-foreground font-mono truncate">
+                  {me?.dotfiles_repo || (
+                    <span className="italic">not set</span>
+                  )}
+                </p>
+              </div>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-7 text-sm px-2 ml-2 shrink-0"
+                onClick={openDotfilesDialog}
               >
                 change
               </Button>
             </div>
           </div>
         </div>
-
-        <div className="rounded-lg border bg-card p-4 space-y-4">
-          <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
-            quota
-          </p>
-          <QuotaBar
-            used={activeVms.length}
-            limit={me?.vm_limit ?? 0}
-            label="vms"
-          />
-          <QuotaBar
-            used={usedVcpus / 1000}
-            limit={(me?.vcpu_limit ?? 0) / 1000}
-            limitLabel={`${(me?.vcpu_limit ?? 0) / 1000} vCPU${(me?.vcpu_limit ?? 0) / 1000 !== 1 ? "s" : ""}`}
-            label="vcpus"
-          />
-          <QuotaBar
-            used={usedMem}
-            usedLabel={formatDataSize(usedMem * 1024 * 1024)}
-            limit={me?.mem_limit_mb ?? 0}
-            limitLabel={formatDataSize((me?.mem_limit_mb ?? 0) * 1024 * 1024)}
-            label="memory"
-          />
+        <div>
+          <p className="text-lg font-medium mb-4">quota</p>
+          <div className="rounded-lg border bg-card p-4 space-y-4">
+            <QuotaBar
+              used={activeVms.length}
+              limit={me?.vm_limit ?? 0}
+              label="vms"
+            />
+            <QuotaBar
+              used={usedVcpus / 1000}
+              limit={(me?.vcpu_limit ?? 0) / 1000}
+              limitLabel={`${(me?.vcpu_limit ?? 0) / 1000} vCPU${(me?.vcpu_limit ?? 0) / 1000 !== 1 ? "s" : ""}`}
+              label="vcpus"
+            />
+            <QuotaBar
+              used={usedMem}
+              usedLabel={formatDataSize(usedMem * 1024 * 1024)}
+              limit={me?.mem_limit_mb ?? 0}
+              limitLabel={formatDataSize((me?.mem_limit_mb ?? 0) * 1024 * 1024)}
+              label="memory"
+            />
+          </div>
         </div>
       </div>
     </>

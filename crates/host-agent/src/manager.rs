@@ -29,6 +29,70 @@ use tracing::{error, info, warn};
 
 use crate::overlay;
 
+fn dotfiles_service(repo: &str) -> String {
+    format!(
+        "[Unit]\n\
+         Description=Clone dotfiles repository\n\
+         ConditionPathExists=!/root/.dotfiles\n\
+         After=network-online.target\n\
+         Wants=network-online.target\n\
+         \n\
+         [Service]\n\
+         Type=oneshot\n\
+         RemainAfterExit=yes\n\
+         ExecStart=/usr/bin/git clone --depth 1 {repo} /root/.dotfiles\n\
+         ExecStartPost=/bin/sh -c 'cd /root/.dotfiles && [ -f install.sh ] && bash install.sh || true'\n\
+         \n\
+         [Install]\n\
+         WantedBy=multi-user.target\n"
+    )
+}
+
+fn inject_dotfiles_into_overlay(overlay_path: &str, repo: &str) -> anyhow::Result<()> {
+    use std::process::Command;
+
+    let mnt = tempfile::tempdir().context("create temp mount dir")?;
+    let mnt_path = mnt.path();
+
+    let mount_status = Command::new("mount")
+        .args(["-o", "loop", overlay_path, &mnt_path.to_string_lossy()])
+        .status()
+        .context("mount overlay ext4")?;
+    if !mount_status.success() {
+        anyhow::bail!("mount overlay failed for {overlay_path}");
+    }
+
+    let result = (|| -> anyhow::Result<()> {
+        let systemd_dir = mnt_path.join("upper/etc/systemd/system");
+        std::fs::create_dir_all(&systemd_dir).context("create systemd dir in overlay")?;
+
+        let service_path = systemd_dir.join("dotfiles-init.service");
+        std::fs::write(&service_path, dotfiles_service(repo))
+            .context("write dotfiles-init.service")?;
+
+        let wants_dir = systemd_dir.join("multi-user.target.wants");
+        std::fs::create_dir_all(&wants_dir).context("create wants dir in overlay")?;
+
+        let symlink_path = wants_dir.join("dotfiles-init.service");
+        if !symlink_path.exists() {
+            std::os::unix::fs::symlink("../dotfiles-init.service", &symlink_path)
+                .context("symlink dotfiles-init.service into wants")?;
+        }
+
+        Ok(())
+    })();
+
+    let umount_status = Command::new("umount")
+        .arg(&mnt_path.to_string_lossy().as_ref())
+        .status()
+        .context("umount overlay")?;
+    if !umount_status.success() {
+        warn!("umount overlay failed for {overlay_path}");
+    }
+
+    result
+}
+
 pub type RunningVm =
     Vm<JailedVmmExecutor<FlatVirtualPathResolver>, DirectProcessSpawner, TokioRuntime>;
 
@@ -123,6 +187,7 @@ impl VmManager {
         bandwidth_mbps: i32,
         exposed_port: i32,
         ip_address: &str,
+        namespace_id: &str,
     ) -> anyhow::Result<()> {
         let rootfs_path = self.images_dir.join(format!("{image}.sqfs"));
         if !rootfs_path.exists() {
@@ -161,6 +226,7 @@ impl VmManager {
                 placement_strategy: "best_fit".into(),
                 required_labels: None,
                 region: None,
+                namespace_id: namespace_id.to_string(),
             },
         )
         .await?;
@@ -206,6 +272,14 @@ impl VmManager {
         if !overlay_p.exists() {
             overlay::provision_overlay(overlay_p, vm.disk_mb as u64)
                 .with_context(|| format!("provision overlay for vm {vm_id}"))?;
+        }
+
+        if let Ok(Some(account)) = db::get_account(&self.pool, &vm.account_id).await {
+            if let Some(repo) = account.dotfiles_repo.filter(|r| !r.is_empty()) {
+                if let Err(e) = inject_dotfiles_into_overlay(overlay_path, &repo) {
+                    warn!("dotfiles injection failed for vm {vm_id}: {e:#}");
+                }
+            }
         }
 
         let slot = ip_to_slot(&vm.ip_address)?;
@@ -260,11 +334,24 @@ impl VmManager {
 
         let overlay_init_path = read_overlay_init_path(&self.images_dir, &vm.base_image);
         let mut boot_args = format!(
-            "console=ttyS0 reboot=k panic=1 pci=off {} init={overlay_init_path} overlay_root=vdb",
+            "console=ttyS0 reboot=k panic=1 pci=off selinux=0 {} init={overlay_init_path} overlay_root=vdb",
             networking::ip::kernel_boot_args(slot)
         );
         if vm.real_init != "/sbin/init" {
             boot_args.push_str(&format!(" real_init={}", vm.real_init));
+        }
+        let hostname: String = vm
+            .name
+            .chars()
+            .map(|c| if c.is_ascii_alphanumeric() || c == '-' { c } else { '-' })
+            .collect::<String>()
+            .trim_matches('-')
+            .to_lowercase()
+            .chars()
+            .take(63)
+            .collect();
+        if !hostname.is_empty() {
+            boot_args.push_str(&format!(" hostname={hostname}"));
         }
 
         let config = VmConfiguration::New {
@@ -453,8 +540,11 @@ impl VmManager {
         let vm = db::get_vm(&self.pool, vm_id)
             .await?
             .ok_or_else(|| anyhow!("vm not found: {vm_id}"))?;
-        if vm.status != "stopped" {
-            return Err(anyhow!("vm must be stopped before deletion"));
+        if !matches!(vm.status.as_str(), "stopped" | "error" | "crashed") {
+            return Err(anyhow!(
+                "vm must be stopped before deletion (current status: {})",
+                vm.status
+            ));
         }
         let snaps = db::list_snapshots(&self.pool, vm_id).await?;
         for snap in snaps {
@@ -877,6 +967,7 @@ impl VmManager {
                 placement_strategy: source.placement_strategy.clone(),
                 required_labels: source.required_labels.clone(),
                 region: source.region.clone(),
+                namespace_id: source.namespace_id.clone(),
             },
         )
         .await?;
@@ -943,6 +1034,7 @@ impl VmManager {
         exposed_port: i32,
         image: &str,
         agent_secret: &str,
+        namespace_id: &str,
     ) -> anyhow::Result<()> {
         let rootfs_path = self.images_dir.join(format!("{image}.sqfs"));
         if !rootfs_path.exists() {
@@ -985,6 +1077,7 @@ impl VmManager {
                 placement_strategy: "best_fit".into(),
                 required_labels: None,
                 region: None,
+                namespace_id: namespace_id.to_string(),
             },
         )
         .await?;

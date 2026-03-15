@@ -42,6 +42,17 @@ pub fn setup(external_iface: &str) -> Result<()> {
         ipt(&["-A", "INPUT", "-s", "172.16.0.0/16", "-p", "tcp", "--dport", port, "-j", "DROP"])?;
     }
 
+    // limit concurrent TCP connections per VM IP (flood/DoS protection)
+    ipt(&[
+        "-A", "FORWARD",
+        "-i", "fc-tap-+",
+        "-p", "tcp",
+        "-m", "connlimit",
+        "--connlimit-above", "512",
+        "--connlimit-mask", "32",
+        "-j", "DROP",
+    ])?;
+
     Ok(())
 }
 

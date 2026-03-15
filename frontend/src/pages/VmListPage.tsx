@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { Link } from "@tanstack/react-router";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -14,6 +14,7 @@ import {
   type RegionInfo,
   type Vm,
 } from "@/api";
+import { useActiveNamespace } from "@/hooks/useActiveNamespace";
 import { StatusBadge } from "@/components/StatusBadge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -25,17 +26,20 @@ import {
   DialogTitle,
   DialogFooter,
 } from "@/components/ui/dialog";
-import { FileQuestion, MemoryStick, Pause, Play } from "lucide-react";
+import { Copy, FileQuestion, MemoryStick, Pause, Play } from "lucide-react";
 import { Loader } from "@/components/ui/loader";
+import { Skeleton } from "@/components/ui/skeleton";
 import { IconAccessPoint, IconCpu } from "@tabler/icons-react";
-import { formatDataSize } from "@/lib/utils";
+import { copyToClipboard, formatDataSize, timeAgo } from "@/lib/utils";
 
 function CreateVmDialog({
   open,
   onClose,
+  namespaceId,
 }: {
   open: boolean;
   onClose: () => void;
+  namespaceId?: string;
 }) {
   const qc = useQueryClient();
   const [name, setName] = useState("");
@@ -132,6 +136,7 @@ function CreateVmDialog({
       memory_mb: memoryMb,
       exposed_port: port,
       ...(selectedRegion ? { region: selectedRegion } : {}),
+      ...(namespaceId ? { namespace_id: namespaceId } : {}),
     };
     const toastId = toast.loading("creating vm...");
     mutation
@@ -356,25 +361,72 @@ function CreateVmDialog({
 
 export function VmListPage() {
   const [showCreate, setShowCreate] = useState(false);
+  const [search, setSearch] = useState("");
+  const { activeNamespace } = useActiveNamespace();
   const {
     data: vms,
     isLoading,
     error,
-  } = useQuery({ queryKey: ["vms"], queryFn: listVms });
+  } = useQuery({
+    queryKey: ["vms", activeNamespace?.id],
+    queryFn: () => listVms(activeNamespace?.id),
+    refetchInterval: 10_000,
+  });
+
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (e.key !== "n" || e.metaKey || e.ctrlKey) return;
+      const target = e.target as HTMLElement;
+      if (
+        target.tagName === "INPUT" ||
+        target.tagName === "TEXTAREA" ||
+        target.tagName === "SELECT" ||
+        target.isContentEditable
+      ) return;
+      setShowCreate(true);
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
+  const filtered = vms?.filter((vm) =>
+    vm.name.toLowerCase().includes(search.toLowerCase()),
+  );
 
   if (isLoading)
-    return <p className="text-muted-foreground text-sm">loading...</p>;
+    return (
+      <div className="flex flex-col gap-2">
+        {Array.from({ length: 3 }).map((_, i) => (
+          <Skeleton key={i} className="h-[74px] w-full rounded-lg" />
+        ))}
+      </div>
+    );
   if (error)
     return <p className="text-destructive text-sm">failed to load vms</p>;
 
   return (
     <>
-      <div className="flex items-center justify-between mb-6">
-        <h1 className="text-xl font-semibold">virtual machines</h1>
+      <div className="flex items-center justify-between mb-4">
+        <div className="flex items-baseline gap-2">
+          <h1 className="text-xl font-semibold">virtual machines</h1>
+          {vms && vms.length > 0 && (
+            <span className="text-sm text-muted-foreground">{vms.length}</span>
+          )}
+        </div>
         <Button size="sm" onClick={() => setShowCreate(true)}>
           new vm
+          <kbd className="ml-1.5 hidden sm:inline-flex h-5 items-center rounded border border-primary-foreground/30 px-1 font-mono text-[10px] opacity-60">n</kbd>
         </Button>
       </div>
+
+      {vms && vms.length > 0 && (
+        <Input
+          placeholder="filter..."
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          className="mb-4 h-8 text-sm"
+        />
+      )}
 
       {vms && vms.length === 0 ? (
         <div className="text-center py-24 text-muted-foreground">
@@ -386,15 +438,21 @@ export function VmListPage() {
             create your first vm
           </button>
         </div>
+      ) : filtered && filtered.length === 0 ? (
+        <p className="text-sm text-muted-foreground py-8 text-center">no results for "{search}"</p>
       ) : (
         <div className="flex flex-col gap-2">
-          {vms?.map((vm) => (
+          {filtered?.map((vm) => (
             <VmRow key={vm.id} vm={vm} />
           ))}
         </div>
       )}
 
-      <CreateVmDialog open={showCreate} onClose={() => setShowCreate(false)} />
+      <CreateVmDialog
+        open={showCreate}
+        onClose={() => setShowCreate(false)}
+        namespaceId={activeNamespace?.id}
+      />
     </>
   );
 }
@@ -402,6 +460,8 @@ export function VmListPage() {
 function VmRow({ vm }: { vm: Vm }) {
   const qc = useQueryClient();
   const [localPending, setLocalPending] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const age = useMemo(() => timeAgo(vm.created_at), [vm.created_at]);
 
   const invalidate = () => qc.invalidateQueries({ queryKey: ["vms"] });
 
@@ -503,6 +563,22 @@ function VmRow({ vm }: { vm: Vm }) {
         </div>
       </div>
       <div className="flex gap-2 items-center">
+        <span className="text-xs text-muted-foreground">{age}</span>
+        <button
+          className="group flex items-center gap-1 text-xs text-muted-foreground font-mono hover:text-foreground transition-colors"
+          onClick={async (e) => {
+            e.preventDefault();
+            const ok = await copyToClipboard(vm.subdomain);
+            if (ok) {
+              setCopied(true);
+              setTimeout(() => setCopied(false), 1500);
+            }
+          }}
+          title="copy subdomain"
+        >
+          {vm.subdomain}
+          <Copy className={`h-3 w-3 shrink-0 transition-opacity ${copied ? "opacity-100 text-green-500" : "opacity-0 group-hover:opacity-60"}`} />
+        </button>
         <Button
           variant="ghost"
           size="icon"
@@ -533,9 +609,6 @@ function VmRow({ vm }: { vm: Vm }) {
             <FileQuestion className="h-4 w-4" />
           )}
         </Button>
-        <span className="text-xs text-muted-foreground font-mono">
-          {vm.subdomain}
-        </span>
       </div>
     </div>
   );

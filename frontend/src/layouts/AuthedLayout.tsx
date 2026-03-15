@@ -27,7 +27,7 @@ export function AuthedLayout() {
           <SidebarTrigger />
         </header>
 
-        <div className="flex flex-1 flex-col max-w-6xl mx-auto w-full">
+        <div className="flex flex-1 flex-col max-w-5xl mx-auto w-full">
           <div className="flex flex-col p-4 md:p-6">
             <Outlet />
           </div>

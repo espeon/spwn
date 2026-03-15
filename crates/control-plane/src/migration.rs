@@ -112,6 +112,7 @@ pub async fn migrate_vm(
             ip_address: vm.ip_address.clone(),
             exposed_port: vm.exposed_port,
             image: vm.base_image.clone(),
+            namespace_id: vm.namespace_id.clone(),
         })
         .await?
         .into_inner();

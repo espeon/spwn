@@ -5,7 +5,7 @@ use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
     response::IntoResponse,
-    routing::{delete, get, post},
+    routing::{delete, get, post, patch},
 };
 use serde::{Deserialize, Serialize};
 
@@ -89,6 +89,8 @@ pub struct CreateVmRequest {
     pub required_labels: Option<serde_json::Value>,
     #[serde(default)]
     pub region: Option<String>,
+    #[serde(default)]
+    pub namespace_id: Option<String>,
 }
 
 fn default_image() -> String {
@@ -142,6 +144,7 @@ pub struct VmResourcePatchRequest {
 pub struct VmListQuery {
     pub name: Option<String>,
     pub subdomain: Option<String>,
+    pub namespace_id: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -253,6 +256,16 @@ pub fn router(ops: Arc<dyn VmOps>) -> Router {
         .route("/api/account/username", post(change_username))
         .route("/api/images", get(list_images))
         .route("/api/regions", get(list_regions))
+        .route("/api/namespaces", get(list_namespaces).post(create_namespace))
+        .route("/api/namespaces/{id}", get(get_namespace).patch(update_namespace))
+        .route(
+            "/api/namespaces/{id}/members",
+            get(list_namespace_members).post(add_namespace_member),
+        )
+        .route(
+            "/api/namespaces/{id}/members/{account_id}",
+            delete(remove_namespace_member),
+        )
         .route("/healthz", get(|| async { "ok" }))
         .with_state(ops)
 }
@@ -351,6 +364,17 @@ async fn list_vms(
     account_id: AccountId,
     Query(query): Query<VmListQuery>,
 ) -> impl IntoResponse {
+    if let Some(ref ns_id) = query.namespace_id {
+        match db::get_namespace_member(&pool, ns_id, &account_id.0).await {
+            Ok(Some(_)) => {}
+            Ok(None) => return (StatusCode::FORBIDDEN, "not a member of this namespace").into_response(),
+            Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        }
+        return match db::list_vms_by_namespace(&pool, ns_id).await {
+            Ok(vms) => Json(vms.into_iter().map(VmResponse::from).collect::<Vec<_>>()).into_response(),
+            Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        };
+    }
     if let Some(name) = query.name {
         return match db::get_vm_by_name(&pool, &account_id.0, &name).await {
             Ok(Some(vm)) => Json(vec![VmResponse::from(vm)]).into_response(),
@@ -375,9 +399,17 @@ async fn list_vms(
 
 async fn create_vm(
     State(ops): State<AppState>,
+    Extension(pool): Extension<db::PgPool>,
     account_id: AccountId,
     Json(req): Json<CreateVmRequest>,
 ) -> impl IntoResponse {
+    if let Some(ref ns_id) = req.namespace_id {
+        match db::get_namespace_member(&pool, ns_id, &account_id.0).await {
+            Ok(Some(_)) => {}
+            Ok(None) => return (StatusCode::FORBIDDEN, "not a member of this namespace").into_response(),
+            Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        }
+    }
     match ops.create_vm(account_id.0, req).await {
         Ok(vm) => (StatusCode::CREATED, Json(VmResponse::from(vm))).into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
@@ -598,5 +630,247 @@ async fn resize_resources(
                 (StatusCode::INTERNAL_SERVER_ERROR, msg).into_response()
             }
         }
+    }
+}
+
+// ── namespaces ────────────────────────────────────────────────────────────────
+
+#[derive(Serialize)]
+struct NamespaceResponse {
+    id: String,
+    slug: String,
+    kind: String,
+    display_name: Option<String>,
+    owner_id: String,
+    vcpu_limit: i64,
+    mem_limit_mb: i32,
+    vm_limit: i32,
+    created_at: i64,
+}
+
+impl From<db::NamespaceRow> for NamespaceResponse {
+    fn from(n: db::NamespaceRow) -> Self {
+        Self {
+            id: n.id,
+            slug: n.slug,
+            kind: n.kind,
+            display_name: n.display_name,
+            owner_id: n.owner_id,
+            vcpu_limit: n.vcpu_limit,
+            mem_limit_mb: n.mem_limit_mb,
+            vm_limit: n.vm_limit,
+            created_at: n.created_at,
+        }
+    }
+}
+
+#[derive(Serialize)]
+struct MemberResponse {
+    account_id: String,
+    username: String,
+    role: String,
+    joined_at: i64,
+}
+
+impl From<db::MemberRow> for MemberResponse {
+    fn from(m: db::MemberRow) -> Self {
+        Self {
+            account_id: m.account_id,
+            username: m.username,
+            role: m.role,
+            joined_at: m.joined_at,
+        }
+    }
+}
+
+#[derive(Deserialize)]
+struct CreateNamespaceRequest {
+    slug: String,
+    display_name: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct UpdateNamespaceRequest {
+    display_name: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct AddMemberRequest {
+    username: String,
+    #[serde(default = "default_member_role")]
+    role: String,
+}
+
+fn default_member_role() -> String {
+    "member".into()
+}
+
+async fn list_namespaces(
+    Extension(pool): Extension<db::PgPool>,
+    account_id: AccountId,
+) -> impl IntoResponse {
+    match db::list_namespaces_for_account(&pool, &account_id.0).await {
+        Ok(ns) => Json(ns.into_iter().map(NamespaceResponse::from).collect::<Vec<_>>()).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+async fn create_namespace(
+    Extension(pool): Extension<db::PgPool>,
+    account_id: AccountId,
+    Json(req): Json<CreateNamespaceRequest>,
+) -> impl IntoResponse {
+    let slug = req.slug.to_lowercase();
+    if slug.is_empty() || slug.len() > 48 || !slug.chars().all(|c| c.is_alphanumeric() || c == '-') {
+        return (StatusCode::BAD_REQUEST, "slug must be 1–48 lowercase alphanumeric/hyphen characters").into_response();
+    }
+
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as i64;
+
+    let ns = db::NewNamespace {
+        id: format!("ns_{}", uuid::Uuid::new_v4()),
+        slug: slug.clone(),
+        kind: "org".into(),
+        display_name: req.display_name.or_else(|| Some(slug)),
+        owner_id: account_id.0.clone(),
+        vcpu_limit: 8000,
+        mem_limit_mb: 12288,
+        vm_limit: 5,
+        created_at: now,
+    };
+
+    let ns_id = ns.id.clone();
+    match db::create_namespace(&pool, &ns).await {
+        Ok(created) => {
+            let _ = db::add_namespace_member(&pool, &ns_id, &account_id.0, "owner").await;
+            (StatusCode::CREATED, Json(NamespaceResponse::from(created))).into_response()
+        }
+        Err(e) => {
+            let msg = e.to_string();
+            if msg.contains("unique") || msg.contains("duplicate") {
+                (StatusCode::CONFLICT, "slug already taken").into_response()
+            } else {
+                (StatusCode::INTERNAL_SERVER_ERROR, msg).into_response()
+            }
+        }
+    }
+}
+
+async fn get_namespace(
+    Extension(pool): Extension<db::PgPool>,
+    account_id: AccountId,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    let member = db::get_namespace_member(&pool, &id, &account_id.0).await;
+    if !matches!(member, Ok(Some(_))) {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    match db::get_namespace(&pool, &id).await {
+        Ok(Some(ns)) => Json(NamespaceResponse::from(ns)).into_response(),
+        Ok(None) => StatusCode::NOT_FOUND.into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+async fn update_namespace(
+    Extension(pool): Extension<db::PgPool>,
+    account_id: AccountId,
+    Path(id): Path<String>,
+    Json(req): Json<UpdateNamespaceRequest>,
+) -> impl IntoResponse {
+    let member = match db::get_namespace_member(&pool, &id, &account_id.0).await {
+        Ok(Some(m)) => m,
+        _ => return StatusCode::NOT_FOUND.into_response(),
+    };
+    if member.role != "owner" {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    if let Some(display_name) = req.display_name {
+        if let Err(e) = db::update_namespace_display_name(&pool, &id, &display_name).await {
+            return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
+        }
+    }
+    match db::get_namespace(&pool, &id).await {
+        Ok(Some(ns)) => Json(NamespaceResponse::from(ns)).into_response(),
+        Ok(None) => StatusCode::NOT_FOUND.into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+async fn list_namespace_members(
+    Extension(pool): Extension<db::PgPool>,
+    account_id: AccountId,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    let member = db::get_namespace_member(&pool, &id, &account_id.0).await;
+    if !matches!(member, Ok(Some(_))) {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    match db::list_namespace_members(&pool, &id).await {
+        Ok(members) => Json(members.into_iter().map(MemberResponse::from).collect::<Vec<_>>()).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+async fn add_namespace_member(
+    Extension(pool): Extension<db::PgPool>,
+    account_id: AccountId,
+    Path(id): Path<String>,
+    Json(req): Json<AddMemberRequest>,
+) -> impl IntoResponse {
+    let caller = match db::get_namespace_member(&pool, &id, &account_id.0).await {
+        Ok(Some(m)) => m,
+        _ => return StatusCode::NOT_FOUND.into_response(),
+    };
+    if caller.role != "owner" {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    if req.role != "owner" && req.role != "member" {
+        return (StatusCode::BAD_REQUEST, "role must be 'owner' or 'member'").into_response();
+    }
+    let target = match db::get_account_by_username(&pool, &req.username).await {
+        Ok(Some(a)) => a,
+        Ok(None) => return (StatusCode::NOT_FOUND, "user not found").into_response(),
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    };
+    match db::add_namespace_member(&pool, &id, &target.id, &req.role).await {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+async fn remove_namespace_member(
+    Extension(pool): Extension<db::PgPool>,
+    account_id: AccountId,
+    Path((id, target_account_id)): Path<(String, String)>,
+) -> impl IntoResponse {
+    let caller = match db::get_namespace_member(&pool, &id, &account_id.0).await {
+        Ok(Some(m)) => m,
+        _ => return StatusCode::NOT_FOUND.into_response(),
+    };
+    if caller.role != "owner" {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    // Prevent removing the last owner.
+    let target = match db::get_namespace_member(&pool, &id, &target_account_id).await {
+        Ok(Some(m)) => m,
+        Ok(None) => return StatusCode::NOT_FOUND.into_response(),
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    };
+    if target.role == "owner" {
+        match db::count_namespace_owners(&pool, &id).await {
+            Ok(count) if count <= 1 => {
+                return (StatusCode::UNPROCESSABLE_ENTITY, "cannot remove the last owner").into_response();
+            }
+            Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+            _ => {}
+        }
+    }
+    match db::remove_namespace_member(&pool, &id, &target_account_id).await {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     }
 }

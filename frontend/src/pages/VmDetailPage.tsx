@@ -5,6 +5,7 @@ import { toast } from "sonner";
 import { trackVmToast } from "@/hooks/useVmEvents";
 import {
   getVm,
+  getConfig,
   startVm,
   stopVm,
   snapshotVm,
@@ -18,6 +19,7 @@ import {
   ApiError,
   type VmEvent,
 } from "@/api";
+import { ConsolePanel } from "@/components/ConsolePanel";
 import { StatusBadge } from "@/components/StatusBadge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -31,17 +33,28 @@ import {
   DialogDescription,
   DialogFooter,
 } from "@/components/ui/dialog";
+import { Copy, Terminal } from "lucide-react";
+import { copyToClipboard } from "@/lib/utils";
 
 export function VmDetailPage() {
   const { vmId } = useParams({ from: "/_authed/vms/$vmId" });
   const navigate = useNavigate();
   const qc = useQueryClient();
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [consoleOpen, setConsoleOpen] = useState(false);
+  const [copiedSubdomain, setCopiedSubdomain] = useState(false);
+  const [copiedSsh, setCopiedSsh] = useState(false);
   const [cloneOpen, setCloneOpen] = useState(false);
   const [cloneName, setCloneName] = useState("");
   const [cloneMemory, setCloneMemory] = useState(false);
   const [resizeOpen, setResizeOpen] = useState(false);
   const [resizeVcpus, setResizeVcpus] = useState("");
+
+  const { data: config } = useQuery({
+    queryKey: ["config"],
+    queryFn: getConfig,
+    staleTime: Infinity,
+  });
 
   const {
     data: vm,
@@ -301,9 +314,20 @@ export function VmDetailPage() {
             <h1 className="text-xl font-semibold">{vm.name}</h1>
             <StatusBadge status={vm.status} />
           </div>
-          <p className="text-sm text-muted-foreground font-mono">
+          <button
+            className="group flex items-center gap-1.5 text-sm text-muted-foreground font-mono hover:text-foreground transition-colors mt-1"
+            onClick={async () => {
+              const ok = await copyToClipboard(vm.subdomain);
+              if (ok) {
+                setCopiedSubdomain(true);
+                setTimeout(() => setCopiedSubdomain(false), 1500);
+              }
+            }}
+            title="copy subdomain"
+          >
             {vm.subdomain}
-          </p>
+            <Copy className={`h-3.5 w-3.5 shrink-0 transition-opacity ${copiedSubdomain ? "opacity-100 text-green-500" : "opacity-0 group-hover:opacity-60"}`} />
+          </button>
         </div>
         <Button
           variant="ghost"
@@ -367,6 +391,28 @@ export function VmDetailPage() {
         </DialogContent>
       </Dialog>
 
+      {config && (() => {
+        const [gwHost, gwPort] = config.ssh_gateway_addr.split(":");
+        const sshCmd = `ssh ${vm.id}@${gwHost} -p ${gwPort ?? "22"}`;
+        return (
+          <button
+            className="group flex items-center gap-2 w-full rounded-md border bg-muted/40 px-4 py-2.5 text-xs font-mono text-muted-foreground hover:text-foreground hover:bg-muted transition-colors mb-6"
+            onClick={async () => {
+              const ok = await copyToClipboard(sshCmd);
+              if (ok) {
+                setCopiedSsh(true);
+                setTimeout(() => setCopiedSsh(false), 1500);
+              }
+            }}
+            title="copy ssh command"
+          >
+            <Terminal className="h-3.5 w-3.5 shrink-0 opacity-60" />
+            <span className="flex-1 text-left">{sshCmd}</span>
+            <Copy className={`h-3.5 w-3.5 shrink-0 transition-opacity ${copiedSsh ? "opacity-100 text-green-500" : "opacity-0 group-hover:opacity-60"}`} />
+          </button>
+        );
+      })()}
+
       <div className="flex gap-3">
         <Button
           variant="outline"
@@ -413,7 +459,20 @@ export function VmDetailPage() {
         >
           resize
         </Button>
+        <Button
+          variant="outline"
+          onClick={() => setConsoleOpen((o) => !o)}
+          disabled={vm.status !== "running"}
+        >
+          {consoleOpen ? "hide console" : "console"}
+        </Button>
       </div>
+
+      {consoleOpen && vm.status === "running" && (
+        <div className="mt-4 h-80 rounded-md border overflow-hidden">
+          <ConsolePanel vmId={vmId} open={consoleOpen} />
+        </div>
+      )}
 
       <EventLog vmId={vmId} status={vm.status} />
 

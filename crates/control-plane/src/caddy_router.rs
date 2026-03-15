@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use router_sync::CaddyClient;
+use tracing::warn;
 
 /// Resolves the correct `CaddyClient` for a host based on its `region` label.
 ///
@@ -44,6 +45,45 @@ impl CaddyRouter {
                 .iter()
                 .map(|(r, c)| (Some(r.as_str()), c)),
         )
+    }
+
+    /// All distinct clients. The default is included; region clients that share
+    /// the default URL are deduplicated.
+    fn all_clients(&self) -> impl Iterator<Item = &CaddyClient> {
+        let default_url = self.default.base_url();
+        std::iter::once(&self.default).chain(
+            self.region_clients
+                .values()
+                .filter(move |c| c.base_url() != default_url),
+        )
+    }
+
+    /// Broadcast a set-running-route to every Caddy instance. Errors are
+    /// logged and swallowed so a down PoP never blocks VM operations.
+    pub async fn broadcast_set_vm_route(&self, subdomain: &str, ip: &str, port: u16) {
+        for client in self.all_clients() {
+            if let Err(e) = client.set_vm_route(subdomain, ip, port).await {
+                warn!(caddy = client.base_url(), "set_vm_route {subdomain}: {e}");
+            }
+        }
+    }
+
+    /// Broadcast a delete to every Caddy instance.
+    pub async fn broadcast_delete_route(&self, subdomain: &str) {
+        for client in self.all_clients() {
+            if let Err(e) = client.delete_route(subdomain).await {
+                warn!(caddy = client.base_url(), "delete_route {subdomain}: {e}");
+            }
+        }
+    }
+
+    /// Broadcast a stopped-page route to every Caddy instance.
+    pub async fn broadcast_set_stopped_route(&self, subdomain: &str) {
+        for client in self.all_clients() {
+            if let Err(e) = client.set_stopped_route(subdomain).await {
+                warn!(caddy = client.base_url(), "set_stopped_route {subdomain}: {e}");
+            }
+        }
     }
 }
 

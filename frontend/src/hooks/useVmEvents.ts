@@ -38,11 +38,12 @@ export function useVmEvents() {
       qc.setQueryData<Vm>(["vms", vm_id], (old) =>
         old ? { ...old, status: status as Vm["status"] } : old,
       );
-      qc.setQueryData<Vm[]>(["vms"], (old) =>
-        old?.map((vm) =>
+      qc.setQueriesData<Vm[]>({ queryKey: ["vms"] }, (old) => {
+        if (!Array.isArray(old)) return old;
+        return old.map((vm) =>
           vm.id === vm_id ? { ...vm, status: status as Vm["status"] } : vm,
-        ),
-      );
+        );
+      });
 
       const tracked = trackedRef.current.get(vm_id);
       if (!tracked) return;

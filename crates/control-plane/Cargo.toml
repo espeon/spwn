@@ -15,7 +15,7 @@ auth = { path = "../auth" }
 router-sync = { path = "../router-sync" }
 tokio = { version = "1", features = ["full"] }
 tonic = { version = "0.12", features = ["transport"] }
-axum = "0.8"
+axum = { version = "0.8", features = ["ws"] }
 anyhow = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
@@ -25,6 +25,14 @@ rand = "0.8"
 dotenvy = "0.15"
 sqlx = { version = "0.8", features = ["postgres", "runtime-tokio-native-tls"] }
 tokio-stream = { version = "0.1", features = ["sync"] }
+futures-util = "0.3"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tower-http = { version = "0.6", features = ["fs"] }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["full"] }
+testcontainers = "0.23"
+testcontainers-modules = { version = "0.11", features = ["postgres"] }
+tower = { version = "0.5", features = ["util"] }
+http-body-util = "0.1"

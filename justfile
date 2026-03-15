@@ -111,7 +111,11 @@ setup:
     scripts/spwn setup
 
 # run all tests (unit + integration) via cargo-nextest
-test: test-unit test-integration
+test:
+    DOCKER_HOST=unix:///run/user/$(id -u)/podman/podman.sock \
+    TESTCONTAINERS_RYUK_DISABLED=true \
+    cargo nextest run
+
 
 # run unit tests (no external dependencies)
 test-unit:
@@ -122,6 +126,15 @@ test-integration:
     DOCKER_HOST=unix:///run/user/$(id -u)/podman/podman.sock \
     TESTCONTAINERS_RYUK_DISABLED=true \
     cargo nextest run --test '*'
+
+# code coverage report (requires cargo-llvm-cov + podman socket)
+cov:
+    DOCKER_HOST=unix:///run/user/$(id -u)/podman/podman.sock \
+    TESTCONTAINERS_RYUK_DISABLED=true \
+    cargo llvm-cov nextest --lcov --output-path ./target/cov/lcov.info
+
+covpeek:
+  covpeek --file target/cov/lcov.info
 
 # check cargo workspace compiles cleanly
 check: check-protoc
@@ -151,3 +164,11 @@ gateway: ssh-gateway-build
 # tidy Go deps
 go-tidy:
     cd services && go mod tidy
+
+# ── dev helpers ───────────────────────────────────────────────────────────────
+
+# create a throwaway VM from IMAGE and SSH in; VM is deleted on exit
+# usage: just test-shell ubuntu:22.04
+# requires: SPWN_TOKEN in .env
+test-shell image="ubuntu":
+    scripts/test-shell.sh "{{image}}"

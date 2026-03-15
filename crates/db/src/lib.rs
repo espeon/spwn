@@ -42,6 +42,41 @@ pub struct VmRow {
     pub placement_strategy: String,
     pub required_labels: Option<serde_json::Value>,
     pub region: Option<String>,
+    pub namespace_id: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct NamespaceRow {
+    pub id: String,
+    pub slug: String,
+    pub kind: String,
+    pub display_name: Option<String>,
+    pub owner_id: String,
+    pub vcpu_limit: i64,
+    pub mem_limit_mb: i32,
+    pub vm_limit: i32,
+    pub created_at: i64,
+}
+
+#[derive(Debug, Clone)]
+pub struct MemberRow {
+    pub namespace_id: String,
+    pub account_id: String,
+    pub username: String,
+    pub role: String,
+    pub joined_at: i64,
+}
+
+pub struct NewNamespace {
+    pub id: String,
+    pub slug: String,
+    pub kind: String,
+    pub display_name: Option<String>,
+    pub owner_id: String,
+    pub vcpu_limit: i64,
+    pub mem_limit_mb: i32,
+    pub vm_limit: i32,
+    pub created_at: i64,
 }
 
 #[derive(Debug, Clone)]
@@ -96,6 +131,7 @@ pub struct NewVm {
     pub placement_strategy: String,
     pub required_labels: Option<serde_json::Value>,
     pub region: Option<String>,
+    pub namespace_id: String,
 }
 
 #[derive(Debug, Clone)]
@@ -172,8 +208,8 @@ pub async fn create_vm(pool: &PgPool, vm: &NewVm) -> Result<()> {
         "INSERT INTO vms (id, account_id, name, status, subdomain, vcpus, memory_mb,
          disk_mb, bandwidth_mbps, kernel_path, rootfs_path, overlay_path, real_init,
          ip_address, exposed_port, base_image, cloned_from, placement_strategy,
-         required_labels, region, created_at)
-         VALUES ($1,$2,$3,'stopped',$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)",
+         required_labels, region, namespace_id, created_at)
+         VALUES ($1,$2,$3,'stopped',$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21)",
     )
     .bind(&vm.id)
     .bind(&vm.account_id)
@@ -194,6 +230,7 @@ pub async fn create_vm(pool: &PgPool, vm: &NewVm) -> Result<()> {
     .bind(&vm.placement_strategy)
     .bind(vm.required_labels.as_ref().map(sqlx::types::Json))
     .bind(&vm.region)
+    .bind(&vm.namespace_id)
     .bind(now)
     .execute(pool)
     .await?;
@@ -205,7 +242,7 @@ pub async fn get_vm(pool: &PgPool, id: &str) -> Result<Option<VmRow>> {
         "SELECT id, account_id, name, status, subdomain, vcpus, memory_mb, disk_mb, bandwidth_mbps,
          kernel_path, rootfs_path, overlay_path, real_init, ip_address, exposed_port, tap_device, pid,
          socket_path, host_id, base_image, cloned_from, disk_usage_mb, created_at, last_started_at,
-         placement_strategy, required_labels, region FROM vms WHERE id = $1",
+         placement_strategy, required_labels, region, namespace_id FROM vms WHERE id = $1",
     )
     .bind(id)
     .fetch_optional(pool)
@@ -218,7 +255,7 @@ pub async fn get_vm_by_subdomain(pool: &PgPool, subdomain: &str) -> Result<Optio
         "SELECT id, account_id, name, status, subdomain, vcpus, memory_mb, disk_mb, bandwidth_mbps,
          kernel_path, rootfs_path, overlay_path, real_init, ip_address, exposed_port, tap_device, pid,
          socket_path, host_id, base_image, cloned_from, disk_usage_mb, created_at, last_started_at,
-         placement_strategy, required_labels, region FROM vms WHERE subdomain = $1",
+         placement_strategy, required_labels, region, namespace_id FROM vms WHERE subdomain = $1",
     )
     .bind(subdomain)
     .fetch_optional(pool)
@@ -231,10 +268,24 @@ pub async fn list_vms(pool: &PgPool, account_id: &str) -> Result<Vec<VmRow>> {
         "SELECT id, account_id, name, status, subdomain, vcpus, memory_mb, disk_mb, bandwidth_mbps,
          kernel_path, rootfs_path, overlay_path, real_init, ip_address, exposed_port, tap_device, pid,
          socket_path, host_id, base_image, cloned_from, disk_usage_mb, created_at, last_started_at,
-         placement_strategy, required_labels, region FROM vms WHERE account_id = $1
+         placement_strategy, required_labels, region, namespace_id FROM vms WHERE account_id = $1
          ORDER BY created_at DESC",
     )
     .bind(account_id)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows.into_iter().map(row_to_vm).collect())
+}
+
+pub async fn list_vms_by_namespace(pool: &PgPool, namespace_id: &str) -> Result<Vec<VmRow>> {
+    let rows = sqlx::query(
+        "SELECT id, account_id, name, status, subdomain, vcpus, memory_mb, disk_mb, bandwidth_mbps,
+         kernel_path, rootfs_path, overlay_path, real_init, ip_address, exposed_port, tap_device, pid,
+         socket_path, host_id, base_image, cloned_from, disk_usage_mb, created_at, last_started_at,
+         placement_strategy, required_labels, region, namespace_id FROM vms WHERE namespace_id = $1
+         ORDER BY created_at DESC",
+    )
+    .bind(namespace_id)
     .fetch_all(pool)
     .await?;
     Ok(rows.into_iter().map(row_to_vm).collect())
@@ -274,7 +325,7 @@ pub async fn get_vms_by_status(pool: &PgPool, status: &str) -> Result<Vec<VmRow>
         "SELECT id, account_id, name, status, subdomain, vcpus, memory_mb, disk_mb, bandwidth_mbps,
          kernel_path, rootfs_path, overlay_path, real_init, ip_address, exposed_port, tap_device, pid,
          socket_path, host_id, base_image, cloned_from, disk_usage_mb, created_at, last_started_at,
-         placement_strategy, required_labels, region FROM vms WHERE status = $1",
+         placement_strategy, required_labels, region, namespace_id FROM vms WHERE status = $1",
     )
     .bind(status)
     .fetch_all(pool)
@@ -287,7 +338,7 @@ pub async fn get_all_vms(pool: &PgPool) -> Result<Vec<VmRow>> {
         "SELECT id, account_id, name, status, subdomain, vcpus, memory_mb, disk_mb, bandwidth_mbps,
          kernel_path, rootfs_path, overlay_path, real_init, ip_address, exposed_port, tap_device, pid,
          socket_path, host_id, base_image, cloned_from, disk_usage_mb, created_at, last_started_at,
-         placement_strategy, required_labels, region FROM vms",
+         placement_strategy, required_labels, region, namespace_id FROM vms",
     )
     .fetch_all(pool)
     .await?;
@@ -299,7 +350,7 @@ pub async fn get_vms_by_host(pool: &PgPool, host_id: &str) -> Result<Vec<VmRow>>
         "SELECT id, account_id, name, status, subdomain, vcpus, memory_mb, disk_mb, bandwidth_mbps,
          kernel_path, rootfs_path, overlay_path, real_init, ip_address, exposed_port, tap_device, pid,
          socket_path, host_id, base_image, cloned_from, disk_usage_mb, created_at, last_started_at,
-         placement_strategy, required_labels, region FROM vms WHERE host_id = $1",
+         placement_strategy, required_labels, region, namespace_id FROM vms WHERE host_id = $1",
     )
     .bind(host_id)
     .fetch_all(pool)
@@ -432,6 +483,7 @@ fn row_to_vm(r: sqlx::postgres::PgRow) -> VmRow {
         placement_strategy: r.get("placement_strategy"),
         required_labels: r.get("required_labels"),
         region: r.get("region"),
+        namespace_id: r.get("namespace_id"),
     }
 }
 
@@ -755,6 +807,7 @@ pub struct AccountRow {
     pub vm_limit: i32,
     pub created_at: i64,
     pub role: String,
+    pub dotfiles_repo: Option<String>,
 }
 
 pub struct NewAccount {
@@ -772,6 +825,7 @@ pub struct UpdateTheme {
 pub struct UpdateAccountProfile {
     pub display_name: Option<String>,
     pub avatar_bytes: Option<Vec<u8>>,
+    pub dotfiles_repo: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -814,13 +868,14 @@ pub async fn create_account(pool: &PgPool, account: &NewAccount) -> Result<Accou
         vm_limit: 5,
         created_at: account.created_at,
         role: "user".into(),
+        dotfiles_repo: None,
     })
 }
 
 pub async fn get_account_by_email(pool: &PgPool, email: &str) -> Result<Option<AccountRow>> {
     let row = sqlx::query(
         "SELECT id, email, password_hash, username, display_name, avatar_bytes, theme,
-         vcpu_limit, mem_limit_mb, vm_limit, created_at, role
+         vcpu_limit, mem_limit_mb, vm_limit, created_at, role, dotfiles_repo
          FROM accounts WHERE email = $1",
     )
     .bind(email)
@@ -832,7 +887,7 @@ pub async fn get_account_by_email(pool: &PgPool, email: &str) -> Result<Option<A
 pub async fn get_account_by_username(pool: &PgPool, username: &str) -> Result<Option<AccountRow>> {
     let row = sqlx::query(
         "SELECT id, email, password_hash, username, display_name, avatar_bytes, theme,
-         vcpu_limit, mem_limit_mb, vm_limit, created_at, role
+         vcpu_limit, mem_limit_mb, vm_limit, created_at, role, dotfiles_repo
          FROM accounts WHERE username = $1",
     )
     .bind(username)
@@ -844,7 +899,7 @@ pub async fn get_account_by_username(pool: &PgPool, username: &str) -> Result<Op
 pub async fn get_account(pool: &PgPool, id: &str) -> Result<Option<AccountRow>> {
     let row = sqlx::query(
         "SELECT id, email, password_hash, username, display_name, avatar_bytes, theme,
-         vcpu_limit, mem_limit_mb, vm_limit, created_at, role
+         vcpu_limit, mem_limit_mb, vm_limit, created_at, role, dotfiles_repo
          FROM accounts WHERE id = $1",
     )
     .bind(id)
@@ -854,66 +909,20 @@ pub async fn get_account(pool: &PgPool, id: &str) -> Result<Option<AccountRow>> 
 }
 
 pub struct UsernameUpdate {
-    pub old_username: String,
     pub new_username: String,
-}
-
-#[derive(Debug, Clone)]
-pub struct RenamedSubdomain {
-    pub vm_id: String,
-    pub old_subdomain: String,
-    pub new_subdomain: String,
 }
 
 pub async fn update_username(
     pool: &PgPool,
     account_id: &str,
     update: &UsernameUpdate,
-) -> Result<Vec<RenamedSubdomain>> {
-    let mut tx = pool.begin().await?;
-
+) -> Result<()> {
     sqlx::query("UPDATE accounts SET username = $1 WHERE id = $2")
         .bind(&update.new_username)
         .bind(account_id)
-        .execute(&mut *tx)
+        .execute(pool)
         .await?;
-
-    let vms = sqlx::query("SELECT id, subdomain FROM vms WHERE account_id = $1")
-        .bind(account_id)
-        .fetch_all(&mut *tx)
-        .await?;
-
-    let mut renamed = Vec::with_capacity(vms.len());
-
-    for vm in &vms {
-        let vm_id: String = vm.get("id");
-        let old_subdomain: String = vm.get("subdomain");
-
-        let new_subdomain = if let Some(vm_name) =
-            old_subdomain.strip_suffix(&format!(".{}", update.old_username))
-        {
-            format!("{vm_name}.{}", update.new_username)
-        } else {
-            old_subdomain.clone()
-        };
-
-        if new_subdomain != old_subdomain {
-            sqlx::query("UPDATE vms SET subdomain = $1 WHERE id = $2")
-                .bind(&new_subdomain)
-                .bind(&vm_id)
-                .execute(&mut *tx)
-                .await?;
-
-            renamed.push(RenamedSubdomain {
-                vm_id,
-                old_subdomain,
-                new_subdomain,
-            });
-        }
-    }
-
-    tx.commit().await?;
-    Ok(renamed)
+    Ok(())
 }
 
 pub async fn update_theme(pool: &PgPool, id: &str, update: &UpdateTheme) -> Result<()> {
@@ -930,12 +939,15 @@ pub async fn update_account_profile(
     id: &str,
     update: &UpdateAccountProfile,
 ) -> Result<()> {
-    sqlx::query("UPDATE accounts SET display_name = $1, avatar_bytes = $2 WHERE id = $3")
-        .bind(&update.display_name)
-        .bind(&update.avatar_bytes)
-        .bind(id)
-        .execute(pool)
-        .await?;
+    sqlx::query(
+        "UPDATE accounts SET display_name = $1, avatar_bytes = $2, dotfiles_repo = $3 WHERE id = $4",
+    )
+    .bind(&update.display_name)
+    .bind(&update.avatar_bytes)
+    .bind(&update.dotfiles_repo)
+    .bind(id)
+    .execute(pool)
+    .await?;
     Ok(())
 }
 
@@ -953,6 +965,7 @@ fn row_to_account(r: sqlx::postgres::PgRow) -> AccountRow {
         vm_limit: r.get("vm_limit"),
         created_at: r.get("created_at"),
         role: r.get("role"),
+        dotfiles_repo: r.get("dotfiles_repo"),
     }
 }
 
@@ -999,6 +1012,194 @@ pub async fn delete_session(pool: &PgPool, id: &str) -> Result<()> {
     Ok(())
 }
 
+// ── namespaces ────────────────────────────────────────────────────────────────
+
+fn row_to_namespace(r: sqlx::postgres::PgRow) -> NamespaceRow {
+    NamespaceRow {
+        id: r.get("id"),
+        slug: r.get("slug"),
+        kind: r.get("kind"),
+        display_name: r.get("display_name"),
+        owner_id: r.get("owner_id"),
+        vcpu_limit: r.get("vcpu_limit"),
+        mem_limit_mb: r.get("mem_limit_mb"),
+        vm_limit: r.get("vm_limit"),
+        created_at: r.get("created_at"),
+    }
+}
+
+pub async fn create_namespace(pool: &PgPool, ns: &NewNamespace) -> Result<NamespaceRow> {
+    sqlx::query(
+        "INSERT INTO namespaces (id, slug, kind, display_name, owner_id, vcpu_limit, mem_limit_mb, vm_limit, created_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)",
+    )
+    .bind(&ns.id)
+    .bind(&ns.slug)
+    .bind(&ns.kind)
+    .bind(&ns.display_name)
+    .bind(&ns.owner_id)
+    .bind(ns.vcpu_limit)
+    .bind(ns.mem_limit_mb)
+    .bind(ns.vm_limit)
+    .bind(ns.created_at)
+    .execute(pool)
+    .await?;
+    Ok(NamespaceRow {
+        id: ns.id.clone(),
+        slug: ns.slug.clone(),
+        kind: ns.kind.clone(),
+        display_name: ns.display_name.clone(),
+        owner_id: ns.owner_id.clone(),
+        vcpu_limit: ns.vcpu_limit,
+        mem_limit_mb: ns.mem_limit_mb,
+        vm_limit: ns.vm_limit,
+        created_at: ns.created_at,
+    })
+}
+
+pub async fn add_namespace_member(
+    pool: &PgPool,
+    namespace_id: &str,
+    account_id: &str,
+    role: &str,
+) -> Result<()> {
+    let now = unix_now();
+    sqlx::query(
+        "INSERT INTO namespace_members (namespace_id, account_id, role, joined_at)
+         VALUES ($1,$2,$3,$4)
+         ON CONFLICT (namespace_id, account_id) DO NOTHING",
+    )
+    .bind(namespace_id)
+    .bind(account_id)
+    .bind(role)
+    .bind(now)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+pub async fn get_namespace(pool: &PgPool, id: &str) -> Result<Option<NamespaceRow>> {
+    let row = sqlx::query(
+        "SELECT id, slug, kind, display_name, owner_id, vcpu_limit, mem_limit_mb, vm_limit, created_at
+         FROM namespaces WHERE id = $1",
+    )
+    .bind(id)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row.map(row_to_namespace))
+}
+
+pub async fn get_personal_namespace(pool: &PgPool, account_id: &str) -> Result<Option<NamespaceRow>> {
+    let row = sqlx::query(
+        "SELECT id, slug, kind, display_name, owner_id, vcpu_limit, mem_limit_mb, vm_limit, created_at
+         FROM namespaces WHERE owner_id = $1 AND kind = 'personal'",
+    )
+    .bind(account_id)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row.map(row_to_namespace))
+}
+
+pub async fn list_namespaces_for_account(pool: &PgPool, account_id: &str) -> Result<Vec<NamespaceRow>> {
+    let rows = sqlx::query(
+        "SELECT n.id, n.slug, n.kind, n.display_name, n.owner_id,
+                n.vcpu_limit, n.mem_limit_mb, n.vm_limit, n.created_at
+         FROM namespaces n
+         JOIN namespace_members m ON n.id = m.namespace_id
+         WHERE m.account_id = $1
+         ORDER BY n.kind DESC, n.created_at ASC",
+    )
+    .bind(account_id)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows.into_iter().map(row_to_namespace).collect())
+}
+
+pub async fn update_namespace_display_name(
+    pool: &PgPool,
+    namespace_id: &str,
+    display_name: &str,
+) -> Result<()> {
+    sqlx::query("UPDATE namespaces SET display_name = $1 WHERE id = $2")
+        .bind(display_name)
+        .bind(namespace_id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+pub async fn list_namespace_members(pool: &PgPool, namespace_id: &str) -> Result<Vec<MemberRow>> {
+    let rows = sqlx::query(
+        "SELECT m.namespace_id, m.account_id, a.username, m.role, m.joined_at
+         FROM namespace_members m
+         JOIN accounts a ON a.id = m.account_id
+         WHERE m.namespace_id = $1
+         ORDER BY m.joined_at ASC",
+    )
+    .bind(namespace_id)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(|r| MemberRow {
+            namespace_id: r.get("namespace_id"),
+            account_id: r.get("account_id"),
+            username: r.get("username"),
+            role: r.get("role"),
+            joined_at: r.get("joined_at"),
+        })
+        .collect())
+}
+
+pub async fn remove_namespace_member(
+    pool: &PgPool,
+    namespace_id: &str,
+    account_id: &str,
+) -> Result<()> {
+    sqlx::query(
+        "DELETE FROM namespace_members WHERE namespace_id = $1 AND account_id = $2",
+    )
+    .bind(namespace_id)
+    .bind(account_id)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+pub async fn count_namespace_owners(pool: &PgPool, namespace_id: &str) -> Result<i64> {
+    let count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM namespace_members WHERE namespace_id = $1 AND role = 'owner'",
+    )
+    .bind(namespace_id)
+    .fetch_one(pool)
+    .await?;
+    Ok(count)
+}
+
+pub async fn get_namespace_member(
+    pool: &PgPool,
+    namespace_id: &str,
+    account_id: &str,
+) -> Result<Option<MemberRow>> {
+    let row = sqlx::query(
+        "SELECT m.namespace_id, m.account_id, a.username, m.role, m.joined_at
+         FROM namespace_members m
+         JOIN accounts a ON a.id = m.account_id
+         WHERE m.namespace_id = $1 AND m.account_id = $2",
+    )
+    .bind(namespace_id)
+    .bind(account_id)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row.map(|r| MemberRow {
+        namespace_id: r.get("namespace_id"),
+        account_id: r.get("account_id"),
+        username: r.get("username"),
+        role: r.get("role"),
+        joined_at: r.get("joined_at"),
+    }))
+}
+
 pub async fn delete_expired_sessions(pool: &PgPool) -> Result<u64> {
     let now = unix_now();
     let result = sqlx::query("DELETE FROM sessions WHERE expires_at < $1")
@@ -1035,12 +1236,12 @@ impl From<DbError> for QuotaError {
     }
 }
 
-/// Check account quota and atomically set the VM to status='starting'.
+/// Check namespace quota and atomically set the VM to status='starting'.
 /// Runs in a SERIALIZABLE transaction to prevent concurrent starts from racing.
 /// Returns Err(QuotaError::Serialization) on conflict — caller should retry once.
 pub async fn check_quota_and_reserve(
     pool: &PgPool,
-    account_id: &str,
+    namespace_id: &str,
     vm_id: &str,
     vcpus: i64,
     mem_mb: i32,
@@ -1052,26 +1253,26 @@ pub async fn check_quota_and_reserve(
         .await
         .map_err(DbError::from)?;
 
-    let account_row =
-        sqlx::query("SELECT vcpu_limit, mem_limit_mb, vm_limit FROM accounts WHERE id = $1")
-            .bind(account_id)
+    let ns_row =
+        sqlx::query("SELECT vcpu_limit, mem_limit_mb, vm_limit FROM namespaces WHERE id = $1")
+            .bind(namespace_id)
             .fetch_optional(&mut *tx)
             .await
             .map_err(DbError::from)?
-            .ok_or_else(|| QuotaError::Exceeded("account not found".into()))?;
+            .ok_or_else(|| QuotaError::Exceeded("namespace not found".into()))?;
 
-    let vcpu_limit: i64 = account_row.get("vcpu_limit");
-    let mem_limit: i32 = account_row.get("mem_limit_mb");
-    let vm_limit: i32 = account_row.get("vm_limit");
+    let vcpu_limit: i64 = ns_row.get("vcpu_limit");
+    let mem_limit: i32 = ns_row.get("mem_limit_mb");
+    let vm_limit: i32 = ns_row.get("vm_limit");
 
     let usage_row = sqlx::query(
         "SELECT COALESCE(SUM(vcpus),0)::bigint AS used_vcpus,
                 COALESCE(SUM(memory_mb),0)::int AS used_mem,
                 COUNT(*)::int AS used_vms
          FROM vms
-         WHERE account_id = $1 AND status IN ('running','starting')",
+         WHERE namespace_id = $1 AND status IN ('running','starting')",
     )
-    .bind(account_id)
+    .bind(namespace_id)
     .fetch_one(&mut *tx)
     .await
     .map_err(DbError::from)?;
@@ -1131,7 +1332,7 @@ pub async fn get_vm_by_name(pool: &PgPool, account_id: &str, name: &str) -> Resu
         "SELECT id, account_id, name, status, subdomain, vcpus, memory_mb, disk_mb, bandwidth_mbps,
          kernel_path, rootfs_path, overlay_path, real_init, ip_address, exposed_port, tap_device, pid,
          socket_path, host_id, base_image, cloned_from, disk_usage_mb, created_at, last_started_at,
-         placement_strategy, required_labels, region FROM vms WHERE account_id = $1 AND name = $2",
+         placement_strategy, required_labels, region, namespace_id FROM vms WHERE account_id = $1 AND name = $2",
     )
     .bind(account_id)
     .bind(name)
@@ -1273,6 +1474,7 @@ pub struct ImageRow {
     pub status: String,
     pub size_bytes: i64,
     pub error: Option<String>,
+    pub build_log: String,
     pub created_at: i64,
 }
 
@@ -1285,6 +1487,7 @@ fn row_to_image(r: &sqlx::postgres::PgRow) -> ImageRow {
         status: r.get("status"),
         size_bytes: r.get("size_bytes"),
         error: r.get("error"),
+        build_log: r.get("build_log"),
         created_at: r.get("created_at"),
     }
 }
@@ -1316,7 +1519,7 @@ pub async fn create_image(
 
 pub async fn get_image(pool: &PgPool, id: &str) -> Result<Option<ImageRow>> {
     let row = sqlx::query(
-        "SELECT id, name, tag, source, status, size_bytes, error, created_at
+        "SELECT id, name, tag, source, status, size_bytes, error, build_log, created_at
          FROM images WHERE id = $1",
     )
     .bind(id)
@@ -1331,7 +1534,7 @@ pub async fn get_image_by_name_tag(
     tag: &str,
 ) -> Result<Option<ImageRow>> {
     let row = sqlx::query(
-        "SELECT id, name, tag, source, status, size_bytes, error, created_at
+        "SELECT id, name, tag, source, status, size_bytes, error, build_log, created_at
          FROM images WHERE name = $1 AND tag = $2",
     )
     .bind(name)
@@ -1343,7 +1546,7 @@ pub async fn get_image_by_name_tag(
 
 pub async fn list_images(pool: &PgPool) -> Result<Vec<ImageRow>> {
     let rows = sqlx::query(
-        "SELECT id, name, tag, source, status, size_bytes, error, created_at
+        "SELECT id, name, tag, source, status, size_bytes, error, build_log, created_at
          FROM images ORDER BY created_at DESC",
     )
     .fetch_all(pool)
@@ -1363,6 +1566,15 @@ pub async fn update_image_ready(pool: &PgPool, id: &str, size_bytes: i64) -> Res
 pub async fn update_image_error(pool: &PgPool, id: &str, error: &str) -> Result<()> {
     sqlx::query("UPDATE images SET status = 'error', error = $1 WHERE id = $2")
         .bind(error)
+        .bind(id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+pub async fn append_image_log(pool: &PgPool, id: &str, line: &str) -> Result<()> {
+    sqlx::query("UPDATE images SET build_log = build_log || $1 WHERE id = $2")
+        .bind(line)
         .bind(id)
         .execute(pool)
         .await?;
@@ -1445,6 +1657,38 @@ pub async fn touch_api_token(pool: &PgPool, token_hash: &str, now: i64) -> Resul
         .execute(pool)
         .await?;
     Ok(())
+}
+
+pub async fn list_api_tokens(pool: &PgPool, account_id: &str) -> Result<Vec<ApiTokenRow>> {
+    let rows = sqlx::query(
+        "SELECT id, account_id, token_hash, name, created_at, last_used_at
+         FROM api_tokens WHERE account_id = $1 ORDER BY created_at DESC",
+    )
+    .bind(account_id)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(|r| ApiTokenRow {
+            id: r.get("id"),
+            account_id: r.get("account_id"),
+            token_hash: r.get("token_hash"),
+            name: r.get("name"),
+            created_at: r.get("created_at"),
+            last_used_at: r.get("last_used_at"),
+        })
+        .collect())
+}
+
+pub async fn delete_api_token(pool: &PgPool, id: &str, account_id: &str) -> Result<bool> {
+    let result = sqlx::query(
+        "DELETE FROM api_tokens WHERE id = $1 AND account_id = $2",
+    )
+    .bind(id)
+    .bind(account_id)
+    .execute(pool)
+    .await?;
+    Ok(result.rows_affected() > 0)
 }
 
 // ── SSH keys ──────────────────────────────────────────────────────────────────

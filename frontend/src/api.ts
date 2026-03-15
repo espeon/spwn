@@ -10,6 +10,7 @@ export interface Image {
 
 export interface AdminImage extends Image {
   error: string | null;
+  build_log: string;
 }
 
 export interface BuildImageRequest {
@@ -37,10 +38,12 @@ export interface Account {
   mem_limit_mb: number;
   vm_limit: number;
   role: string;
+  dotfiles_repo: string | null;
 }
 
 export interface UpdateProfileRequest {
   display_name: string | null;
+  dotfiles_repo?: string | null;
 }
 
 export interface Vm {
@@ -64,6 +67,7 @@ export interface CreateVmRequest {
   memory_mb: number;
   exposed_port: number;
   region?: string;
+  namespace_id?: string;
 }
 
 class ApiError extends Error {
@@ -92,6 +96,16 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
     return undefined as unknown as T;
   }
   return resp.json();
+}
+
+// ── config ────────────────────────────────────────────────────────────────────
+
+export interface ServerConfig {
+  ssh_gateway_addr: string;
+}
+
+export function getConfig(): Promise<ServerConfig> {
+  return request("/api/config");
 }
 
 // ── auth ──────────────────────────────────────────────────────────────────────
@@ -163,8 +177,9 @@ export function logout(): Promise<void> {
 
 // ── vms ───────────────────────────────────────────────────────────────────────
 
-export function listVms(): Promise<Vm[]> {
-  return request("/api/vms");
+export function listVms(namespace_id?: string): Promise<Vm[]> {
+  const qs = namespace_id ? `?namespace_id=${encodeURIComponent(namespace_id)}` : "";
+  return request(`/api/vms${qs}`);
 }
 
 export function getVm(id: string): Promise<Vm> {
@@ -370,6 +385,92 @@ export function buildImage(req: BuildImageRequest): Promise<AdminImage> {
 
 export function deleteAdminImage(id: string): Promise<void> {
   return request(`/api/admin/images/${id}`, { method: "DELETE" });
+}
+
+// ── api tokens ────────────────────────────────────────────────────────────────
+
+export interface ApiToken {
+  id: string;
+  name: string;
+  created_at: number;
+  last_used_at: number | null;
+}
+
+export interface CreatedApiToken extends ApiToken {
+  token: string;
+}
+
+export function listTokens(): Promise<ApiToken[]> {
+  return request("/api/account/tokens");
+}
+
+export function createToken(name: string): Promise<CreatedApiToken> {
+  return request("/api/account/tokens", {
+    method: "POST",
+    body: JSON.stringify({ name }),
+  });
+}
+
+export function deleteToken(id: string): Promise<void> {
+  return request(`/api/account/tokens/${id}`, { method: "DELETE" });
+}
+
+// ── namespaces ────────────────────────────────────────────────────────────────
+
+export interface Namespace {
+  id: string;
+  slug: string;
+  kind: "personal" | "org";
+  display_name: string | null;
+  owner_id: string;
+  vcpu_limit: number;
+  mem_limit_mb: number;
+  vm_limit: number;
+  created_at: number;
+}
+
+export interface NamespaceMember {
+  account_id: string;
+  username: string;
+  role: string;
+  joined_at: number;
+}
+
+export function listNamespaces(): Promise<Namespace[]> {
+  return request("/api/namespaces");
+}
+
+export function createNamespace(slug: string, display_name?: string): Promise<Namespace> {
+  return request("/api/namespaces", {
+    method: "POST",
+    body: JSON.stringify({ slug, display_name }),
+  });
+}
+
+export function getNamespace(id: string): Promise<Namespace> {
+  return request(`/api/namespaces/${id}`);
+}
+
+export function updateNamespace(id: string, display_name: string): Promise<Namespace> {
+  return request(`/api/namespaces/${id}`, {
+    method: "PATCH",
+    body: JSON.stringify({ display_name }),
+  });
+}
+
+export function listNamespaceMembers(id: string): Promise<NamespaceMember[]> {
+  return request(`/api/namespaces/${id}/members`);
+}
+
+export function addNamespaceMember(id: string, username: string, role: string): Promise<void> {
+  return request(`/api/namespaces/${id}/members`, {
+    method: "POST",
+    body: JSON.stringify({ username, role }),
+  });
+}
+
+export function removeNamespaceMember(id: string, account_id: string): Promise<void> {
+  return request(`/api/namespaces/${id}/members/${account_id}`, { method: "DELETE" });
 }
 
 export { ApiError };

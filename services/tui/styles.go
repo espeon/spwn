@@ -50,7 +50,7 @@ func statusColor(status string) lipgloss.Style {
 	}
 }
 
-func statusDot(status string) string {
+func StatusDot(status string) string {
 	switch status {
 	case "running":
 		return statusColor(status).Render("●")
@@ -62,3 +62,5 @@ func statusDot(status string) string {
 		return statusColor(status).Render("○")
 	}
 }
+
+func statusDot(status string) string { return StatusDot(status) }

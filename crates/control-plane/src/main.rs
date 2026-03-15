@@ -4,7 +4,7 @@ use crate::caddy_router::CaddyRouter;
 use agent_proto::agent::control_plane_server::ControlPlaneServer;
 use anyhow::Context;
 use axum::response::sse::{Event, KeepAlive, Sse};
-use axum::{Extension, routing::get};
+use axum::{Extension, Json, routing::get};
 use router_sync::CaddyClient;
 use tokio_stream::{StreamExt, wrappers::BroadcastStream};
 use tower_http::services::{ServeDir, ServeFile};
@@ -12,7 +12,9 @@ use tracing::info;
 
 mod admin;
 mod caddy_router;
+mod console;
 mod events;
+mod gateway;
 mod migration;
 mod ops;
 mod registration;
@@ -94,7 +96,7 @@ async fn main() -> anyhow::Result<()> {
         event_watcher.watch_host(host.id, host.address).await;
     }
 
-    let ops = Arc::new(ops::ControlPlaneOps {
+    let ops: Arc<dyn api::VmOps> = Arc::new(ops::ControlPlaneOps {
         pool: pool.clone(),
         caddy: caddy.clone(),
     });
@@ -109,7 +111,7 @@ async fn main() -> anyhow::Result<()> {
         invite_code,
         session_ttl_secs,
         public_url,
-        gateway_secret,
+        gateway_secret: gateway_secret.clone(),
         ssh_gateway_addr,
     };
 
@@ -118,12 +120,20 @@ async fn main() -> anyhow::Result<()> {
         caddy: caddy.clone(),
     };
 
+    let gateway_state = gateway::GatewayState {
+        ops: ops.clone(),
+        gateway_secret,
+    };
+
     tokio::spawn(migration::run_drain_watcher(pool.clone(), caddy.clone()));
 
     let http_app = axum::Router::new()
         .merge(auth::auth_router(auth_state))
-        .merge(api::router(ops as Arc<dyn api::VmOps>))
+        .merge(api::router(ops))
         .merge(admin::router(admin_state))
+        .merge(gateway::router(gateway_state))
+        .route("/health", get(health))
+        .route("/api/vms/{id}/console", get(console::vm_console))
         .route("/api/events", get(vm_events_sse))
         .fallback_service(
             ServeDir::new(&frontend_path)
@@ -152,6 +162,10 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
+async fn health() -> Json<serde_json::Value> {
+    Json(serde_json::json!({"status": "ok"}))
+}
+
 async fn vm_events_sse(
     _account_id: auth::AccountId,
     Extension(tx): Extension<events::EventBroadcast>,
@@ -174,55 +188,27 @@ async fn rebuild_caddy_routes(pool: &db::PgPool, caddy: &CaddyRouter) {
         }
     };
 
-    // Group VMs by their host's region so each regional caddy gets only its
-    // own routes. VMs without a host (or whose host has no region label) fall
-    // through to the default caddy.
-    let hosts: HashMap<String, db::HostRow> = db::list_hosts(pool)
-        .await
-        .unwrap_or_default()
+    // Every Caddy instance gets the full route table so that GeoDNS can send
+    // any client to any PoP regardless of where the VM lives.
+    let routes: Vec<router_sync::RouteEntry> = vms
         .into_iter()
-        .map(|h| (h.id.clone(), h))
-        .collect();
-
-    // Collect (caddy_client, RouteEntry) pairs.
-    let mut by_client: HashMap<String, (CaddyClient, Vec<router_sync::RouteEntry>)> =
-        HashMap::new();
-
-    for vm in vms {
-        let host = vm.host_id.as_deref().and_then(|id| hosts.get(id));
-        let client = match host {
-            Some(h) => caddy.for_host(h),
-            None => caddy.for_region(None),
-        };
-        let key = client.base_url().to_string();
-        let target = if vm.status == "running" {
-            router_sync::RouteTarget::Vm {
-                ip: vm.ip_address.clone(),
-                port: vm.exposed_port as u16,
-            }
-        } else {
-            router_sync::RouteTarget::Stopped
-        };
-        by_client
-            .entry(key)
-            .or_insert_with(|| (client, Vec::new()))
-            .1
-            .push(router_sync::RouteEntry {
+        .map(|vm| {
+            let target = if vm.status == "running" {
+                router_sync::RouteTarget::Vm {
+                    ip: vm.ip_address,
+                    port: vm.exposed_port as u16,
+                }
+            } else {
+                router_sync::RouteTarget::Stopped
+            };
+            router_sync::RouteEntry {
                 subdomain: vm.subdomain,
                 target,
-            });
-    }
+            }
+        })
+        .collect();
 
-    // Any caddy instance that has no VMs still needs a rebuild call to clear
-    // stale dynamic config from a previous run.
     for (_, client) in caddy.all_regions() {
-        let key = client.base_url().to_string();
-        by_client
-            .entry(key)
-            .or_insert_with(|| (client.clone(), Vec::new()));
-    }
-
-    for (_, (client, routes)) in by_client {
         if let Err(e) = client.rebuild_all_routes(&routes).await {
             tracing::error!(
                 "failed to rebuild caddy routes for {}: {e}",

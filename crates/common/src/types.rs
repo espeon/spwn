@@ -60,3 +60,37 @@ impl std::fmt::Display for VmStatus {
         write!(f, "{s}")
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_vm_id_new_and_as_str() {
+        let id = VmId::new("abc-123");
+        assert_eq!(id.as_str(), "abc-123");
+        assert_eq!(id.0, "abc-123");
+    }
+
+    #[test]
+    fn test_vm_id_display() {
+        let id = VmId::new("my-vm");
+        assert_eq!(id.to_string(), "my-vm");
+    }
+
+    #[test]
+    fn test_vm_id_equality() {
+        assert_eq!(VmId::new("x"), VmId::new("x"));
+        assert_ne!(VmId::new("x"), VmId::new("y"));
+    }
+
+    #[test]
+    fn test_vm_status_display() {
+        assert_eq!(VmStatus::Stopped.to_string(), "stopped");
+        assert_eq!(VmStatus::Starting.to_string(), "starting");
+        assert_eq!(VmStatus::Running.to_string(), "running");
+        assert_eq!(VmStatus::Snapshotting.to_string(), "snapshotting");
+        assert_eq!(VmStatus::Paused.to_string(), "paused");
+        assert_eq!(VmStatus::Error.to_string(), "error");
+    }
+}

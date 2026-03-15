@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect, useRef } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   listHosts,
@@ -330,48 +330,64 @@ function ImageRow({
   onDelete: (id: string) => void;
 }) {
   const age = useMemo(() => timeAgo(image.created_at), [image.created_at]);
+  const showLog = image.build_log.length > 0 && image.status !== "ready";
+  const logRef = useRef<HTMLPreElement>(null);
+
+  useEffect(() => {
+    if (image.status === "building" && logRef.current) {
+      logRef.current.scrollTop = logRef.current.scrollHeight;
+    }
+  }, [image.build_log, image.status]);
 
   return (
-    <div className="flex items-center justify-between py-2.5 px-3 rounded-md hover:bg-muted/50 text-sm gap-3">
-      <div className="flex items-center gap-3 min-w-0">
-        <IconBox className="size-5 shrink-0 text-muted-foreground opacity-60" />
-        <div className="min-w-0">
-          <div className="flex items-center gap-2 flex-wrap">
-            <span className="font-medium">{image.name}</span>
-            <span className="text-xs font-mono bg-secondary px-1.5 py-0.5 rounded text-muted-foreground">
-              {image.tag}
-            </span>
-            <span
-              className={`text-xs font-medium flex items-center gap-1 ${imageStatusColor(image.status)}`}
-            >
-              {image.status === "building" && (
-                <IconLoader2 className="size-3 animate-spin" />
-              )}
-              {image.status}
-            </span>
-          </div>
-          {image.status === "error" && image.error && (
-            <p className="text-xs text-destructive mt-0.5 break-all">
-              {image.error}
+    <div className="py-2.5 px-3 rounded-md hover:bg-muted/50 text-sm">
+      <div className="flex items-center justify-between gap-3">
+        <div className="flex items-center gap-3 min-w-0">
+          <IconBox className="size-5 shrink-0 text-muted-foreground opacity-60" />
+          <div className="min-w-0">
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="font-medium">{image.name}</span>
+              <span className="text-xs font-mono bg-secondary px-1.5 py-0.5 rounded text-muted-foreground">
+                {image.tag}
+              </span>
+              <span
+                className={`text-xs font-medium flex items-center gap-1 ${imageStatusColor(image.status)}`}
+              >
+                {image.status === "building" && (
+                  <IconLoader2 className="size-3 animate-spin" />
+                )}
+                {image.status}
+              </span>
+            </div>
+            <p className="text-xs text-muted-foreground font-mono truncate mt-0.5">
+              {image.source}
             </p>
-          )}
-          <p className="text-xs text-muted-foreground font-mono truncate mt-0.5">
-            {image.source}
-          </p>
+          </div>
+        </div>
+        <div className="flex items-center gap-4 shrink-0 text-xs text-muted-foreground">
+          <span className="w-16 text-right">{imageSizeLabel(image)}</span>
+          <span className="w-16 text-right">{age}</span>
+          <button
+            onClick={() => onDelete(image.id)}
+            disabled={image.status === "building"}
+            className="p-1 rounded hover:text-destructive transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+            title="delete image"
+          >
+            <IconTrash className="size-3.5" />
+          </button>
         </div>
       </div>
-      <div className="flex items-center gap-4 shrink-0 text-xs text-muted-foreground">
-        <span className="w-16 text-right">{imageSizeLabel(image)}</span>
-        <span className="w-16 text-right">{age}</span>
-        <button
-          onClick={() => onDelete(image.id)}
-          disabled={image.status === "building"}
-          className="p-1 rounded hover:text-destructive transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
-          title="delete image"
+      {showLog && (
+        <pre
+          ref={logRef}
+          className="mt-2 mx-1 text-xs font-mono bg-black/80 text-green-400 rounded p-2.5 max-h-48 overflow-y-auto whitespace-pre-wrap break-all"
         >
-          <IconTrash className="size-3.5" />
-        </button>
-      </div>
+          {image.build_log}
+          {image.status === "building" && (
+            <span className="animate-pulse">▊</span>
+          )}
+        </pre>
+      )}
     </div>
   );
 }
@@ -384,12 +400,11 @@ function ImagesPanel() {
   const [tag, setTag] = useState("");
   const [formError, setFormError] = useState<string | null>(null);
 
-  const hasBuilding = true; // always poll while panel is mounted; cheap
-
   const { data: images = [], isLoading } = useQuery({
     queryKey: ["admin", "images"],
     queryFn: listAdminImages,
-    refetchInterval: hasBuilding ? 4_000 : false,
+    refetchInterval: (q) =>
+      q.state.data?.some((i) => i.status === "building") ? 1_500 : 5_000,
   });
 
   const buildMutation = useMutation({

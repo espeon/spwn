@@ -21,6 +21,9 @@ import { CliAuthPage } from "./pages/CliAuthPage";
 import HomePage from "./pages/HomePage";
 import { AdminPage } from "./pages/AdminPage";
 import { ImagesPage } from "./pages/ImagesPage";
+import { TokensPage } from "./pages/TokensPage";
+import { NamespacesPage } from "./pages/NamespacesPage";
+import { NamespaceDetailPage } from "./pages/NamespaceDetailPage";
 
 const rootRoute = createRootRoute({
   component: RootLayout,
@@ -137,6 +140,24 @@ const accountSshKeysRoute = createRoute({
   component: SshKeysPage,
 });
 
+const accountTokensRoute = createRoute({
+  getParentRoute: () => accountRoute,
+  path: "/tokens",
+  component: TokensPage,
+});
+
+const namespacesRoute = createRoute({
+  getParentRoute: () => authedRoute,
+  path: "/namespaces",
+  component: NamespacesPage,
+});
+
+const namespaceDetailRoute = createRoute({
+  getParentRoute: () => authedRoute,
+  path: "/namespaces/$nsId",
+  component: NamespaceDetailPage,
+});
+
 const adminRoute = createRoute({
   getParentRoute: () => authedRoute,
   path: "/admin",
@@ -162,12 +183,15 @@ const routeTree = rootRoute.addChildren([
     vmListRoute,
     vmDetailRoute,
     imagesRoute,
+    namespacesRoute,
+    namespaceDetailRoute,
     adminRoute,
     accountRoute.addChildren([
       accountIndexRoute,
       accountIdentityRoute,
       accountThemesRoute,
       accountSshKeysRoute,
+      accountTokensRoute,
     ]),
   ]),
 ]);

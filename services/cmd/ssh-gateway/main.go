@@ -93,16 +93,12 @@ func looksLikeUUID(s string) bool {
 	return len(s) == 36 && strings.Count(s, "-") == 4
 }
 
-func (cfg *gatewayConfig) lookupVM(username, accountUsername string) (*vmLookupResponse, error) {
+func (cfg *gatewayConfig) lookupVM(username string) (*vmLookupResponse, error) {
 	var query string
 	if looksLikeUUID(username) {
 		query = "vm_id=" + neturl.QueryEscape(username)
-	} else if strings.Contains(username, ".") {
-		query = "subdomain=" + neturl.QueryEscape(username)
-	} else if accountUsername != "" {
-		query = "subdomain=" + neturl.QueryEscape(username+"."+accountUsername)
 	} else {
-		query = "vm_id=" + neturl.QueryEscape(username)
+		query = "subdomain=" + neturl.QueryEscape(username)
 	}
 	url := fmt.Sprintf("%s/internal/gateway/vm?%s", cfg.controlPlaneURL, query)
 	log.Printf("lookupVM: url=%s", url)
@@ -220,7 +216,7 @@ func sessionMiddleware(cfg *gatewayConfig) wish.Middleware {
 		return func(s cssh.Session) {
 			username := s.User()
 			remoteAddr := s.RemoteAddr().String()
-			command := strings.Join(s.Command(), " ")
+			let's try something like global identity search? i think that would actually be pretty difficult tbhcommand := strings.Join(s.Command(), " ")
 
 			log.Printf("session: remote=%s ssh_user=%q command=%q", remoteAddr, username, command)
 
@@ -262,10 +258,10 @@ func sessionMiddleware(cfg *gatewayConfig) wish.Middleware {
 				return
 			}
 
-			log.Printf("session: looking up vm ssh_user=%q account_username=%q", username, accountUsername)
-			vm, err := cfg.lookupVM(username, accountUsername)
+			log.Printf("session: looking up vm ssh_user=%q", username)
+			vm, err := cfg.lookupVM(username)
 			if err != nil {
-				log.Printf("session: vm lookup failed ssh_user=%q account_username=%q err=%v", username, accountUsername, err)
+				log.Printf("session: vm lookup failed ssh_user=%q err=%v", username, err)
 				fmt.Fprintf(s.Stderr(), "error: %v\r\n", err)
 				_ = s.Exit(1)
 				return
@@ -282,6 +278,7 @@ func sessionMiddleware(cfg *gatewayConfig) wish.Middleware {
 			log.Printf("session: relaying vm_id=%s command=%q", vm.VMID, command)
 			if err := relayConsole(s.Context(), vm.HostAgentAddr, vm.VMID, command, s); err != nil {
 				log.Printf("relay ended: vm=%s err=%v", vm.VMID, err)
+				fmt.Fprintf(s.Stderr(), "relay error: %v\r\n", err)
 				_ = s.Exit(1)
 			} else {
 				log.Printf("relay ended: vm=%s clean", vm.VMID)

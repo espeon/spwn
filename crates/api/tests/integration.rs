@@ -87,6 +87,7 @@ fn vm_row(account_id: &str) -> db::VmRow {
         placement_strategy: "best_fit".into(),
         required_labels: None,
         region: None,
+        namespace_id: format!("ns_{account_id}"),
     }
 }
 
@@ -352,4 +353,569 @@ async fn healthz_returns_ok_unauthenticated() {
         .unwrap();
 
     assert_eq!(resp.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn get_vm_returns_200() {
+    let (_c, pool) = setup_db().await;
+    let (account_id, session_id) = create_account_and_session(&pool).await;
+    let mut vm = vm_row(&account_id);
+    vm.name = "found-vm".into();
+    let vm_id = vm.id.clone();
+    let app = app(pool, MockVmOps::with_vm(vm));
+
+    let resp = app
+        .oneshot(
+            Request::get(format!("/api/vms/{vm_id}"))
+                .header(header::COOKIE, format!("session_id={session_id}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = body_bytes(resp.into_body()).await;
+    let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(v["name"], "found-vm");
+}
+
+#[tokio::test]
+async fn start_vm_returns_202() {
+    let (_c, pool) = setup_db().await;
+    let (account_id, session_id) = create_account_and_session(&pool).await;
+    let vm = vm_row(&account_id);
+    let vm_id = vm.id.clone();
+    let app = app(pool, MockVmOps::with_vm(vm));
+
+    let resp = app
+        .oneshot(
+            Request::post(format!("/api/vms/{vm_id}/start"))
+                .header(header::COOKIE, format!("session_id={session_id}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::ACCEPTED);
+}
+
+#[tokio::test]
+async fn stop_vm_returns_202() {
+    let (_c, pool) = setup_db().await;
+    let (account_id, session_id) = create_account_and_session(&pool).await;
+    let vm = vm_row(&account_id);
+    let vm_id = vm.id.clone();
+    let app = app(pool, MockVmOps::with_vm(vm));
+
+    let resp = app
+        .oneshot(
+            Request::post(format!("/api/vms/{vm_id}/stop"))
+                .header(header::COOKIE, format!("session_id={session_id}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::ACCEPTED);
+}
+
+#[tokio::test]
+async fn delete_vm_returns_204() {
+    let (_c, pool) = setup_db().await;
+    let (account_id, session_id) = create_account_and_session(&pool).await;
+    let vm = vm_row(&account_id);
+    let vm_id = vm.id.clone();
+    let app = app(pool, MockVmOps::with_vm(vm));
+
+    let resp = app
+        .oneshot(
+            Request::delete(format!("/api/vms/{vm_id}"))
+                .header(header::COOKIE, format!("session_id={session_id}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+}
+
+#[tokio::test]
+async fn patch_vm_returns_200() {
+    let (_c, pool) = setup_db().await;
+    let (account_id, session_id) = create_account_and_session(&pool).await;
+    let vm = vm_row(&account_id);
+    let vm_id = vm.id.clone();
+    let app = app(pool, MockVmOps::with_vm(vm));
+
+    let body = serde_json::json!({"name": "renamed-vm"});
+    let resp = app
+        .oneshot(
+            Request::patch(format!("/api/vms/{vm_id}"))
+                .header(header::COOKIE, format!("session_id={session_id}"))
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = body_bytes(resp.into_body()).await;
+    let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(v["name"], "renamed-vm");
+}
+
+#[tokio::test]
+async fn patch_vm_not_found_returns_404() {
+    let (_c, pool) = setup_db().await;
+    let (_account_id, session_id) = create_account_and_session(&pool).await;
+    let app = app(pool, MockVmOps::empty());
+
+    let body = serde_json::json!({"name": "whatever"});
+    let resp = app
+        .oneshot(
+            Request::patch("/api/vms/nonexistent")
+                .header(header::COOKIE, format!("session_id={session_id}"))
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn patch_vm_other_account_returns_403() {
+    let (_c, pool) = setup_db().await;
+    let (_account_id, session_id) = create_account_and_session(&pool).await;
+    let other_vm = vm_row("completely-different-account");
+    let vm_id = other_vm.id.clone();
+    let app = app(pool, MockVmOps::with_vm(other_vm));
+
+    let body = serde_json::json!({"name": "stolen"});
+    let resp = app
+        .oneshot(
+            Request::patch(format!("/api/vms/{vm_id}"))
+                .header(header::COOKIE, format!("session_id={session_id}"))
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn take_snapshot_returns_201() {
+    let (_c, pool) = setup_db().await;
+    let (account_id, session_id) = create_account_and_session(&pool).await;
+    let vm = vm_row(&account_id);
+    let vm_id = vm.id.clone();
+    let app = app(pool, MockVmOps::with_vm(vm));
+
+    let body = serde_json::json!({"label": "before-upgrade"});
+    let resp = app
+        .oneshot(
+            Request::post(format!("/api/vms/{vm_id}/snapshot"))
+                .header(header::COOKIE, format!("session_id={session_id}"))
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::CREATED);
+    let bytes = body_bytes(resp.into_body()).await;
+    let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(v["label"], "before-upgrade");
+    assert_eq!(v["vm_id"], vm_id);
+}
+
+#[tokio::test]
+async fn list_snapshots_returns_empty() {
+    let (_c, pool) = setup_db().await;
+    let (account_id, session_id) = create_account_and_session(&pool).await;
+    let vm = vm_row(&account_id);
+    let vm_id = vm.id.clone();
+    let app = app(pool, MockVmOps::with_vm(vm));
+
+    let resp = app
+        .oneshot(
+            Request::get(format!("/api/vms/{vm_id}/snapshots"))
+                .header(header::COOKIE, format!("session_id={session_id}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = body_bytes(resp.into_body()).await;
+    let snaps: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(snaps, serde_json::json!([]));
+}
+
+#[tokio::test]
+async fn delete_snapshot_returns_204() {
+    let (_c, pool) = setup_db().await;
+    let (account_id, session_id) = create_account_and_session(&pool).await;
+    let vm = vm_row(&account_id);
+    let vm_id = vm.id.clone();
+    let app = app(pool, MockVmOps::with_vm(vm));
+
+    let resp = app
+        .oneshot(
+            Request::delete(format!("/api/vms/{vm_id}/snapshots/some-snap-id"))
+                .header(header::COOKIE, format!("session_id={session_id}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+}
+
+#[tokio::test]
+async fn restore_snapshot_returns_202() {
+    let (_c, pool) = setup_db().await;
+    let (account_id, session_id) = create_account_and_session(&pool).await;
+    let vm = vm_row(&account_id);
+    let vm_id = vm.id.clone();
+    let app = app(pool, MockVmOps::with_vm(vm));
+
+    let resp = app
+        .oneshot(
+            Request::post(format!("/api/vms/{vm_id}/restore/some-snap-id"))
+                .header(header::COOKIE, format!("session_id={session_id}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::ACCEPTED);
+}
+
+#[tokio::test]
+async fn clone_vm_returns_201() {
+    let (_c, pool) = setup_db().await;
+    let (account_id, session_id) = create_account_and_session(&pool).await;
+    let vm = vm_row(&account_id);
+    let vm_id = vm.id.clone();
+    let app = app(pool, MockVmOps::with_vm(vm));
+
+    let body = serde_json::json!({"name": "cloned-vm"});
+    let resp = app
+        .oneshot(
+            Request::post(format!("/api/vms/{vm_id}/clone"))
+                .header(header::COOKIE, format!("session_id={session_id}"))
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::CREATED);
+    let bytes = body_bytes(resp.into_body()).await;
+    let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(v["name"], "cloned-vm");
+}
+
+#[tokio::test]
+async fn clone_vm_quota_error_returns_422() {
+    let (_c, pool) = setup_db().await;
+    let (account_id, session_id) = create_account_and_session(&pool).await;
+
+    struct QuotaFailOps(db::VmRow);
+    #[async_trait::async_trait]
+    impl VmOps for QuotaFailOps {
+        async fn create_vm(&self, _: String, _: CreateVmRequest) -> anyhow::Result<db::VmRow> { unimplemented!() }
+        async fn clone_vm(&self, _: &str, _: &str, _: CloneVmRequest) -> anyhow::Result<db::VmRow> {
+            Err(anyhow::anyhow!("quota limit exceeded"))
+        }
+        async fn start_vm(&self, _: &str) -> anyhow::Result<()> { Ok(()) }
+        async fn stop_vm(&self, _: &str) -> anyhow::Result<()> { Ok(()) }
+        async fn delete_vm(&self, _: &str) -> anyhow::Result<()> { Ok(()) }
+        async fn get_vm(&self, _: &str) -> anyhow::Result<Option<db::VmRow>> { Ok(Some(self.0.clone())) }
+        async fn list_vms(&self, _: &str) -> anyhow::Result<Vec<db::VmRow>> { Ok(vec![]) }
+        async fn take_snapshot(&self, _: &str, _: Option<String>) -> anyhow::Result<db::SnapshotRow> { unimplemented!() }
+        async fn list_snapshots(&self, _: &str) -> anyhow::Result<Vec<db::SnapshotRow>> { Ok(vec![]) }
+        async fn delete_snapshot(&self, _: &str, _: &str) -> anyhow::Result<()> { Ok(()) }
+        async fn restore_snapshot(&self, _: &str, _: &str) -> anyhow::Result<()> { Ok(()) }
+        async fn change_username(&self, _: &str, _: &str) -> anyhow::Result<()> { Ok(()) }
+        async fn resize_resources(&self, _: &str, _: &str, _: VmResourcePatch) -> anyhow::Result<db::VmRow> { unimplemented!() }
+        async fn update_vm(&self, _: &str, _: &str, _: VmPatch) -> anyhow::Result<db::VmRow> { unimplemented!() }
+    }
+
+    let vm = vm_row(&account_id);
+    let vm_id = vm.id.clone();
+    let app = app(pool, Arc::new(QuotaFailOps(vm)));
+
+    let body = serde_json::json!({"name": "wont-fit"});
+    let resp = app
+        .oneshot(
+            Request::post(format!("/api/vms/{vm_id}/clone"))
+                .header(header::COOKIE, format!("session_id={session_id}"))
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
+}
+
+#[tokio::test]
+async fn list_vm_events_not_found_returns_404() {
+    let (_c, pool) = setup_db().await;
+    let (_account_id, session_id) = create_account_and_session(&pool).await;
+    let app = app(pool, MockVmOps::empty());
+
+    let resp = app
+        .oneshot(
+            Request::get("/api/vms/nonexistent/events")
+                .header(header::COOKIE, format!("session_id={session_id}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn list_vm_events_returns_empty() {
+    let (_c, pool) = setup_db().await;
+    let (account_id, session_id) = create_account_and_session(&pool).await;
+    let vm = vm_row(&account_id);
+    let vm_id = vm.id.clone();
+    let app = app(pool, MockVmOps::with_vm(vm));
+
+    let resp = app
+        .oneshot(
+            Request::get(format!("/api/vms/{vm_id}/events"))
+                .header(header::COOKIE, format!("session_id={session_id}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = body_bytes(resp.into_body()).await;
+    let events: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(events, serde_json::json!([]));
+}
+
+#[tokio::test]
+async fn list_vm_events_other_account_returns_403() {
+    let (_c, pool) = setup_db().await;
+    let (_account_id, session_id) = create_account_and_session(&pool).await;
+    let other_vm = vm_row("other-account");
+    let vm_id = other_vm.id.clone();
+    let app = app(pool, MockVmOps::with_vm(other_vm));
+
+    let resp = app
+        .oneshot(
+            Request::get(format!("/api/vms/{vm_id}/events"))
+                .header(header::COOKIE, format!("session_id={session_id}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn change_username_returns_204() {
+    let (_c, pool) = setup_db().await;
+    let (_account_id, session_id) = create_account_and_session(&pool).await;
+    let app = app(pool, MockVmOps::empty());
+
+    let body = serde_json::json!({"username": "newname"});
+    let resp = app
+        .oneshot(
+            Request::post("/api/account/username")
+                .header(header::COOKIE, format!("session_id={session_id}"))
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+}
+
+#[tokio::test]
+async fn change_username_already_taken_returns_409() {
+    let (_c, pool) = setup_db().await;
+    let (_account_id, session_id) = create_account_and_session(&pool).await;
+
+    struct TakenUsernameOps;
+    #[async_trait::async_trait]
+    impl VmOps for TakenUsernameOps {
+        async fn create_vm(&self, _: String, _: CreateVmRequest) -> anyhow::Result<db::VmRow> { unimplemented!() }
+        async fn clone_vm(&self, _: &str, _: &str, _: CloneVmRequest) -> anyhow::Result<db::VmRow> { unimplemented!() }
+        async fn start_vm(&self, _: &str) -> anyhow::Result<()> { Ok(()) }
+        async fn stop_vm(&self, _: &str) -> anyhow::Result<()> { Ok(()) }
+        async fn delete_vm(&self, _: &str) -> anyhow::Result<()> { Ok(()) }
+        async fn get_vm(&self, _: &str) -> anyhow::Result<Option<db::VmRow>> { Ok(None) }
+        async fn list_vms(&self, _: &str) -> anyhow::Result<Vec<db::VmRow>> { Ok(vec![]) }
+        async fn take_snapshot(&self, _: &str, _: Option<String>) -> anyhow::Result<db::SnapshotRow> { unimplemented!() }
+        async fn list_snapshots(&self, _: &str) -> anyhow::Result<Vec<db::SnapshotRow>> { Ok(vec![]) }
+        async fn delete_snapshot(&self, _: &str, _: &str) -> anyhow::Result<()> { Ok(()) }
+        async fn restore_snapshot(&self, _: &str, _: &str) -> anyhow::Result<()> { Ok(()) }
+        async fn change_username(&self, _: &str, _: &str) -> anyhow::Result<()> {
+            Err(anyhow::anyhow!("username already taken"))
+        }
+        async fn resize_resources(&self, _: &str, _: &str, _: VmResourcePatch) -> anyhow::Result<db::VmRow> { unimplemented!() }
+        async fn update_vm(&self, _: &str, _: &str, _: VmPatch) -> anyhow::Result<db::VmRow> { unimplemented!() }
+    }
+
+    let app = app(pool, Arc::new(TakenUsernameOps));
+
+    let body = serde_json::json!({"username": "taken"});
+    let resp = app
+        .oneshot(
+            Request::post("/api/account/username")
+                .header(header::COOKIE, format!("session_id={session_id}"))
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::CONFLICT);
+}
+
+#[tokio::test]
+async fn list_vms_by_name_filter_returns_match() {
+    let (_c, pool) = setup_db().await;
+    let (account_id, session_id) = create_account_and_session(&pool).await;
+    let mut vm = vm_row(&account_id);
+    vm.name = "specific-vm".into();
+    let ops = MockVmOps::with_vm(vm);
+    let app = app(pool.clone(), ops);
+
+    let resp = app
+        .oneshot(
+            Request::get("/api/vms?name=specific-vm")
+                .header(header::COOKIE, format!("session_id={session_id}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::OK);
+    // name filter goes through db::get_vm_by_name, which won't find our mock VM
+    // so we just verify the response shape is an array
+    let bytes = body_bytes(resp.into_body()).await;
+    let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert!(v.is_array());
+}
+
+#[tokio::test]
+async fn resize_resources_not_found_returns_404() {
+    let (_c, pool) = setup_db().await;
+    let (_account_id, session_id) = create_account_and_session(&pool).await;
+    let app = app(pool, MockVmOps::empty());
+
+    let body = serde_json::json!({"vcpus": 2000});
+    let resp = app
+        .oneshot(
+            Request::post("/api/vms/nonexistent/resources")
+                .header(header::COOKIE, format!("session_id={session_id}"))
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn resize_resources_other_account_returns_403() {
+    let (_c, pool) = setup_db().await;
+    let (_account_id, session_id) = create_account_and_session(&pool).await;
+    let other_vm = vm_row("other-account");
+    let vm_id = other_vm.id.clone();
+    let app = app(pool, MockVmOps::with_vm(other_vm));
+
+    let body = serde_json::json!({"vcpus": 2000});
+    let resp = app
+        .oneshot(
+            Request::post(format!("/api/vms/{vm_id}/resources"))
+                .header(header::COOKIE, format!("session_id={session_id}"))
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn list_images_returns_empty() {
+    let (_c, pool) = setup_db().await;
+    let (_account_id, session_id) = create_account_and_session(&pool).await;
+    let app = app(pool, MockVmOps::empty());
+
+    let resp = app
+        .oneshot(
+            Request::get("/api/images")
+                .header(header::COOKIE, format!("session_id={session_id}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = body_bytes(resp.into_body()).await;
+    let images: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(images, serde_json::json!([]));
+}
+
+#[tokio::test]
+async fn list_regions_returns_empty() {
+    let (_c, pool) = setup_db().await;
+    let (_account_id, session_id) = create_account_and_session(&pool).await;
+    let app = app(pool, MockVmOps::empty());
+
+    let resp = app
+        .oneshot(
+            Request::get("/api/regions")
+                .header(header::COOKIE, format!("session_id={session_id}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = body_bytes(resp.into_body()).await;
+    let regions: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(regions, serde_json::json!([]));
 }

@@ -43,6 +43,7 @@ struct LoginRequest {
 #[derive(Deserialize)]
 struct UpdateProfileRequest {
     display_name: Option<String>,
+    dotfiles_repo: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -62,6 +63,7 @@ struct MeResponse {
     vcpu_limit: i64,
     mem_limit_mb: i32,
     role: String,
+    dotfiles_repo: Option<String>,
 }
 
 pub fn auth_router(state: AuthState) -> Router {
@@ -81,12 +83,15 @@ pub fn auth_router(state: AuthState) -> Router {
         .route("/auth/cli/deny", post(cli_deny))
         .route("/api/account/keys", get(list_ssh_keys).post(add_ssh_key))
         .route("/api/account/keys/{id}", delete(delete_ssh_key))
+        .route("/api/account/tokens", get(list_tokens).post(create_token))
+        .route("/api/account/tokens/{id}", delete(delete_token))
         .route(
             "/internal/gateway/auth/password",
             post(gateway_auth_password),
         )
         .route("/internal/gateway/auth/pubkey", post(gateway_auth_pubkey))
         .route("/internal/gateway/vm", get(gateway_lookup_vm))
+        .route("/internal/gateway/vms", get(gateway_list_vms))
         .with_state(state)
 }
 
@@ -312,17 +317,43 @@ async fn signup(
         created_at: now,
     };
 
+    let account_id = account.id.clone();
+    let username = account.username.clone();
+
     match db::create_account(&state.pool, &account).await {
-        Ok(_) => StatusCode::CREATED.into_response(),
+        Ok(_) => {}
         Err(e) => {
             let msg = e.to_string();
-            if msg.contains("unique") || msg.contains("duplicate") {
+            return if msg.contains("unique") || msg.contains("duplicate") {
                 (StatusCode::BAD_REQUEST, "email or username already taken").into_response()
             } else {
                 StatusCode::INTERNAL_SERVER_ERROR.into_response()
-            }
+            };
         }
     }
+
+    let ns_id = format!("ns_{account_id}");
+    let ns = db::NewNamespace {
+        id: ns_id.clone(),
+        slug: username.clone(),
+        kind: "personal".into(),
+        display_name: Some(username),
+        owner_id: account_id.clone(),
+        vcpu_limit: 8000,
+        mem_limit_mb: 12288,
+        vm_limit: 5,
+        created_at: now,
+    };
+    if let Err(e) = db::create_namespace(&state.pool, &ns).await {
+        tracing::error!("failed to create personal namespace for {account_id}: {e:#}");
+        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+    }
+    if let Err(e) = db::add_namespace_member(&state.pool, &ns_id, &account_id, "owner").await {
+        tracing::error!("failed to add owner to namespace {ns_id}: {e:#}");
+        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+    }
+
+    StatusCode::CREATED.into_response()
 }
 
 async fn login(
@@ -386,6 +417,7 @@ async fn me(State(state): State<AuthState>, account_id: AccountId) -> impl IntoR
             vcpu_limit: acc.vcpu_limit,
             mem_limit_mb: acc.mem_limit_mb,
             role: acc.role,
+            dotfiles_repo: acc.dotfiles_repo,
         })
         .into_response(),
         Ok(None) => StatusCode::UNAUTHORIZED.into_response(),
@@ -419,6 +451,7 @@ async fn update_profile(
     let update = db::UpdateAccountProfile {
         display_name: req.display_name,
         avatar_bytes: acc.avatar_bytes,
+        dotfiles_repo: req.dotfiles_repo.or(acc.dotfiles_repo),
     };
 
     match db::update_account_profile(&state.pool, &account_id.0, &update).await {
@@ -464,6 +497,7 @@ async fn upload_avatar(
     let update = db::UpdateAccountProfile {
         display_name: acc.display_name,
         avatar_bytes: Some(resized),
+        dotfiles_repo: acc.dotfiles_repo,
     };
 
     match db::update_account_profile(&state.pool, &account_id.0, &update).await {
@@ -813,6 +847,146 @@ async fn gateway_lookup_vm(
         exposed_port: vm.exposed_port,
     })
     .into_response()
+}
+
+#[derive(Deserialize)]
+struct GatewayListVmsQuery {
+    account_id: String,
+}
+
+#[derive(Serialize)]
+struct GatewayVmItem {
+    id: String,
+    name: String,
+    status: String,
+    subdomain: String,
+}
+
+async fn gateway_list_vms(
+    State(state): State<AuthState>,
+    headers: HeaderMap,
+    Query(q): Query<GatewayListVmsQuery>,
+) -> impl IntoResponse {
+    if !check_gateway_secret(&state, &headers) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    match db::list_vms(&state.pool, &q.account_id).await {
+        Ok(vms) => Json(
+            vms.into_iter()
+                .map(|v| GatewayVmItem {
+                    id: v.id,
+                    name: v.name,
+                    status: v.status,
+                    subdomain: v.subdomain,
+                })
+                .collect::<Vec<_>>(),
+        )
+        .into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+// ── API tokens ────────────────────────────────────────────────────────────────
+
+#[derive(Serialize)]
+struct ApiTokenResponse {
+    id: String,
+    name: String,
+    created_at: i64,
+    last_used_at: Option<i64>,
+}
+
+impl From<db::ApiTokenRow> for ApiTokenResponse {
+    fn from(r: db::ApiTokenRow) -> Self {
+        ApiTokenResponse {
+            id: r.id,
+            name: r.name,
+            created_at: r.created_at,
+            last_used_at: r.last_used_at,
+        }
+    }
+}
+
+#[derive(Serialize)]
+struct CreateApiTokenResponse {
+    id: String,
+    name: String,
+    token: String,
+    created_at: i64,
+}
+
+#[derive(Deserialize)]
+struct CreateTokenRequest {
+    name: String,
+}
+
+async fn list_tokens(
+    State(state): State<AuthState>,
+    account_id: AccountId,
+) -> impl IntoResponse {
+    match db::list_api_tokens(&state.pool, &account_id.0).await {
+        Ok(tokens) => {
+            let resp: Vec<ApiTokenResponse> = tokens.into_iter().map(Into::into).collect();
+            (StatusCode::OK, Json(resp)).into_response()
+        }
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
+async fn create_token(
+    State(state): State<AuthState>,
+    account_id: AccountId,
+    Json(req): Json<CreateTokenRequest>,
+) -> impl IntoResponse {
+    let raw_token = format!("spwn_tok_{}", Uuid::new_v4().simple());
+    let token_hash = hex::encode(Sha256::digest(raw_token.as_bytes()));
+    let new_token = db::NewApiToken {
+        id: Uuid::new_v4().to_string(),
+        account_id: account_id.0.clone(),
+        token_hash,
+        name: req.name.clone(),
+    };
+    match db::create_api_token(&state.pool, &new_token).await {
+        Ok(row) => (
+            StatusCode::CREATED,
+            Json(CreateApiTokenResponse {
+                id: row.id,
+                name: row.name,
+                token: raw_token,
+                created_at: row.created_at,
+            }),
+        )
+            .into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
+async fn delete_token(
+    State(state): State<AuthState>,
+    account_id: AccountId,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    match db::delete_api_token(&state.pool, &id, &account_id.0).await {
+        Ok(true) => StatusCode::NO_CONTENT.into_response(),
+        Ok(false) => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "error": "token not found" })),
+        )
+            .into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response(),
+    }
 }
 
 // exposed for tests only

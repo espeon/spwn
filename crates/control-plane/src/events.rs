@@ -5,7 +5,7 @@ use agent_proto::agent::{WatchRequest, host_agent_client::HostAgentClient};
 use serde::Serialize;
 use tokio::sync::{Mutex, broadcast};
 use tonic::transport::Channel;
-use tracing::{error, info, warn};
+use tracing::{info, warn};
 
 use crate::caddy_router::CaddyRouter;
 
@@ -108,33 +108,27 @@ async fn connect_and_stream(
             "started" => {
                 if let Ok(Some(vm)) = db::get_vm(pool, vm_id).await {
                     db::set_vm_status(pool, vm_id, "running").await.ok();
-                    let client = caddy_for_vm(caddy, pool, &vm).await;
-                    if let Err(e) = client
-                        .set_vm_route(&vm.subdomain, &vm.ip_address, vm.exposed_port as u16)
-                        .await
-                    {
-                        error!("failed to set caddy route for {vm_id}: {e}");
-                    }
+                    caddy
+                        .broadcast_set_vm_route(
+                            &vm.subdomain,
+                            &vm.ip_address,
+                            vm.exposed_port as u16,
+                        )
+                        .await;
                 }
                 Some("running")
             }
             "stopped" => {
                 if let Ok(Some(vm)) = db::get_vm(pool, vm_id).await {
                     db::set_vm_status(pool, vm_id, "stopped").await.ok();
-                    let client = caddy_for_vm(caddy, pool, &vm).await;
-                    if let Err(e) = client.set_stopped_route(&vm.subdomain).await {
-                        error!("failed to set stopped caddy route for {vm_id}: {e}");
-                    }
+                    caddy.broadcast_set_stopped_route(&vm.subdomain).await;
                 }
                 Some("stopped")
             }
             "crashed" => {
                 if let Ok(Some(vm)) = db::get_vm(pool, vm_id).await {
                     db::set_vm_status(pool, vm_id, "error").await.ok();
-                    let client = caddy_for_vm(caddy, pool, &vm).await;
-                    if let Err(e) = client.set_stopped_route(&vm.subdomain).await {
-                        error!("failed to update caddy route for crashed {vm_id}: {e}");
-                    }
+                    caddy.broadcast_set_stopped_route(&vm.subdomain).await;
                 }
                 Some("error")
             }
@@ -154,18 +148,3 @@ async fn connect_and_stream(
     Ok(())
 }
 
-// Resolve the correct CaddyClient for a VM by looking up its host's region.
-async fn caddy_for_vm(
-    caddy: &CaddyRouter,
-    pool: &db::PgPool,
-    vm: &db::VmRow,
-) -> router_sync::CaddyClient {
-    let host = match vm.host_id.as_deref() {
-        Some(id) => db::get_host(pool, id).await.ok().flatten(),
-        None => None,
-    };
-    match &host {
-        Some(h) => caddy.for_host(h),
-        None => caddy.for_region(None),
-    }
-}

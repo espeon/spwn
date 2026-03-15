@@ -30,6 +30,8 @@
     "@tanstack/react-query-devtools": "^5.91.3",
     "@tanstack/react-router": "^1.166.3",
     "@tanstack/router-devtools": "^1.166.3",
+    "@xterm/addon-fit": "^0.11.0",
+    "@xterm/xterm": "^6.0.0",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "lucide-react": "^0.577.0",

@@ -12,6 +12,7 @@ import {
 import { IconGalaxy } from "@tabler/icons-react";
 import { Link } from "@tanstack/react-router";
 import { NavUser } from "@/components/NavUser";
+import { NamespaceSwitcher } from "@/components/NamespaceSwitcher";
 import { useQuery } from "@tanstack/react-query";
 import { getMe } from "@/api";
 
@@ -35,6 +36,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
             </Link>
           </SidebarMenuItem>
         </SidebarMenu>
+        <NamespaceSwitcher />
       </SidebarHeader>
       <SidebarContent>
         <SidebarGroup>

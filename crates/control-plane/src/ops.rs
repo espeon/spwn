@@ -1,14 +1,12 @@
 use anyhow::anyhow;
 use async_trait::async_trait;
 use tonic::transport::Channel;
-use tracing::{error, warn};
 
 use agent_proto::agent::{
     CloneVmRequest, CreateVmRequest, DeleteVmRequest, ResizeBandwidthRequest, ResizeCpuRequest,
     RestoreRequest, StartVmRequest, StopVmRequest, TakeSnapshotRequest,
     host_agent_client::HostAgentClient,
 };
-use router_sync::CaddyClient;
 
 use crate::{caddy_router::CaddyRouter, scheduler, subdomain};
 
@@ -18,15 +16,6 @@ pub struct ControlPlaneOps {
 }
 
 impl ControlPlaneOps {
-    async fn caddy_for_vm(&self, vm: &db::VmRow) -> CaddyClient {
-        if let Some(host_id) = &vm.host_id {
-            if let Ok(Some(h)) = db::get_host(&self.pool, host_id).await {
-                return self.caddy.for_host(&h);
-            }
-        }
-        self.caddy.for_region(None)
-    }
-
     async fn agent_client(&self, vm_id: &str) -> anyhow::Result<HostAgentClient<Channel>> {
         let vm = db::get_vm(&self.pool, vm_id)
             .await?
@@ -49,9 +38,15 @@ impl api::VmOps for ControlPlaneOps {
         account_id: String,
         req: api::CreateVmRequest,
     ) -> anyhow::Result<db::VmRow> {
-        let account = db::get_account(&self.pool, &account_id)
-            .await?
-            .ok_or_else(|| anyhow!("account not found: {account_id}"))?;
+        let namespace = if let Some(ref ns_id) = req.namespace_id {
+            db::get_namespace(&self.pool, ns_id)
+                .await?
+                .ok_or_else(|| anyhow!("namespace not found: {ns_id}"))?
+        } else {
+            db::get_personal_namespace(&self.pool, &account_id)
+                .await?
+                .ok_or_else(|| anyhow!("personal namespace not found for account: {account_id}"))?
+        };
 
         let (image_name, image_tag) = match req.image.split_once(':') {
             Some((n, t)) => (n, t),
@@ -94,7 +89,7 @@ impl api::VmOps for ControlPlaneOps {
         let used_ips = db::get_used_ips_for_host(&self.pool, &host.id).await?;
         let slot = scheduler::next_free_slot(&used_ips);
         let ip_address = format!("172.16.{slot}.2");
-        let sub = subdomain::generate(&self.pool, &req.name, &account.username).await?;
+        let sub = subdomain::generate(&self.pool, &req.name).await?;
 
         let channel = Channel::from_shared(host.address.clone())?
             .connect()
@@ -114,6 +109,7 @@ impl api::VmOps for ControlPlaneOps {
                 bandwidth_mbps: req.bandwidth_mbps,
                 exposed_port: req.exposed_port,
                 ip_address,
+                namespace_id: namespace.id,
             })
             .await?
             .into_inner();
@@ -136,11 +132,7 @@ impl api::VmOps for ControlPlaneOps {
             .await?
             .ok_or_else(|| anyhow!("vm {vm_id} not found after creation"))?;
 
-        let _ = self
-            .caddy
-            .for_host(&host)
-            .set_stopped_route(&vm.subdomain)
-            .await;
+        self.caddy.broadcast_set_stopped_route(&vm.subdomain).await;
         Ok(vm)
     }
 
@@ -151,14 +143,14 @@ impl api::VmOps for ControlPlaneOps {
 
         // quota check + atomic status='starting' in a serializable tx
         let result =
-            db::check_quota_and_reserve(&self.pool, &vm.account_id, id, vm.vcpus, vm.memory_mb)
+            db::check_quota_and_reserve(&self.pool, &vm.namespace_id, id, vm.vcpus, vm.memory_mb)
                 .await;
 
         match result {
             Ok(()) => {}
             Err(db::QuotaError::Serialization) => {
                 // retry once on serialization conflict
-                db::check_quota_and_reserve(&self.pool, &vm.account_id, id, vm.vcpus, vm.memory_mb)
+                db::check_quota_and_reserve(&self.pool, &vm.namespace_id, id, vm.vcpus, vm.memory_mb)
                     .await
                     .map_err(|e| anyhow!("{e}"))?;
             }
@@ -194,8 +186,11 @@ impl api::VmOps for ControlPlaneOps {
         let vm = db::get_vm(&self.pool, id)
             .await?
             .ok_or_else(|| anyhow!("vm not found: {id}"))?;
-        if vm.status != "stopped" {
-            return Err(anyhow!("vm must be stopped before deletion"));
+        if !matches!(vm.status.as_str(), "stopped" | "error" | "crashed") {
+            return Err(anyhow!(
+                "vm must be stopped before deletion (current status: {})",
+                vm.status
+            ));
         }
         let mut agent = self.agent_client(id).await?;
         let resp = agent
@@ -205,10 +200,7 @@ impl api::VmOps for ControlPlaneOps {
         if !resp.ok {
             return Err(anyhow!("agent delete_vm failed: {}", resp.error));
         }
-        let caddy = self.caddy_for_vm(&vm).await;
-        if let Err(e) = caddy.set_stopped_route(&vm.subdomain).await {
-            error!("failed to update caddy route for deleted {id}: {e}");
-        }
+        self.caddy.broadcast_set_stopped_route(&vm.subdomain).await;
         Ok(())
     }
 
@@ -275,15 +267,11 @@ impl api::VmOps for ControlPlaneOps {
     async fn update_vm(
         &self,
         vm_id: &str,
-        account_id: &str,
+        _account_id: &str,
         patch: api::VmPatch,
     ) -> anyhow::Result<db::VmRow> {
         if let Some(new_name) = &patch.name {
-            let account = db::get_account(&self.pool, account_id)
-                .await?
-                .ok_or_else(|| anyhow!("account not found: {account_id}"))?;
-            let new_subdomain =
-                subdomain::generate(&self.pool, new_name, &account.username).await?;
+            let new_subdomain = subdomain::generate(&self.pool, new_name).await?;
 
             let current = db::get_vm(&self.pool, vm_id)
                 .await?
@@ -292,24 +280,18 @@ impl api::VmOps for ControlPlaneOps {
 
             db::rename_vm(&self.pool, vm_id, new_name, &new_subdomain).await?;
 
-            let caddy = self.caddy_for_vm(&current).await;
-            let set_result = if current.status == "running" {
-                caddy
-                    .set_vm_route(
+            if current.status == "running" {
+                self.caddy
+                    .broadcast_set_vm_route(
                         &new_subdomain,
                         &current.ip_address,
                         current.exposed_port as u16,
                     )
-                    .await
+                    .await;
             } else {
-                caddy.set_stopped_route(&new_subdomain).await
-            };
-            if let Err(e) = set_result {
-                error!("rename: failed to set caddy route {new_subdomain}: {e}");
+                self.caddy.broadcast_set_stopped_route(&new_subdomain).await;
             }
-            if let Err(e) = caddy.delete_route(&old_subdomain).await {
-                error!("rename: failed to delete old caddy route {old_subdomain}: {e}");
-            }
+            self.caddy.broadcast_delete_route(&old_subdomain).await;
         }
 
         if let Some(port) = patch.exposed_port {
@@ -318,13 +300,13 @@ impl api::VmOps for ControlPlaneOps {
                 .ok_or_else(|| anyhow!("vm not found: {vm_id}"))?;
             db::update_vm_port(&self.pool, vm_id, port).await?;
             if current.status == "running" {
-                let caddy = self.caddy_for_vm(&current).await;
-                if let Err(e) = caddy
-                    .set_vm_route(&current.subdomain, &current.ip_address, port as u16)
-                    .await
-                {
-                    error!("update_port: failed to update caddy route for {vm_id}: {e}");
-                }
+                self.caddy
+                    .broadcast_set_vm_route(
+                        &current.subdomain,
+                        &current.ip_address,
+                        port as u16,
+                    )
+                    .await;
             }
         }
 
@@ -402,10 +384,6 @@ impl api::VmOps for ControlPlaneOps {
             return Err(anyhow!("vm not found: {source_id}"));
         }
 
-        let account = db::get_account(&self.pool, account_id)
-            .await?
-            .ok_or_else(|| anyhow!("account not found: {account_id}"))?;
-
         let host_id = source
             .host_id
             .as_deref()
@@ -419,7 +397,7 @@ impl api::VmOps for ControlPlaneOps {
         let slot = scheduler::next_free_slot(&used_ips);
         let ip_address = format!("172.16.{slot}.2");
         let name = req.name.clone();
-        let sub = subdomain::generate(&self.pool, &name, &account.username).await?;
+        let sub = subdomain::generate(&self.pool, &name).await?;
 
         let channel = Channel::from_shared(host.address.clone())?
             .connect()
@@ -448,11 +426,7 @@ impl api::VmOps for ControlPlaneOps {
             .await?
             .ok_or_else(|| anyhow!("vm {new_vm_id} not found after clone"))?;
 
-        let _ = self
-            .caddy
-            .for_host(&host)
-            .set_stopped_route(&vm.subdomain)
-            .await;
+        self.caddy.broadcast_set_stopped_route(&vm.subdomain).await;
         Ok(vm)
     }
 
@@ -471,55 +445,14 @@ impl api::VmOps for ControlPlaneOps {
             return Ok(());
         }
 
-        let renamed = db::update_username(
+        db::update_username(
             &self.pool,
             account_id,
             &db::UsernameUpdate {
-                old_username: account.username,
                 new_username: new_username.clone(),
             },
         )
         .await?;
-
-        for entry in &renamed {
-            let vm = match db::get_vm(&self.pool, &entry.vm_id).await {
-                Ok(Some(v)) => v,
-                Ok(None) => {
-                    warn!(
-                        "vm {} not found during caddy resync after username change",
-                        entry.vm_id
-                    );
-                    continue;
-                }
-                Err(e) => {
-                    error!("failed to fetch vm {} for caddy resync: {e}", entry.vm_id);
-                    continue;
-                }
-            };
-
-            let caddy = self.caddy_for_vm(&vm).await;
-            let result = if vm.status == "running" {
-                caddy
-                    .set_vm_route(&entry.new_subdomain, &vm.ip_address, vm.exposed_port as u16)
-                    .await
-            } else {
-                caddy.set_stopped_route(&entry.new_subdomain).await
-            };
-
-            if let Err(e) = result {
-                error!(
-                    "failed to set caddy route for {} after username change: {e}",
-                    entry.new_subdomain
-                );
-            }
-
-            if let Err(e) = caddy.delete_route(&entry.old_subdomain).await {
-                error!(
-                    "failed to delete old caddy route {} after username change: {e}",
-                    entry.old_subdomain
-                );
-            }
-        }
 
         Ok(())
     }

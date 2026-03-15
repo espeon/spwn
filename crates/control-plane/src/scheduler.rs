@@ -186,6 +186,56 @@ mod tests {
     fn next_free_slot_first_when_empty() {
         assert_eq!(next_free_slot(&[]), 1);
     }
+
+    // ── pick_host integration tests (require DB) ──────────────────────────────
+
+    async fn setup_db() -> (testcontainers::ContainerAsync<testcontainers_modules::postgres::Postgres>, db::PgPool) {
+        use testcontainers::runners::AsyncRunner;
+        let container = testcontainers_modules::postgres::Postgres::default()
+            .start()
+            .await
+            .expect("start postgres");
+        let port = container.get_host_port_ipv4(5432).await.expect("get port");
+        let url = format!("postgres://postgres:postgres@localhost:{port}/postgres");
+        let pool = db::connect(&url).await.expect("connect");
+        db::migrate(&pool).await.expect("migrate");
+        (container, pool)
+    }
+
+    #[tokio::test]
+    async fn pick_host_returns_active_host() {
+        let (_c, pool) = setup_db().await;
+
+        db::upsert_host(
+            &pool,
+            &db::NewHost {
+                id: "h1".into(),
+                name: "node1".into(),
+                address: "http://node1:4000".into(),
+                vcpu_total: 8000,
+                mem_total_mb: 16384,
+                images_dir: "/images".into(),
+                overlay_dir: "/overlay".into(),
+                snapshot_dir: "/snapshots".into(),
+                kernel_path: "/vmlinux".into(),
+                snapshot_addr: "http://node1:8080".into(),
+            },
+        )
+        .await
+        .expect("upsert host");
+
+        db::update_host_heartbeat(&pool, "h1", 0, 0).await.expect("heartbeat");
+
+        let result = pick_host(&pool, 1000, 512, "best_fit", None).await;
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap().id, "h1");
+    }
+
+    #[tokio::test]
+    async fn pick_host_returns_err_when_no_active_hosts() {
+        let (_c, pool) = setup_db().await;
+        assert!(pick_host(&pool, 1000, 512, "best_fit", None).await.is_err());
+    }
 }
 
 pub fn next_free_slot(used_ips: &[String]) -> u32 {

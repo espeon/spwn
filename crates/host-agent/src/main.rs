@@ -18,8 +18,10 @@ use tracing::info;
 
 mod agent;
 mod health;
+mod image_build;
 mod manager;
 mod overlay;
+mod platform_key;
 mod reconcile;
 
 use manager::VmManager;
@@ -208,6 +210,7 @@ async fn main() -> anyhow::Result<()> {
     networking::iptables::enable_ip_forwarding()?;
     networking::iptables::setup(&external_iface)?;
     setup_cgroup_controllers()?;
+    host_security_checks();
 
     for dir in [&overlay_dir, &images_dir, &snapshot_dir] {
         std::fs::create_dir_all(dir).with_context(|| format!("create dir: {}", dir.display()))?;
@@ -332,6 +335,38 @@ async fn main() -> anyhow::Result<()> {
 
     manager.shutdown().await;
     Ok(())
+}
+
+/// Apply and validate production security settings on the host.
+///
+/// KSM disable is applied eagerly (shared memory pages are a side-channel).
+/// SMT and swap warnings are advisory — they don't prevent the agent from
+/// starting, but they're worth surfacing loudly in prod.
+fn host_security_checks() {
+    // Disable KSM — memory deduplication is a side-channel (Rowhammer, etc.)
+    match std::fs::write("/sys/kernel/mm/ksm/run", "0") {
+        Ok(_) => info!("KSM disabled"),
+        Err(e) => tracing::warn!("could not disable KSM: {e} — ensure /sys/kernel/mm/ksm/run=0"),
+    }
+
+    // Warn if SMT is active — SMT enables cross-HT side-channels in multi-tenant setups.
+    let smt_active = std::fs::read_to_string("/sys/devices/system/cpu/smt/active")
+        .map(|s| s.trim() == "1")
+        .unwrap_or(false);
+    if smt_active {
+        tracing::warn!(
+            "SMT (HyperThreading) is enabled — disable it for multi-tenant production: \
+             echo off > /sys/devices/system/cpu/smt/control"
+        );
+    }
+
+    // Warn if swap is in use — swapped guest memory could leak to disk.
+    let swap_active = std::fs::read_to_string("/proc/swaps")
+        .map(|s| s.lines().count() > 1)
+        .unwrap_or(false);
+    if swap_active {
+        tracing::warn!("host swap is active — disable swap for production (swapoff -a)");
+    }
 }
 
 // Enable cpu and memory controllers in the jailer cgroup hierarchy.

@@ -1,0 +1,1 @@
+ALTER TABLE images ADD COLUMN build_log TEXT NOT NULL DEFAULT '';
