@@ -43,7 +43,9 @@ const BANNER: &str = &"
                                       -****
                                      *****
                                     ****:
-"
+";
+
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     dotenvy::dotenv() ok();
