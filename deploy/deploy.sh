@@ -39,7 +39,7 @@ gh run download \
   --dir "$TMPDIR"
 
 sudo systemctl stop spwn-host-agent || true
-sudo install -m 755 "$TMPDIR/target/release/host-agent" /usr/local/bin/spwn-host-agent
+sudo install -m 755 "$TMPDIR/target/release/spwn-host-agent" /usr/local/bin/spwn-host-agent
 sudo systemctl start spwn-host-agent
 
 echo "==> done"
