@@ -4,7 +4,7 @@ use crate::caddy_router::CaddyRouter;
 use agent_proto::agent::control_plane_server::ControlPlaneServer;
 use anyhow::Context;
 use axum::response::sse::{Event, KeepAlive, Sse};
-use axum::{Extension, routing::get};
+use axum::{response::Html, Extension, routing::get};
 use router_sync::CaddyClient;
 use tokio_stream::{StreamExt, wrappers::BroadcastStream};
 use tower_http::services::{ServeDir, ServeFile};
@@ -48,6 +48,15 @@ async fn main() -> anyhow::Result<()> {
         .unwrap_or(604800);
     let public_url = std::env::var("PUBLIC_URL").unwrap_or_else(|_| "https://spwn.run".into());
     let base_domain = std::env::var("BASE_DOMAIN").unwrap_or_else(|_| "spwn.run".into());
+    let no_frontend = std::env::var("NO_FRONTEND").is_ok();
+
+    const BANNER: &str = r#"
+   __  __      __      _____
+  /  _/ /_    / /___  / ____/
+  / // __/   / / _ \/ /_    
+ /_/ \__/   /_/\___/\____/    
+ 
+"#;
     let cors_origin = std::env::var("CORS_ORIGIN").ok();
     let secure_cookies = std::env::var("SECURE_COOKIES")
         .map(|v| v == "true" || v == "1")
@@ -114,7 +123,7 @@ async fn main() -> anyhow::Result<()> {
         pool.clone(),
         invite_code,
         session_ttl_secs,
-        public_url,
+        public_url.clone(),
         gateway_secret,
         ssh_gateway_addr,
         secure_cookies,
@@ -143,7 +152,7 @@ async fn main() -> anyhow::Result<()> {
                     .expect("invalid CORS_ORIGIN"),
             ),
             None => layer.allow_origin(AllowOrigin::exact(
-                public_url
+                public_url.clone()
                     .parse::<http::HeaderValue>()
                     .expect("invalid PUBLIC_URL for CORS"),
             )),
@@ -155,6 +164,23 @@ async fn main() -> anyhow::Result<()> {
         .merge(api::router(ops as Arc<dyn api::VmOps>))
         .merge(admin::router(admin_state))
         .route("/api/events", get(vm_events_sse))
+        .route("/", get({
+            let no_frontend = no_frontend;
+            let frontend_path = frontend_path.clone();
+            move || {
+                async move {
+                    if no_frontend {
+                        return Html(format!(
+                            r#"<!DOCTYPE html><html><head><title>spwn</title></head><body><pre style="font-family:monospace;font-size:14px;line-height:1.2;white-space:pre">{}</pre></body></html>"#,
+                            BANNER
+                        ));
+                    }
+                    let index = std::fs::read_to_string(format!("{}/index.html", frontend_path))
+                        .unwrap_or_else(|_| "index.html not found".to_string());
+                    Html(index)
+                }
+            }
+        }))
         .fallback_service(
             ServeDir::new(&frontend_path)
                 .not_found_service(ServeFile::new(format!("{frontend_path}/index.html"))),
