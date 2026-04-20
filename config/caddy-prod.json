@@ -1,6 +1,29 @@
 {
   "admin": {
-    "listen": "caddy:2019"
+    "listen": "caddy:2019",
+    "tls": {
+      "automation": {
+        "policies": [
+          {
+            "subjects": ["{env.DOMAIN}", "*.{env.DOMAIN}"],
+            "issuers": [
+              {
+                "module": "acme",
+                "email": "{env.ACME_EMAIL}",
+                "challenges": {
+                  "dns": {
+                    "provider": {
+                      "name": "cloudflare",
+                      "api_token": "{env.CF_API_TOKEN}"
+                    }
+                  }
+                }
+              }
+            ]
+          }
+        ]
+      }
+    }
   },
   "apps": {
     "tls": {
