@@ -39,6 +39,13 @@ gh run download \
   --dir "$TMPDIR"
 
 sudo systemctl stop spwn-host-agent || true
+# install the service file
+if [[ ! -f /etc/systemd/system/spwn-host-agent.service ]]; then
+  echo "==> installing systemd service file"
+  # it's in ./spwn-host-agent.service
+    sudo cp "$REPO_ROOT/deploy/spwn-host-agent.service" /etc/systemd/system/spwn-host-agent.service
+    sudo systemctl daemon-reload
+fi
 sudo install -m 755 "$TMPDIR/spwn-host-agent" /usr/local/bin/spwn-host-agent
 sudo systemctl start spwn-host-agent
 
