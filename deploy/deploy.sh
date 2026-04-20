@@ -14,7 +14,7 @@ COMPOSE_FILE="$REPO_ROOT/compose.yml"
 TMPDIR=$(mktemp -d)
 trap 'rm -rf "$TMPDIR"' EXIT
 
-if [[ ! -f /etc/spwn/env ]]; then
+if [[ ! -f /etc/spwn/.env ]]; then
   echo "==> installing /etc/spwn/env"
   sudo mkdir -p /etc/spwn
   sudo cp "$REPO_ROOT/.env" /etc/spwn/.env
