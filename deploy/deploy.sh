@@ -17,7 +17,7 @@ trap 'rm -rf "$TMPDIR"' EXIT
 if [[ ! -f /etc/spwn/env ]]; then
   echo "==> installing /etc/spwn/env"
   sudo mkdir -p /etc/spwn
-  sudo cp "$REPO_ROOT/.env" /etc/spwn/env
+  sudo cp "$REPO_ROOT/.env" /etc/spwn/.env
   sudo chmod 640 /etc/spwn/env
 fi
 
