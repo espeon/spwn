@@ -14,11 +14,12 @@ use tonic::{Request, Response, Status, Streaming};
 
 use agent_proto::agent::{
     AgentEvent, BuildImageEvent, BuildImageRequest, CloneVmRequest, CloneVmResponse, ConsoleInput,
-    ConsoleOutput, CreateVmRequest, CreateVmResponse, DeleteVmRequest, DeleteVmResponse,
-    MigrateVmRequest, MigrateVmResponse, ResizeBandwidthRequest, ResizeBandwidthResponse,
-    ResizeCpuRequest, ResizeCpuResponse, RestoreRequest, RestoreResponse, StartVmRequest,
-    StartVmResponse, StopVmRequest, StopVmResponse, TakeSnapshotRequest, TakeSnapshotResponse,
-    WatchRequest, build_image_event::Stage, host_agent_server::HostAgent,
+    ConsoleOutput, CreateVmRequest, CreateVmResponse, DeleteSnapshotRequest, DeleteSnapshotResponse,
+    DeleteVmRequest, DeleteVmResponse, MigrateVmRequest, MigrateVmResponse,
+    ResizeBandwidthRequest, ResizeBandwidthResponse, ResizeCpuRequest, ResizeCpuResponse,
+    RestoreRequest, RestoreResponse, StartVmRequest, StartVmResponse, StopVmRequest,
+    StopVmResponse, TakeSnapshotRequest, TakeSnapshotResponse, WatchRequest,
+    build_image_event::Stage, host_agent_server::HostAgent,
 };
 
 use crate::manager::{VmEvent, VmManager};
@@ -944,6 +945,23 @@ impl HostAgent for HostAgentService {
             Err(e) => Ok(Response::new(MigrateVmResponse {
                 ok: false,
                 error: format!("{e:#}"),
+            })),
+        }
+    }
+
+    async fn delete_snapshot(
+        &self,
+        req: Request<DeleteSnapshotRequest>,
+    ) -> Result<Response<DeleteSnapshotResponse>, Status> {
+        let r = req.into_inner();
+        match self.manager.delete_snapshot(&r.snap_id).await {
+            Ok(()) => Ok(Response::new(DeleteSnapshotResponse {
+                ok: true,
+                error: String::new(),
+            })),
+            Err(e) => Ok(Response::new(DeleteSnapshotResponse {
+                ok: false,
+                error: e.to_string(),
             })),
         }
     }

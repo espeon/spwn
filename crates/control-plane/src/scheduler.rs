@@ -189,8 +189,17 @@ mod tests {
 }
 
 pub fn next_free_slot(used_ips: &[String]) -> u32 {
+    let used_slots: std::collections::HashSet<u32> = used_ips
+        .iter()
+        .filter_map(|ip| {
+            let mut parts = ip.splitn(4, '.');
+            parts.next();
+            parts.next();
+            parts.next()?.parse().ok()
+        })
+        .collect();
     for n in 1..=65534u32 {
-        if !used_ips.iter().any(|ip| ip == &format!("172.16.{n}.2")) {
+        if !used_slots.contains(&n) {
             return n;
         }
     }

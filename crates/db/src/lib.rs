@@ -939,6 +939,28 @@ pub async fn update_account_profile(
     Ok(())
 }
 
+pub async fn update_account_display_name(
+    pool: &PgPool,
+    id: &str,
+    display_name: Option<&str>,
+) -> Result<()> {
+    sqlx::query("UPDATE accounts SET display_name = $1 WHERE id = $2")
+        .bind(display_name)
+        .bind(id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+pub async fn update_account_avatar(pool: &PgPool, id: &str, avatar_bytes: &[u8]) -> Result<()> {
+    sqlx::query("UPDATE accounts SET avatar_bytes = $1 WHERE id = $2")
+        .bind(avatar_bytes)
+        .bind(id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
 fn row_to_account(r: sqlx::postgres::PgRow) -> AccountRow {
     AccountRow {
         id: r.get("id"),

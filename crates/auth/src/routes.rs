@@ -7,12 +7,13 @@ use axum::{
     routing::{delete, get, patch, post},
 };
 use axum_extra::extract::cookie::{Cookie, CookieJar, SameSite};
-use hex;
 use image::{ImageFormat, imageops::FilterType};
 use rand::Rng;
-use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use serde::{Deserialize, Serialize};
 use uuid::Uuid;
+
+use crate::gateway::{gateway_auth_password, gateway_auth_pubkey, gateway_lookup_vm};
 
 use crate::{password, session::AccountId};
 
@@ -410,18 +411,13 @@ async fn update_profile(
     account_id: AccountId,
     Json(req): Json<UpdateProfileRequest>,
 ) -> impl IntoResponse {
-    let acc = match db::get_account(&state.pool, &account_id.0).await {
-        Ok(Some(a)) => a,
-        Ok(None) => return StatusCode::UNAUTHORIZED.into_response(),
-        Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
-    };
-
-    let update = db::UpdateAccountProfile {
-        display_name: req.display_name,
-        avatar_bytes: acc.avatar_bytes,
-    };
-
-    match db::update_account_profile(&state.pool, &account_id.0, &update).await {
+    match db::update_account_display_name(
+        &state.pool,
+        &account_id.0,
+        req.display_name.as_deref(),
+    )
+    .await
+    {
         Ok(_) => StatusCode::NO_CONTENT.into_response(),
         Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     }
@@ -455,18 +451,7 @@ async fn upload_avatar(
         Err(_) => return (StatusCode::BAD_REQUEST, "could not decode image").into_response(),
     };
 
-    let acc = match db::get_account(&state.pool, &account_id.0).await {
-        Ok(Some(a)) => a,
-        Ok(None) => return StatusCode::UNAUTHORIZED.into_response(),
-        Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
-    };
-
-    let update = db::UpdateAccountProfile {
-        display_name: acc.display_name,
-        avatar_bytes: Some(resized),
-    };
-
-    match db::update_account_profile(&state.pool, &account_id.0, &update).await {
+    match db::update_account_avatar(&state.pool, &account_id.0, &resized).await {
         Ok(_) => StatusCode::NO_CONTENT.into_response(),
         Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     }
@@ -611,208 +596,6 @@ fn ssh_key_fingerprint(public_key: &str) -> anyhow::Result<String> {
         "SHA256:{}",
         base64::engine::general_purpose::STANDARD_NO_PAD.encode(hash)
     ))
-}
-
-// ── Internal gateway endpoints ────────────────────────────────────────────────
-
-fn check_gateway_secret(state: &AuthState, headers: &HeaderMap) -> bool {
-    let secret = match &state.gateway_secret {
-        Some(s) => s,
-        None => return false,
-    };
-    let auth = match headers.get("authorization").and_then(|v| v.to_str().ok()) {
-        Some(v) => v,
-        None => return false,
-    };
-    let token = auth.strip_prefix("Bearer ").unwrap_or(auth);
-    token == secret
-}
-
-#[derive(Deserialize)]
-struct GatewayAuthPasswordRequest {
-    username: String,
-    password: String,
-}
-
-#[derive(Serialize)]
-struct GatewayAuthResponse {
-    ok: bool,
-    account_id: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    username: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    error: Option<String>,
-}
-
-async fn gateway_auth_password(
-    State(state): State<AuthState>,
-    headers: HeaderMap,
-    Json(req): Json<GatewayAuthPasswordRequest>,
-) -> impl IntoResponse {
-    if !check_gateway_secret(&state, &headers) {
-        return StatusCode::UNAUTHORIZED.into_response();
-    }
-
-    // try bearer token first
-    let token_hash = hex::encode(Sha256::digest(req.password.as_bytes()));
-    if let Ok(Some(account_id)) = db::get_account_id_by_token_hash(&state.pool, &token_hash).await {
-        let _ = db::touch_api_token(&state.pool, &token_hash, unix_now()).await;
-        let username = db::get_account(&state.pool, &account_id)
-            .await
-            .ok()
-            .flatten()
-            .map(|a| a.username);
-        return Json(GatewayAuthResponse {
-            ok: true,
-            account_id,
-            username,
-            error: None,
-        })
-        .into_response();
-    }
-
-    // try account password (username is email)
-    let account = match db::get_account_by_email(&state.pool, &req.username).await {
-        Ok(Some(a)) => a,
-        _ => {
-            return Json(GatewayAuthResponse {
-                ok: false,
-                account_id: String::new(),
-                username: None,
-                error: Some("invalid credentials".into()),
-            })
-            .into_response();
-        }
-    };
-
-    match password::verify_password(&req.password, &account.password_hash) {
-        Ok(true) => Json(GatewayAuthResponse {
-            ok: true,
-            account_id: account.id,
-            username: Some(account.username),
-            error: None,
-        })
-        .into_response(),
-        _ => Json(GatewayAuthResponse {
-            ok: false,
-            account_id: String::new(),
-            username: None,
-            error: Some("invalid credentials".into()),
-        })
-        .into_response(),
-    }
-}
-
-#[derive(Deserialize)]
-struct GatewayAuthPubkeyRequest {
-    fingerprint: String,
-}
-
-async fn gateway_auth_pubkey(
-    State(state): State<AuthState>,
-    headers: HeaderMap,
-    Json(req): Json<GatewayAuthPubkeyRequest>,
-) -> impl IntoResponse {
-    if !check_gateway_secret(&state, &headers) {
-        return StatusCode::UNAUTHORIZED.into_response();
-    }
-    match db::get_account_id_by_key_fingerprint(&state.pool, &req.fingerprint).await {
-        Ok(Some(account_id)) => {
-            let username = db::get_account(&state.pool, &account_id)
-                .await
-                .ok()
-                .flatten()
-                .map(|a| a.username);
-            Json(GatewayAuthResponse {
-                ok: true,
-                account_id,
-                username,
-                error: None,
-            })
-            .into_response()
-        }
-        _ => Json(GatewayAuthResponse {
-            ok: false,
-            account_id: String::new(),
-            username: None,
-            error: Some("unknown key".into()),
-        })
-        .into_response(),
-    }
-}
-
-#[derive(Deserialize)]
-struct GatewayLookupVmQuery {
-    vm_id: Option<String>,
-    subdomain: Option<String>,
-}
-
-#[derive(Serialize)]
-struct GatewayVmResponse {
-    vm_id: String,
-    host_agent_addr: String,
-    vm_ip: String,
-    status: String,
-    exposed_port: i32,
-}
-
-async fn gateway_lookup_vm(
-    State(state): State<AuthState>,
-    headers: HeaderMap,
-    Query(q): Query<GatewayLookupVmQuery>,
-) -> impl IntoResponse {
-    if !check_gateway_secret(&state, &headers) {
-        return StatusCode::UNAUTHORIZED.into_response();
-    }
-    let vm_result = match (&q.vm_id, &q.subdomain) {
-        (Some(id), _) => db::get_vm(&state.pool, id).await,
-        (_, Some(sub)) => db::get_vm_by_subdomain(&state.pool, sub).await,
-        _ => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({ "error": "vm_id or subdomain required" })),
-            )
-                .into_response();
-        }
-    };
-    let vm = match vm_result {
-        Ok(Some(v)) => v,
-        _ => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(serde_json::json!({ "error": "vm not found" })),
-            )
-                .into_response();
-        }
-    };
-    let host_id = match &vm.host_id {
-        Some(id) => id.clone(),
-        None => {
-            return (
-                StatusCode::SERVICE_UNAVAILABLE,
-                Json(serde_json::json!({ "error": "vm has no host assigned" })),
-            )
-                .into_response();
-        }
-    };
-    let host = match db::get_host(&state.pool, &host_id).await {
-        Ok(Some(h)) => h,
-        _ => {
-            return (
-                StatusCode::SERVICE_UNAVAILABLE,
-                Json(serde_json::json!({ "error": "host not found" })),
-            )
-                .into_response();
-        }
-    };
-    Json(GatewayVmResponse {
-        vm_id: vm.id,
-        host_agent_addr: host.address,
-        vm_ip: vm.ip_address,
-        status: vm.status,
-        exposed_port: vm.exposed_port,
-    })
-    .into_response()
 }
 
 // exposed for tests only

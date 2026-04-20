@@ -1,11 +1,13 @@
 use anyhow::anyhow;
+use api::VmOpsError;
 use async_trait::async_trait;
 use tonic::transport::Channel;
 use tracing::{error, warn};
 
 use agent_proto::agent::{
-    CloneVmRequest, CreateVmRequest, DeleteVmRequest, ResizeBandwidthRequest, ResizeCpuRequest,
-    RestoreRequest, StartVmRequest, StopVmRequest, TakeSnapshotRequest,
+    CloneVmRequest, CreateVmRequest, DeleteSnapshotRequest, DeleteVmRequest,
+    ResizeBandwidthRequest, ResizeCpuRequest, RestoreRequest, StartVmRequest, StopVmRequest,
+    TakeSnapshotRequest,
     host_agent_client::HostAgentClient,
 };
 use router_sync::CaddyClient;
@@ -247,12 +249,18 @@ impl api::VmOps for ControlPlaneOps {
         Ok(db::list_snapshots(&self.pool, vm_id).await?)
     }
 
-    async fn delete_snapshot(&self, _vm_id: &str, snap_id: &str) -> anyhow::Result<()> {
-        let snap = db::get_snapshot(&self.pool, snap_id)
+    async fn delete_snapshot(&self, vm_id: &str, snap_id: &str) -> anyhow::Result<()> {
+        let mut agent = self.agent_client(vm_id).await?;
+        let resp = agent
+            .delete_snapshot(DeleteSnapshotRequest {
+                vm_id: vm_id.into(),
+                snap_id: snap_id.into(),
+            })
             .await?
-            .ok_or_else(|| anyhow!("snapshot not found: {snap_id}"))?;
-        db::delete_snapshot(&self.pool, snap_id).await?;
-        let _ = snap;
+            .into_inner();
+        if !resp.ok {
+            return Err(anyhow!("agent delete_snapshot failed: {}", resp.error));
+        }
         Ok(())
     }
 
@@ -344,9 +352,10 @@ impl api::VmOps for ControlPlaneOps {
             .ok_or_else(|| anyhow!("vm not found: {vm_id}"))?;
 
         if patch.memory_mb.is_some_and(|m| m != vm.memory_mb) && vm.status == "running" {
-            return Err(anyhow!(
-                "restart required: memory changes cannot be applied to a running vm"
-            ));
+            return Err(VmOpsError::RestartRequired(
+                "memory changes cannot be applied to a running vm".into(),
+            )
+            .into());
         }
 
         let new_vcpus = patch.vcpus.unwrap_or(vm.vcpus);
@@ -355,31 +364,37 @@ impl api::VmOps for ControlPlaneOps {
 
         db::update_vm_resources(&self.pool, vm_id, new_vcpus, new_memory, new_bandwidth).await?;
 
-        if vm.status == "running" && patch.vcpus.is_some_and(|v| v != vm.vcpus) {
-            let mut agent = self.agent_client(vm_id).await?;
-            let resp = agent
-                .resize_cpu(ResizeCpuRequest {
-                    vm_id: vm_id.into(),
-                    vcpus: new_vcpus,
-                })
-                .await?
-                .into_inner();
-            if !resp.ok {
-                return Err(anyhow!("agent resize_cpu failed: {}", resp.error));
-            }
-        }
+        let resize_cpu = vm.status == "running" && patch.vcpus.is_some_and(|v| v != vm.vcpus);
+        let resize_bw =
+            vm.status == "running" && patch.bandwidth_mbps.is_some_and(|b| b != vm.bandwidth_mbps);
 
-        if vm.status == "running" && patch.bandwidth_mbps.is_some_and(|b| b != vm.bandwidth_mbps) {
+        if resize_cpu || resize_bw {
             let mut agent = self.agent_client(vm_id).await?;
-            let resp = agent
-                .resize_bandwidth(ResizeBandwidthRequest {
-                    vm_id: vm_id.into(),
-                    bandwidth_mbps: new_bandwidth,
-                })
-                .await?
-                .into_inner();
-            if !resp.ok {
-                return Err(anyhow!("agent resize_bandwidth failed: {}", resp.error));
+
+            if resize_cpu {
+                let resp = agent
+                    .resize_cpu(ResizeCpuRequest {
+                        vm_id: vm_id.into(),
+                        vcpus: new_vcpus,
+                    })
+                    .await?
+                    .into_inner();
+                if !resp.ok {
+                    return Err(anyhow!("agent resize_cpu failed: {}", resp.error));
+                }
+            }
+
+            if resize_bw {
+                let resp = agent
+                    .resize_bandwidth(ResizeBandwidthRequest {
+                        vm_id: vm_id.into(),
+                        bandwidth_mbps: new_bandwidth,
+                    })
+                    .await?
+                    .into_inner();
+                if !resp.ok {
+                    return Err(anyhow!("agent resize_bandwidth failed: {}", resp.error));
+                }
             }
         }
 
@@ -441,7 +456,11 @@ impl api::VmOps for ControlPlaneOps {
             .into_inner();
 
         if !resp.ok {
-            return Err(anyhow!("agent failed to clone vm: {}", resp.error));
+            let msg = resp.error;
+            if msg.contains("limit") || msg.contains("quota") {
+                return Err(VmOpsError::QuotaExceeded(msg).into());
+            }
+            return Err(anyhow!("agent failed to clone vm: {msg}"));
         }
 
         let vm = db::get_vm(&self.pool, &new_vm_id)
@@ -460,7 +479,7 @@ impl api::VmOps for ControlPlaneOps {
         let new_username = new_username.to_lowercase();
 
         if let Err(msg) = auth::validate_username(&new_username) {
-            return Err(anyhow!("invalid username: {msg}"));
+            return Err(VmOpsError::Validation(format!("invalid username: {msg}")).into());
         }
 
         let account = db::get_account(&self.pool, account_id)
@@ -479,7 +498,15 @@ impl api::VmOps for ControlPlaneOps {
                 new_username: new_username.clone(),
             },
         )
-        .await?;
+        .await
+        .map_err(|e| {
+            let msg = e.to_string();
+            if msg.contains("unique") || msg.contains("duplicate") {
+                VmOpsError::Conflict("username already taken".into()).into()
+            } else {
+                anyhow!("{e}")
+            }
+        })?;
 
         for entry in &renamed {
             let vm = match db::get_vm(&self.pool, &entry.vm_id).await {

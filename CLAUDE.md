@@ -138,9 +138,9 @@ tests live in:
 - phase 6 (frontend): **done**
 - phase 7 (CLI): **done**
 - phase 8 (SSH gateway — Go/charm): **done**
-- phase 9 (VM cloning): not started
-- phase 10 (proper multi-node): not started
-- phase 11 (proper testing + cargo-nextest): not started
+- phase 9 (VM cloning): not started **done**
+- phase 10 (proper multi-node): not started **done**
+- phase 11 (proper testing + cargo-nextest): not started **done**
 - phase 12 (playful features — templates, dotfiles, sharing): not started
 - phase 13 (billing, lemonsqueezy): not started
 - phase 14 (hardening): not started
