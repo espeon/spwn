@@ -1,3 +1,4 @@
+use http::Method;
 use std::{collections::HashMap, convert::Infallible, path::PathBuf, str::FromStr, sync::Arc};
 
 use crate::caddy_router::CaddyRouter;
@@ -53,9 +54,9 @@ async fn main() -> anyhow::Result<()> {
     const BANNER: &str = r#"
    __  __      __      _____
   /  _/ /_    / /___  / ____/
-  / // __/   / / _ \/ /_    
- /_/ \__/   /_/\___/\____/    
- 
+  / // __/   / / _ \/ /_
+ /_/ \__/   /_/\___/\____/
+
 "#;
     let cors_origin = std::env::var("CORS_ORIGIN").ok();
     let secure_cookies = std::env::var("SECURE_COOKIES")
@@ -141,7 +142,7 @@ async fn main() -> anyhow::Result<()> {
         use tower_http::cors::{AllowOrigin, CorsLayer};
 
         let layer = CorsLayer::new()
-            .allow_methods(tower_http::cors::Any)
+            .allow_methods([Method::GET, Method::POST, Method::PUT, Method::PATCH, Method::DELETE])
             .allow_headers([CONTENT_TYPE, AUTHORIZATION])
             .allow_credentials(true);
 
@@ -165,7 +166,6 @@ async fn main() -> anyhow::Result<()> {
         .merge(admin::router(admin_state))
         .route("/api/events", get(vm_events_sse))
         .route("/", get({
-            let no_frontend = no_frontend;
             let frontend_path = frontend_path.clone();
             move || {
                 async move {
