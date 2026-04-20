@@ -1,10 +1,12 @@
+use std::sync::Arc;
+
 use axum::{
     Json, Router,
     body::Bytes,
     extract::{Path, Query, State},
     http::{HeaderMap, StatusCode, header},
     response::IntoResponse,
-    routing::{delete, get, patch, post},
+    routing::{delete, get, patch, post, put},
 };
 use axum_extra::extract::cookie::{Cookie, CookieJar, SameSite};
 use image::{ImageFormat, imageops::FilterType};
@@ -12,9 +14,10 @@ use rand::Rng;
 use sha2::{Digest, Sha256};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
+use webauthn_rs::Webauthn;
 
 use crate::gateway::{gateway_auth_password, gateway_auth_pubkey, gateway_lookup_vm};
-
+use crate::passkey;
 use crate::{password, session::AccountId};
 
 #[derive(Clone)]
@@ -25,6 +28,38 @@ pub struct AuthState {
     pub public_url: String,
     pub gateway_secret: Option<String>,
     pub ssh_gateway_addr: String,
+    pub webauthn: Arc<Webauthn>,
+}
+
+impl AuthState {
+    pub fn new(
+        pool: db::PgPool,
+        invite_code: String,
+        session_ttl_secs: i64,
+        public_url: String,
+        gateway_secret: Option<String>,
+        ssh_gateway_addr: String,
+    ) -> anyhow::Result<Self> {
+        let rp_origin = url::Url::parse(&public_url)?;
+        let rp_id = rp_origin
+            .host_str()
+            .ok_or_else(|| anyhow::anyhow!("PUBLIC_URL has no host"))?
+            .to_string();
+        let webauthn = Arc::new(
+            webauthn_rs::WebauthnBuilder::new(&rp_id, &rp_origin)?
+                .rp_name("spwn")
+                .build()?,
+        );
+        Ok(Self {
+            pool,
+            invite_code,
+            session_ttl_secs,
+            public_url,
+            gateway_secret,
+            ssh_gateway_addr,
+            webauthn,
+        })
+    }
 }
 
 #[derive(Deserialize)]
@@ -63,6 +98,13 @@ struct MeResponse {
     vcpu_limit: i64,
     mem_limit_mb: i32,
     role: String,
+    auth_mode: String,
+}
+
+#[derive(Serialize)]
+struct LoginPendingResponse {
+    requires_passkey: bool,
+    pending_token: String,
 }
 
 pub fn auth_router(state: AuthState) -> Router {
@@ -75,6 +117,7 @@ pub fn auth_router(state: AuthState) -> Router {
         .route("/auth/me", patch(update_profile))
         .route("/auth/me/avatar", post(upload_avatar))
         .route("/auth/me/theme", patch(update_theme))
+        .route("/auth/me/auth-mode", patch(passkey::update_auth_mode))
         .route("/auth/avatar/{account_id}", get(get_avatar))
         .route("/auth/cli/init", post(cli_init))
         .route("/auth/cli/poll", get(cli_poll))
@@ -82,6 +125,38 @@ pub fn auth_router(state: AuthState) -> Router {
         .route("/auth/cli/deny", post(cli_deny))
         .route("/api/account/keys", get(list_ssh_keys).post(add_ssh_key))
         .route("/api/account/keys/{id}", delete(delete_ssh_key))
+        .route(
+            "/api/account/passkeys",
+            get(passkey::list_passkeys),
+        )
+        .route(
+            "/auth/passkey/register/start",
+            post(passkey::passkey_register_start),
+        )
+        .route(
+            "/auth/passkey/register/finish",
+            post(passkey::passkey_register_finish),
+        )
+        .route(
+            "/auth/passkey/login/start",
+            post(passkey::passkey_login_start),
+        )
+        .route(
+            "/auth/passkey/login/finish",
+            post(passkey::passkey_login_finish),
+        )
+        .route(
+            "/auth/passkey/2fa/start",
+            post(passkey::passkey_2fa_start),
+        )
+        .route(
+            "/auth/passkey/verify",
+            post(passkey::passkey_verify),
+        )
+        .route(
+            "/api/account/passkeys/{id}",
+            put(passkey::rename_passkey).delete(passkey::delete_passkey),
+        )
         .route(
             "/internal/gateway/auth/password",
             post(gateway_auth_password),
@@ -309,7 +384,7 @@ async fn signup(
         id: Uuid::new_v4().to_string(),
         email: req.email,
         username,
-        password_hash: hash,
+        password_hash: Some(hash),
         created_at: now,
     };
 
@@ -337,9 +412,35 @@ async fn login(
         Err(_) => return (jar, StatusCode::INTERNAL_SERVER_ERROR).into_response(),
     };
 
-    match password::verify_password(&req.password, &account.password_hash) {
+    if account.auth_mode == "passkey" {
+        return (jar, StatusCode::UNAUTHORIZED).into_response();
+    }
+
+    let hash = match &account.password_hash {
+        Some(h) => h.clone(),
+        None => return (jar, StatusCode::UNAUTHORIZED).into_response(),
+    };
+
+    match password::verify_password(&req.password, &hash) {
         Ok(true) => {}
         _ => return (jar, StatusCode::UNAUTHORIZED).into_response(),
+    }
+
+    if account.auth_mode == "password_passkey" {
+        let pending_id = Uuid::new_v4().to_string();
+        let expires_at = unix_now() + passkey::PENDING_AUTH_TTL_SECS;
+        match db::create_pending_auth_token(&state.pool, &pending_id, &account.id, expires_at).await {
+            Ok(_) => {}
+            Err(_) => return (jar, StatusCode::INTERNAL_SERVER_ERROR).into_response(),
+        }
+        return (
+            jar,
+            Json(LoginPendingResponse {
+                requires_passkey: true,
+                pending_token: pending_id,
+            }),
+        )
+            .into_response();
     }
 
     let now = unix_now();
@@ -387,6 +488,7 @@ async fn me(State(state): State<AuthState>, account_id: AccountId) -> impl IntoR
             vcpu_limit: acc.vcpu_limit,
             mem_limit_mb: acc.mem_limit_mb,
             role: acc.role,
+            auth_mode: acc.auth_mode,
         })
         .into_response(),
         Ok(None) => StatusCode::UNAUTHORIZED.into_response(),

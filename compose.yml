@@ -26,10 +26,9 @@ services:
     ports:
       - "80:80"
       - "443:443"
-      - "2019:2019"
     env_file: .env
     volumes:
-      - ./config/caddy-compose.json:/etc/caddy/config.json:ro
+      - ./${CADDY_CONFIG:-config/caddy-compose.json}:/etc/caddy/config.json:ro
       - caddy_data:/data
       - caddy_config:/config
       - spwn_static:/var/lib/spwn/static:ro

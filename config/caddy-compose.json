@@ -1,6 +1,6 @@
 {
   "admin": {
-    "listen": "0.0.0.0:2019"
+    "listen": "caddy:2019"
   },
   "apps": {
     "http": {

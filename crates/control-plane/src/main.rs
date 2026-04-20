@@ -47,6 +47,7 @@ async fn main() -> anyhow::Result<()> {
         .and_then(|s| s.parse().ok())
         .unwrap_or(604800);
     let public_url = std::env::var("PUBLIC_URL").unwrap_or_else(|_| "https://spwn.run".into());
+    let base_domain = std::env::var("BASE_DOMAIN").unwrap_or_else(|_| "spwn.run".into());
     let gateway_secret = std::env::var("GATEWAY_SECRET").ok();
     let ssh_gateway_addr =
         std::env::var("SSH_GATEWAY_ADDR").unwrap_or_else(|_| "localhost:2222".into());
@@ -84,9 +85,9 @@ async fn main() -> anyhow::Result<()> {
 
     let caddy = CaddyRouter::new(caddy_default, caddy_region_clients);
 
-    rebuild_caddy_routes(&pool, &caddy).await;
+    rebuild_caddy_routes(&pool, &caddy, &base_domain).await;
 
-    let event_watcher = events::EventWatcher::new(pool.clone(), caddy.clone());
+    let event_watcher = events::EventWatcher::new(pool.clone(), caddy.clone(), base_domain.clone());
     let event_tx = event_watcher.tx.clone();
 
     let hosts = db::list_hosts(&pool).await.unwrap_or_default();
@@ -97,6 +98,7 @@ async fn main() -> anyhow::Result<()> {
     let ops = Arc::new(ops::ControlPlaneOps {
         pool: pool.clone(),
         caddy: caddy.clone(),
+        base_domain,
     });
 
     let grpc_svc = registration::ControlPlaneService {
@@ -104,14 +106,14 @@ async fn main() -> anyhow::Result<()> {
         event_watcher,
     };
 
-    let auth_state = auth::routes::AuthState {
-        pool: pool.clone(),
+    let auth_state = auth::routes::AuthState::new(
+        pool.clone(),
         invite_code,
         session_ttl_secs,
         public_url,
         gateway_secret,
         ssh_gateway_addr,
-    };
+    )?;
 
     let admin_state = admin::AdminState {
         pool: pool.clone(),
@@ -165,7 +167,7 @@ async fn vm_events_sse(
     Sse::new(stream).keep_alive(KeepAlive::default())
 }
 
-async fn rebuild_caddy_routes(pool: &db::PgPool, caddy: &CaddyRouter) {
+async fn rebuild_caddy_routes(pool: &db::PgPool, caddy: &CaddyRouter, base_domain: &str) {
     let vms = match db::get_all_vms(pool).await {
         Ok(v) => v,
         Err(e) => {
@@ -208,7 +210,7 @@ async fn rebuild_caddy_routes(pool: &db::PgPool, caddy: &CaddyRouter) {
             .or_insert_with(|| (client, Vec::new()))
             .1
             .push(router_sync::RouteEntry {
-                subdomain: vm.subdomain,
+                subdomain: format!("{}.{}", vm.subdomain, base_domain),
                 target,
             });
     }

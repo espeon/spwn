@@ -84,7 +84,20 @@ pub(crate) async fn gateway_auth_password(
         }
     };
 
-    match crate::password::verify_password(&req.password, &account.password_hash) {
+    let hash = match &account.password_hash {
+        Some(h) => h.clone(),
+        None => {
+            return Json(GatewayAuthResponse {
+                ok: false,
+                account_id: String::new(),
+                username: None,
+                error: Some("invalid credentials".into()),
+            })
+            .into_response();
+        }
+    };
+
+    match crate::password::verify_password(&req.password, &hash) {
         Ok(true) => Json(GatewayAuthResponse {
             ok: true,
             account_id: account.id,

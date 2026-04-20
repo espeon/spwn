@@ -21,16 +21,18 @@ pub type EventBroadcast = broadcast::Sender<VmStatusEvent>;
 pub struct EventWatcher {
     pool: db::PgPool,
     caddy: CaddyRouter,
+    base_domain: String,
     watched: Arc<Mutex<std::collections::HashSet<String>>>,
     pub tx: EventBroadcast,
 }
 
 impl EventWatcher {
-    pub fn new(pool: db::PgPool, caddy: CaddyRouter) -> Self {
+    pub fn new(pool: db::PgPool, caddy: CaddyRouter, base_domain: String) -> Self {
         let (tx, _) = broadcast::channel(256);
         Self {
             pool,
             caddy,
+            base_domain,
             watched: Arc::new(Mutex::new(std::collections::HashSet::new())),
             tx,
         }
@@ -46,10 +48,11 @@ impl EventWatcher {
 
         let pool = self.pool.clone();
         let caddy = self.caddy.clone();
+        let base_domain = self.base_domain.clone();
         let tx = self.tx.clone();
         let watcher = self.clone();
         tokio::spawn(async move {
-            watch_loop(host_id, address, pool, caddy, tx, watcher).await;
+            watch_loop(host_id, address, pool, caddy, base_domain, tx, watcher).await;
         });
     }
 }
@@ -59,13 +62,14 @@ async fn watch_loop(
     address: String,
     pool: db::PgPool,
     caddy: CaddyRouter,
+    base_domain: String,
     tx: EventBroadcast,
     watcher: EventWatcher,
 ) {
     let mut backoff = Duration::from_secs(1);
     loop {
         info!("connecting to host {host_id} for event stream ({address})");
-        match connect_and_stream(&host_id, &address, &pool, &caddy, &tx).await {
+        match connect_and_stream(&host_id, &address, &pool, &caddy, &base_domain, &tx).await {
             Ok(()) => {
                 warn!("event stream for host {host_id} closed, reconnecting...");
             }
@@ -92,6 +96,7 @@ async fn connect_and_stream(
     address: &str,
     pool: &db::PgPool,
     caddy: &CaddyRouter,
+    base_domain: &str,
     tx: &EventBroadcast,
 ) -> anyhow::Result<()> {
     let channel = Channel::from_shared(address.to_string())?.connect().await?;
@@ -108,9 +113,10 @@ async fn connect_and_stream(
             "started" => {
                 if let Ok(Some(vm)) = db::get_vm(pool, vm_id).await {
                     db::set_vm_status(pool, vm_id, "running").await.ok();
+                    let fqdn = format!("{}.{}", vm.subdomain, base_domain);
                     let client = caddy_for_vm(caddy, pool, &vm).await;
                     if let Err(e) = client
-                        .set_vm_route(&vm.subdomain, &vm.ip_address, vm.exposed_port as u16)
+                        .set_vm_route(&fqdn, &vm.ip_address, vm.exposed_port as u16)
                         .await
                     {
                         error!("failed to set caddy route for {vm_id}: {e}");
@@ -121,8 +127,9 @@ async fn connect_and_stream(
             "stopped" => {
                 if let Ok(Some(vm)) = db::get_vm(pool, vm_id).await {
                     db::set_vm_status(pool, vm_id, "stopped").await.ok();
+                    let fqdn = format!("{}.{}", vm.subdomain, base_domain);
                     let client = caddy_for_vm(caddy, pool, &vm).await;
-                    if let Err(e) = client.set_stopped_route(&vm.subdomain).await {
+                    if let Err(e) = client.set_stopped_route(&fqdn).await {
                         error!("failed to set stopped caddy route for {vm_id}: {e}");
                     }
                 }
@@ -131,8 +138,9 @@ async fn connect_and_stream(
             "crashed" => {
                 if let Ok(Some(vm)) = db::get_vm(pool, vm_id).await {
                     db::set_vm_status(pool, vm_id, "error").await.ok();
+                    let fqdn = format!("{}.{}", vm.subdomain, base_domain);
                     let client = caddy_for_vm(caddy, pool, &vm).await;
-                    if let Err(e) = client.set_stopped_route(&vm.subdomain).await {
+                    if let Err(e) = client.set_stopped_route(&fqdn).await {
                         error!("failed to update caddy route for crashed {vm_id}: {e}");
                     }
                 }

@@ -1,4 +1,5 @@
 pub(crate) mod gateway;
+pub(crate) mod passkey;
 pub(crate) mod password;
 pub mod routes;
 mod session;

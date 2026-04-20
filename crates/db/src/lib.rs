@@ -745,7 +745,7 @@ fn row_to_snapshot(r: sqlx::postgres::PgRow) -> SnapshotRow {
 pub struct AccountRow {
     pub id: String,
     pub email: String,
-    pub password_hash: String,
+    pub password_hash: Option<String>,
     pub username: String,
     pub display_name: Option<String>,
     pub avatar_bytes: Option<Vec<u8>>,
@@ -755,14 +755,41 @@ pub struct AccountRow {
     pub vm_limit: i32,
     pub created_at: i64,
     pub role: String,
+    pub auth_mode: String,
 }
 
 pub struct NewAccount {
     pub id: String,
     pub email: String,
-    pub password_hash: String,
+    pub password_hash: Option<String>,
     pub username: String,
     pub created_at: i64,
+}
+
+#[derive(Debug, Clone)]
+pub struct PasskeyRow {
+    pub id: String,
+    pub account_id: String,
+    pub credential_id: Vec<u8>,
+    pub passkey_json: String,
+    pub name: String,
+    pub created_at: i64,
+}
+
+#[derive(Debug, Clone)]
+pub struct PasskeyChallenge {
+    pub id: String,
+    pub account_id: Option<String>,
+    pub challenge_json: String,
+    pub kind: String,
+    pub expires_at: i64,
+}
+
+#[derive(Debug, Clone)]
+pub struct PendingAuthToken {
+    pub id: String,
+    pub account_id: String,
+    pub expires_at: i64,
 }
 
 pub struct UpdateTheme {
@@ -814,13 +841,23 @@ pub async fn create_account(pool: &PgPool, account: &NewAccount) -> Result<Accou
         vm_limit: 5,
         created_at: account.created_at,
         role: "user".into(),
+        auth_mode: "password".into(),
     })
+}
+
+pub async fn set_account_auth_mode(pool: &PgPool, account_id: &str, mode: &str) -> Result<()> {
+    sqlx::query("UPDATE accounts SET auth_mode = $1 WHERE id = $2")
+        .bind(mode)
+        .bind(account_id)
+        .execute(pool)
+        .await?;
+    Ok(())
 }
 
 pub async fn get_account_by_email(pool: &PgPool, email: &str) -> Result<Option<AccountRow>> {
     let row = sqlx::query(
         "SELECT id, email, password_hash, username, display_name, avatar_bytes, theme,
-         vcpu_limit, mem_limit_mb, vm_limit, created_at, role
+         vcpu_limit, mem_limit_mb, vm_limit, created_at, role, auth_mode
          FROM accounts WHERE email = $1",
     )
     .bind(email)
@@ -832,7 +869,7 @@ pub async fn get_account_by_email(pool: &PgPool, email: &str) -> Result<Option<A
 pub async fn get_account_by_username(pool: &PgPool, username: &str) -> Result<Option<AccountRow>> {
     let row = sqlx::query(
         "SELECT id, email, password_hash, username, display_name, avatar_bytes, theme,
-         vcpu_limit, mem_limit_mb, vm_limit, created_at, role
+         vcpu_limit, mem_limit_mb, vm_limit, created_at, role, auth_mode
          FROM accounts WHERE username = $1",
     )
     .bind(username)
@@ -844,7 +881,7 @@ pub async fn get_account_by_username(pool: &PgPool, username: &str) -> Result<Op
 pub async fn get_account(pool: &PgPool, id: &str) -> Result<Option<AccountRow>> {
     let row = sqlx::query(
         "SELECT id, email, password_hash, username, display_name, avatar_bytes, theme,
-         vcpu_limit, mem_limit_mb, vm_limit, created_at, role
+         vcpu_limit, mem_limit_mb, vm_limit, created_at, role, auth_mode
          FROM accounts WHERE id = $1",
     )
     .bind(id)
@@ -975,6 +1012,7 @@ fn row_to_account(r: sqlx::postgres::PgRow) -> AccountRow {
         vm_limit: r.get("vm_limit"),
         created_at: r.get("created_at"),
         role: r.get("role"),
+        auth_mode: r.get("auth_mode"),
     }
 }
 
@@ -1558,4 +1596,199 @@ fn unix_now() -> i64 {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
         .as_secs() as i64
+}
+
+// ── passkeys ──────────────────────────────────────────────────────────────────
+
+pub async fn create_passkey(
+    pool: &PgPool,
+    id: &str,
+    account_id: &str,
+    credential_id: &[u8],
+    passkey_json: &str,
+    name: &str,
+) -> Result<PasskeyRow> {
+    let now = unix_now();
+    sqlx::query(
+        "INSERT INTO passkeys (id, account_id, credential_id, passkey_json, name, created_at)
+         VALUES ($1, $2, $3, $4, $5, $6)",
+    )
+    .bind(id)
+    .bind(account_id)
+    .bind(credential_id)
+    .bind(passkey_json)
+    .bind(name)
+    .bind(now)
+    .execute(pool)
+    .await?;
+    Ok(PasskeyRow {
+        id: id.to_string(),
+        account_id: account_id.to_string(),
+        credential_id: credential_id.to_vec(),
+        passkey_json: passkey_json.to_string(),
+        name: name.to_string(),
+        created_at: now,
+    })
+}
+
+pub async fn list_passkeys(pool: &PgPool, account_id: &str) -> Result<Vec<PasskeyRow>> {
+    let rows = sqlx::query(
+        "SELECT id, account_id, credential_id, passkey_json, name, created_at
+         FROM passkeys WHERE account_id = $1 ORDER BY created_at ASC",
+    )
+    .bind(account_id)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows.into_iter().map(row_to_passkey).collect())
+}
+
+pub async fn get_passkey_by_credential_id(
+    pool: &PgPool,
+    credential_id: &[u8],
+) -> Result<Option<PasskeyRow>> {
+    let row = sqlx::query(
+        "SELECT id, account_id, credential_id, passkey_json, name, created_at
+         FROM passkeys WHERE credential_id = $1",
+    )
+    .bind(credential_id)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row.map(row_to_passkey))
+}
+
+pub async fn update_passkey_json(pool: &PgPool, id: &str, passkey_json: &str) -> Result<()> {
+    sqlx::query("UPDATE passkeys SET passkey_json = $1 WHERE id = $2")
+        .bind(passkey_json)
+        .bind(id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+pub async fn rename_passkey(pool: &PgPool, id: &str, account_id: &str, name: &str) -> Result<bool> {
+    let res = sqlx::query("UPDATE passkeys SET name = $1 WHERE id = $2 AND account_id = $3")
+        .bind(name)
+        .bind(id)
+        .bind(account_id)
+        .execute(pool)
+        .await?;
+    Ok(res.rows_affected() > 0)
+}
+
+pub async fn delete_passkey(pool: &PgPool, id: &str, account_id: &str) -> Result<bool> {
+    let res = sqlx::query("DELETE FROM passkeys WHERE id = $1 AND account_id = $2")
+        .bind(id)
+        .bind(account_id)
+        .execute(pool)
+        .await?;
+    Ok(res.rows_affected() > 0)
+}
+
+fn row_to_passkey(r: sqlx::postgres::PgRow) -> PasskeyRow {
+    PasskeyRow {
+        id: r.get("id"),
+        account_id: r.get("account_id"),
+        credential_id: r.get("credential_id"),
+        passkey_json: r.get("passkey_json"),
+        name: r.get("name"),
+        created_at: r.get("created_at"),
+    }
+}
+
+// ── passkey challenges ─────────────────────────────────────────────────────────
+
+pub async fn create_passkey_challenge(
+    pool: &PgPool,
+    id: &str,
+    account_id: Option<&str>,
+    challenge_json: &str,
+    kind: &str,
+    expires_at: i64,
+) -> Result<()> {
+    sqlx::query(
+        "INSERT INTO passkey_challenges (id, account_id, challenge_json, kind, expires_at)
+         VALUES ($1, $2, $3, $4, $5)",
+    )
+    .bind(id)
+    .bind(account_id)
+    .bind(challenge_json)
+    .bind(kind)
+    .bind(expires_at)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+pub async fn get_passkey_challenge(
+    pool: &PgPool,
+    id: &str,
+    kind: &str,
+) -> Result<Option<PasskeyChallenge>> {
+    let row = sqlx::query(
+        "SELECT id, account_id, challenge_json, kind, expires_at
+         FROM passkey_challenges WHERE id = $1 AND kind = $2",
+    )
+    .bind(id)
+    .bind(kind)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row.map(|r| PasskeyChallenge {
+        id: r.get("id"),
+        account_id: r.get("account_id"),
+        challenge_json: r.get("challenge_json"),
+        kind: r.get("kind"),
+        expires_at: r.get("expires_at"),
+    }))
+}
+
+pub async fn delete_passkey_challenge(pool: &PgPool, id: &str) -> Result<()> {
+    sqlx::query("DELETE FROM passkey_challenges WHERE id = $1")
+        .bind(id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+// ── pending auth tokens ────────────────────────────────────────────────────────
+
+pub async fn create_pending_auth_token(
+    pool: &PgPool,
+    id: &str,
+    account_id: &str,
+    expires_at: i64,
+) -> Result<()> {
+    sqlx::query(
+        "INSERT INTO pending_auth_tokens (id, account_id, expires_at) VALUES ($1, $2, $3)",
+    )
+    .bind(id)
+    .bind(account_id)
+    .bind(expires_at)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+pub async fn get_pending_auth_token(
+    pool: &PgPool,
+    id: &str,
+) -> Result<Option<PendingAuthToken>> {
+    let row = sqlx::query(
+        "SELECT id, account_id, expires_at FROM pending_auth_tokens WHERE id = $1",
+    )
+    .bind(id)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row.map(|r| PendingAuthToken {
+        id: r.get("id"),
+        account_id: r.get("account_id"),
+        expires_at: r.get("expires_at"),
+    }))
+}
+
+pub async fn delete_pending_auth_token(pool: &PgPool, id: &str) -> Result<()> {
+    sqlx::query("DELETE FROM pending_auth_tokens WHERE id = $1")
+        .bind(id)
+        .execute(pool)
+        .await?;
+    Ok(())
 }

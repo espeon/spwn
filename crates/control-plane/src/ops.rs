@@ -17,6 +17,7 @@ use crate::{caddy_router::CaddyRouter, scheduler, subdomain};
 pub struct ControlPlaneOps {
     pub pool: db::PgPool,
     pub caddy: CaddyRouter,
+    pub base_domain: String,
 }
 
 impl ControlPlaneOps {
@@ -138,11 +139,8 @@ impl api::VmOps for ControlPlaneOps {
             .await?
             .ok_or_else(|| anyhow!("vm {vm_id} not found after creation"))?;
 
-        let _ = self
-            .caddy
-            .for_host(&host)
-            .set_stopped_route(&vm.subdomain)
-            .await;
+        let fqdn = format!("{}.{}", vm.subdomain, self.base_domain);
+        let _ = self.caddy.for_host(&host).set_stopped_route(&fqdn).await;
         Ok(vm)
     }
 
@@ -207,8 +205,9 @@ impl api::VmOps for ControlPlaneOps {
         if !resp.ok {
             return Err(anyhow!("agent delete_vm failed: {}", resp.error));
         }
+        let fqdn = format!("{}.{}", vm.subdomain, self.base_domain);
         let caddy = self.caddy_for_vm(&vm).await;
-        if let Err(e) = caddy.set_stopped_route(&vm.subdomain).await {
+        if let Err(e) = caddy.set_stopped_route(&fqdn).await {
             error!("failed to update caddy route for deleted {id}: {e}");
         }
         Ok(())
@@ -300,23 +299,21 @@ impl api::VmOps for ControlPlaneOps {
 
             db::rename_vm(&self.pool, vm_id, new_name, &new_subdomain).await?;
 
+            let new_fqdn = format!("{}.{}", new_subdomain, self.base_domain);
+            let old_fqdn = format!("{}.{}", old_subdomain, self.base_domain);
             let caddy = self.caddy_for_vm(&current).await;
             let set_result = if current.status == "running" {
                 caddy
-                    .set_vm_route(
-                        &new_subdomain,
-                        &current.ip_address,
-                        current.exposed_port as u16,
-                    )
+                    .set_vm_route(&new_fqdn, &current.ip_address, current.exposed_port as u16)
                     .await
             } else {
-                caddy.set_stopped_route(&new_subdomain).await
+                caddy.set_stopped_route(&new_fqdn).await
             };
             if let Err(e) = set_result {
-                error!("rename: failed to set caddy route {new_subdomain}: {e}");
+                error!("rename: failed to set caddy route {new_fqdn}: {e}");
             }
-            if let Err(e) = caddy.delete_route(&old_subdomain).await {
-                error!("rename: failed to delete old caddy route {old_subdomain}: {e}");
+            if let Err(e) = caddy.delete_route(&old_fqdn).await {
+                error!("rename: failed to delete old caddy route {old_fqdn}: {e}");
             }
         }
 
@@ -326,9 +323,10 @@ impl api::VmOps for ControlPlaneOps {
                 .ok_or_else(|| anyhow!("vm not found: {vm_id}"))?;
             db::update_vm_port(&self.pool, vm_id, port).await?;
             if current.status == "running" {
+                let fqdn = format!("{}.{}", current.subdomain, self.base_domain);
                 let caddy = self.caddy_for_vm(&current).await;
                 if let Err(e) = caddy
-                    .set_vm_route(&current.subdomain, &current.ip_address, port as u16)
+                    .set_vm_route(&fqdn, &current.ip_address, port as u16)
                     .await
                 {
                     error!("update_port: failed to update caddy route for {vm_id}: {e}");
@@ -467,11 +465,8 @@ impl api::VmOps for ControlPlaneOps {
             .await?
             .ok_or_else(|| anyhow!("vm {new_vm_id} not found after clone"))?;
 
-        let _ = self
-            .caddy
-            .for_host(&host)
-            .set_stopped_route(&vm.subdomain)
-            .await;
+        let fqdn = format!("{}.{}", vm.subdomain, self.base_domain);
+        let _ = self.caddy.for_host(&host).set_stopped_route(&fqdn).await;
         Ok(vm)
     }
 
@@ -524,26 +519,28 @@ impl api::VmOps for ControlPlaneOps {
                 }
             };
 
+            let new_fqdn = format!("{}.{}", entry.new_subdomain, self.base_domain);
+            let old_fqdn = format!("{}.{}", entry.old_subdomain, self.base_domain);
             let caddy = self.caddy_for_vm(&vm).await;
             let result = if vm.status == "running" {
                 caddy
-                    .set_vm_route(&entry.new_subdomain, &vm.ip_address, vm.exposed_port as u16)
+                    .set_vm_route(&new_fqdn, &vm.ip_address, vm.exposed_port as u16)
                     .await
             } else {
-                caddy.set_stopped_route(&entry.new_subdomain).await
+                caddy.set_stopped_route(&new_fqdn).await
             };
 
             if let Err(e) = result {
                 error!(
                     "failed to set caddy route for {} after username change: {e}",
-                    entry.new_subdomain
+                    new_fqdn
                 );
             }
 
-            if let Err(e) = caddy.delete_route(&entry.old_subdomain).await {
+            if let Err(e) = caddy.delete_route(&old_fqdn).await {
                 error!(
                     "failed to delete old caddy route {} after username change: {e}",
-                    entry.old_subdomain
+                    old_fqdn
                 );
             }
         }
