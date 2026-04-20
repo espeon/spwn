@@ -35,7 +35,7 @@ async fn create_account_and_session(pool: &db::PgPool) -> (String, String) {
         &db::NewAccount {
             id: account_id.clone(),
             email: format!("{account_id}@test.com"),
-            password_hash: "x".into(),
+            password_hash: Some("x".into()),
             username: "testuser".into(),
             created_at: now,
         },
