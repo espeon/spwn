@@ -94,6 +94,7 @@ pub struct NewVm {
     pub cloned_from: Option<String>,
     pub placement_strategy: String,
     pub required_labels: Option<serde_json::Value>,
+    pub host_id: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -163,8 +164,8 @@ pub async fn create_vm(pool: &PgPool, vm: &NewVm) -> Result<()> {
         "INSERT INTO vms (id, account_id, name, status, subdomain, vcpus, memory_mb,
          disk_mb, bandwidth_mbps, kernel_path, rootfs_path, overlay_path, real_init,
          ip_address, exposed_port, base_image, cloned_from, placement_strategy,
-         required_labels, created_at)
-         VALUES ($1,$2,$3,'stopped',$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)",
+         required_labels, host_id, created_at)
+         VALUES ($1,$2,$3,'stopped',$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)",
     )
     .bind(&vm.id)
     .bind(&vm.account_id)
@@ -184,6 +185,7 @@ pub async fn create_vm(pool: &PgPool, vm: &NewVm) -> Result<()> {
     .bind(&vm.cloned_from)
     .bind(&vm.placement_strategy)
     .bind(vm.required_labels.as_ref().map(sqlx::types::Json))
+    .bind(&vm.host_id)
     .bind(now)
     .execute(pool)
     .await?;
@@ -890,6 +892,28 @@ pub async fn update_account_profile(
     sqlx::query("UPDATE accounts SET display_name = $1, avatar_bytes = $2 WHERE id = $3")
         .bind(&update.display_name)
         .bind(&update.avatar_bytes)
+        .bind(id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+pub async fn update_account_display_name(
+    pool: &PgPool,
+    id: &str,
+    display_name: Option<&str>,
+) -> Result<()> {
+    sqlx::query("UPDATE accounts SET display_name = $1 WHERE id = $2")
+        .bind(display_name)
+        .bind(id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+pub async fn update_account_avatar(pool: &PgPool, id: &str, avatar_bytes: &[u8]) -> Result<()> {
+    sqlx::query("UPDATE accounts SET avatar_bytes = $1 WHERE id = $2")
+        .bind(avatar_bytes)
         .bind(id)
         .execute(pool)
         .await?;

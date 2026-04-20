@@ -11,6 +11,18 @@ use serde::{Deserialize, Serialize};
 
 use auth::AccountId;
 
+#[derive(Debug, thiserror::Error)]
+pub enum VmOpsError {
+    #[error("{0}")]
+    QuotaExceeded(String),
+    #[error("{0}")]
+    RestartRequired(String),
+    #[error("{0}")]
+    Conflict(String),
+    #[error("{0}")]
+    Validation(String),
+}
+
 #[async_trait::async_trait]
 pub trait VmOps: Send + Sync {
     async fn create_vm(
@@ -257,17 +269,15 @@ async fn change_username(
 ) -> impl IntoResponse {
     match ops.change_username(&account_id.0, &req.username).await {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
-        Err(e) => {
-            let msg = e.to_string();
-            if msg.contains("unique") || msg.contains("duplicate") || msg.contains("already taken")
-            {
+        Err(e) => match e.downcast_ref::<VmOpsError>() {
+            Some(VmOpsError::Conflict(_)) => {
                 (StatusCode::CONFLICT, "username already taken").into_response()
-            } else if msg.contains("invalid username") {
-                (StatusCode::BAD_REQUEST, msg).into_response()
-            } else {
-                (StatusCode::INTERNAL_SERVER_ERROR, msg).into_response()
             }
-        }
+            Some(VmOpsError::Validation(msg)) => {
+                (StatusCode::BAD_REQUEST, msg.clone()).into_response()
+            }
+            _ => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        },
     }
 }
 
@@ -309,14 +319,12 @@ async fn clone_vm(
 ) -> impl IntoResponse {
     match ops.clone_vm(&id, &account_id.0, req).await {
         Ok(vm) => (StatusCode::CREATED, Json(VmResponse::from(vm))).into_response(),
-        Err(e) => {
-            let msg = e.to_string();
-            if msg.contains("quota") || msg.contains("limit") {
-                (StatusCode::UNPROCESSABLE_ENTITY, msg).into_response()
-            } else {
-                (StatusCode::INTERNAL_SERVER_ERROR, msg).into_response()
+        Err(e) => match e.downcast_ref::<VmOpsError>() {
+            Some(VmOpsError::QuotaExceeded(msg)) => {
+                (StatusCode::UNPROCESSABLE_ENTITY, msg.clone()).into_response()
             }
-        }
+            _ => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        },
     }
 }
 
@@ -507,13 +515,11 @@ async fn resize_resources(
     };
     match ops.resize_resources(&id, &account_id.0, p).await {
         Ok(updated) => Json(VmResponse::from(updated)).into_response(),
-        Err(e) => {
-            let msg = e.to_string();
-            if msg.contains("restart required") {
-                (StatusCode::UNPROCESSABLE_ENTITY, msg).into_response()
-            } else {
-                (StatusCode::INTERNAL_SERVER_ERROR, msg).into_response()
+        Err(e) => match e.downcast_ref::<VmOpsError>() {
+            Some(VmOpsError::RestartRequired(msg)) => {
+                (StatusCode::UNPROCESSABLE_ENTITY, msg.clone()).into_response()
             }
-        }
+            _ => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        },
     }
 }

@@ -18,11 +18,16 @@ services:
       retries: 10
 
   caddy:
-    image: docker.io/caddy:2
+    image: ghcr.io/espeon/spwn-caddy:latest
+    build:
+      context: .
+      dockerfile: docker/caddy.Dockerfile
     restart: unless-stopped
     ports:
       - "80:80"
       - "443:443"
+      - "2019:2019"
+    env_file: .env
     volumes:
       - ./config/caddy-compose.json:/etc/caddy/config.json:ro
       - caddy_data:/data
@@ -33,6 +38,7 @@ services:
     command: caddy run --config /etc/caddy/config.json
 
   control-plane:
+    image: ghcr.io/espeon/spwn-control-plane:latest
     build:
       context: .
       dockerfile: docker/control-plane.Dockerfile
@@ -54,6 +60,7 @@ services:
       - spwn
 
   ssh-gateway:
+    image: ghcr.io/espeon/spwn-ssh-gateway:latest
     build:
       context: .
       dockerfile: docker/ssh-gateway.Dockerfile

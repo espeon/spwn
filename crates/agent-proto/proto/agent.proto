@@ -14,6 +14,7 @@ service HostAgent {
   rpc MigrateVm(MigrateVmRequest)        returns (MigrateVmResponse);
   rpc ResizeCpu(ResizeCpuRequest)        returns (ResizeCpuResponse);
   rpc ResizeBandwidth(ResizeBandwidthRequest) returns (ResizeBandwidthResponse);
+  rpc DeleteSnapshot(DeleteSnapshotRequest)   returns (DeleteSnapshotResponse);
   rpc WatchEvents(WatchRequest)          returns (stream AgentEvent);
 
   // bidirectional SSH console relay; first ConsoleInput frame carries vm_id
@@ -94,6 +95,9 @@ message ResizeCpuResponse { bool ok = 1; string error = 2; }
 
 message ResizeBandwidthRequest  { string vm_id = 1; int32 bandwidth_mbps = 2; }
 message ResizeBandwidthResponse { bool ok = 1; string error = 2; }
+
+message DeleteSnapshotRequest  { string vm_id = 1; string snap_id = 2; }
+message DeleteSnapshotResponse { bool ok = 1; string error = 2; }
 
 message WatchRequest {}
 
