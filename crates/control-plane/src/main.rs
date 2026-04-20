@@ -164,15 +164,33 @@ async fn main() -> anyhow::Result<()> {
         .merge(admin::router(admin_state))
         .route("/api/events", get(vm_events_sse))
         .route("/", get({
+            let no_frontend = no_frontend;
+            let banner_path = banner_path.clone();
             let frontend_path = frontend_path.clone();
             move || {
                 async move {
                     if no_frontend {
+                        let banner = if let Some(ref path) = banner_path {
+                            match std::fs::read_to_string(path) {
+                                Ok(content) => {
+                                    tracing::info!("loaded banner from file");
+                                    content
+                                }
+                                Err(e) => {
+                                    tracing::warn!("failed to read banner file: {}, using embedded", e);
+                                    BANNER.to_string()
+                                }
+                            }
+                        } else {
+                            tracing::info!("using embedded banner");
+                            BANNER.to_string()
+                        };
                         return Html(format!(
                             r#"<!DOCTYPE html><html><head><title>spwn</title></head><body><pre style="font-family:monospace;font-size:14px;line-height:1.2;white-space:pre">{}</pre></body></html>"#,
-                            BANNER
+                            banner
                         ));
                     }
+                    tracing::debug!("serving frontend, no_frontend={}", no_frontend);
                     let index = std::fs::read_to_string(format!("{}/index.html", frontend_path))
                         .unwrap_or_else(|_| "index.html not found".to_string());
                     Html(index)
