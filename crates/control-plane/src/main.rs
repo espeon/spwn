@@ -75,11 +75,6 @@ async fn main() -> anyhow::Result<()> {
     let base_domain = std::env::var("BASE_DOMAIN") unwrap_or_else(|_| "spwn run" into());
     let no_frontend = std::env::var("NO_FRONTEND") is_ok();
 
-    let banner_path = std::env::var("BANNER_FILE")
-         map(|p| PathBuf::from_str(&p) expect("BANNER_FILE must be a valid path"))
-         ok();
-    static BANNER: &str = include_str!("  /static/banner txt");
-
     let cors_origin = std::env::var("CORS_ORIGIN") ok();
     let secure_cookies = std::env::var("SECURE_COOKIES")
          map(|v| v == "true" || v == "1")
@@ -194,24 +189,9 @@ async fn main() -> anyhow::Result<()> {
             move || {
                 async move {
                     if no_frontend {
-                        let banner = if let Some(ref path) = banner_path {
-                            match std::fs::read_to_string(path) {
-                                Ok(content) => {
-                                    tracing::info!("loaded banner from file");
-                                    content
-                                }
-                                Err(e) => {
-                                    tracing::warn!("failed to read banner file: {}, using embedded", e);
-                                    BANNER to_string()
-                                }
-                            }
-                        } else {
-                            tracing::info!("using embedded banner");
-                            BANNER to_string()
-                        };
                         return Html(format!(
                             r#"<!DOCTYPE html><html><head><title>spwn</title></head><body><pre style="font-family:monospace;font-size:14px;line-height:1 2;white-space:pre">{}</pre></body></html>"#,
-                            banner
+                            BANNER
                         ));
                     }
                     tracing::debug!("serving frontend, no_frontend={}", no_frontend);
