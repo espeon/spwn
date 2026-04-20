@@ -20,153 +20,177 @@ mod registration;
 mod scheduler;
 mod subdomain;
 
+const BANNER: &str = &"
+
+
+             #@*                   :****
+              :                   *****
+                                 ****=
+                                 ****
+                      **+       -***:       **********
+                     -***:      =***     **************
+                      ****      :***=  ******:
+                       ****-     **** ****+
+                        ******    *******:::
+                          **********************
+                            :**********************
+                                   *******+    *****=
+                                 +****:****:     *****
+                       :      -******   ***+      +***-
+                     =*************     ****       ****
+                      :********:        ****        *+
+                                       +***-
+                                      -****
+                                     *****
+                                    ****:
+"
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    dotenvy::dotenv().ok();
+    dotenvy::dotenv() ok();
 
     tracing_subscriber::fmt()
-        .with_env_filter(
+         with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "debug".into()),
+                 unwrap_or_else(|_| "debug" into()),
         )
-        .init();
+         init();
 
-    let listen_addr = std::env::var("LISTEN_ADDR").unwrap_or_else(|_| "0.0.0.0:3000".into());
+    let listen_addr = std::env::var("LISTEN_ADDR") unwrap_or_else(|_| "0 0 0 0:3000" into());
     let grpc_listen_addr =
-        std::env::var("GRPC_LISTEN_ADDR").unwrap_or_else(|_| "0.0.0.0:5000".into());
+        std::env::var("GRPC_LISTEN_ADDR") unwrap_or_else(|_| "0 0 0 0:5000" into());
     let database_url = std::env::var("DATABASE_URL")
-        .unwrap_or_else(|_| "postgres://postgres:spwn@localhost/spwn".into());
-    let caddy_url = std::env::var("CADDY_URL").unwrap_or_else(|_| "http://localhost:2019".into());
+         unwrap_or_else(|_| "postgres://postgres:spwn@localhost/spwn" into());
+    let caddy_url = std::env::var("CADDY_URL") unwrap_or_else(|_| "http://localhost:2019" into());
     let static_files_path = PathBuf::from_str(
-        &std::env::var("STATIC_FILES_PATH").unwrap_or_else(|_| "/var/lib/spwn/static".into()),
+        &std::env::var("STATIC_FILES_PATH") unwrap_or_else(|_| "/var/lib/spwn/static" into()),
     )
-    .expect("STATIC_FILES_PATH must be a valid path");
-    let invite_code = std::env::var("INVITE_CODE").context("INVITE_CODE env var is required")?;
-    let frontend_path = std::env::var("FRONTEND_PATH").unwrap_or_else(|_| "frontend/dist".into());
+     expect("STATIC_FILES_PATH must be a valid path");
+    let invite_code = std::env::var("INVITE_CODE") context("INVITE_CODE env var is required")?;
+    let frontend_path = std::env::var("FRONTEND_PATH") unwrap_or_else(|_| "frontend/dist" into());
     let session_ttl_secs: i64 = std::env::var("SESSION_TTL_SECS")
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(604800);
-    let public_url = std::env::var("PUBLIC_URL").unwrap_or_else(|_| "https://spwn.run".into());
-    let base_domain = std::env::var("BASE_DOMAIN").unwrap_or_else(|_| "spwn.run".into());
-    let no_frontend = std::env::var("NO_FRONTEND").is_ok();
+         ok()
+         and_then(|s| s parse() ok())
+         unwrap_or(604800);
+    let public_url = std::env::var("PUBLIC_URL") unwrap_or_else(|_| "https://spwn run" into());
+    let base_domain = std::env::var("BASE_DOMAIN") unwrap_or_else(|_| "spwn run" into());
+    let no_frontend = std::env::var("NO_FRONTEND") is_ok();
 
     let banner_path = std::env::var("BANNER_FILE")
-        .map(|p| PathBuf::from_str(&p).expect("BANNER_FILE must be a valid path"))
-        .ok();
-    static BANNER: &str = include_str!("../static/banner.txt");
+         map(|p| PathBuf::from_str(&p) expect("BANNER_FILE must be a valid path"))
+         ok();
+    static BANNER: &str = include_str!("  /static/banner txt");
 
-    let cors_origin = std::env::var("CORS_ORIGIN").ok();
+    let cors_origin = std::env::var("CORS_ORIGIN") ok();
     let secure_cookies = std::env::var("SECURE_COOKIES")
-        .map(|v| v == "true" || v == "1")
-        .unwrap_or(false);
-    let gateway_secret = std::env::var("GATEWAY_SECRET").ok();
+         map(|v| v == "true" || v == "1")
+         unwrap_or(false);
+    let gateway_secret = std::env::var("GATEWAY_SECRET") ok();
     let ssh_gateway_addr =
-        std::env::var("SSH_GATEWAY_ADDR").unwrap_or_else(|_| "localhost:2222".into());
+        std::env::var("SSH_GATEWAY_ADDR") unwrap_or_else(|_| "localhost:2222" into());
     info!("connecting to database");
-    let pool = db::connect(&database_url).await?;
-    db::migrate(&pool).await?;
+    let pool = db::connect(&database_url) await?;
+    db::migrate(&pool) await?;
     info!("migrations complete");
 
-    let caddy_default = CaddyClient::new(&caddy_url, static_files_path.clone());
-    caddy_default.write_static_files()?;
+    let caddy_default = CaddyClient::new(&caddy_url, static_files_path clone());
+    caddy_default write_static_files()?;
 
     let caddy_region_clients: HashMap<String, CaddyClient> = std::env::var("CADDY_REGION_URLS")
-        .unwrap_or_default()
-        .split(',')
-        .filter(|s| !s.is_empty())
-        .filter_map(|entry| {
-            let (region, url) = entry.split_once('=')?;
+         unwrap_or_default()
+         split(',')
+         filter(|s| !s is_empty())
+         filter_map(|entry| {
+            let (region, url) = entry split_once('=')?;
             Some((
-                region.trim().to_string(),
-                CaddyClient::new(url.trim(), static_files_path.clone()),
+                region trim() to_string(),
+                CaddyClient::new(url trim(), static_files_path clone()),
             ))
         })
-        .collect();
+         collect();
 
-    if !caddy_region_clients.is_empty() {
+    if !caddy_region_clients is_empty() {
         info!(
             "caddy region overrides: {}",
             caddy_region_clients
-                .keys()
-                .cloned()
-                .collect::<Vec<_>>()
-                .join(", ")
+                 keys()
+                 cloned()
+                 collect::<Vec<_>>()
+                 join(", ")
         );
     }
 
     let caddy = CaddyRouter::new(caddy_default, caddy_region_clients);
 
-    rebuild_caddy_routes(&pool, &caddy, &base_domain).await;
+    rebuild_caddy_routes(&pool, &caddy, &base_domain) await;
 
-    let event_watcher = events::EventWatcher::new(pool.clone(), caddy.clone(), base_domain.clone());
-    let event_tx = event_watcher.tx.clone();
+    let event_watcher = events::EventWatcher::new(pool clone(), caddy clone(), base_domain clone());
+    let event_tx = event_watcher tx clone();
 
-    let hosts = db::list_hosts(&pool).await.unwrap_or_default();
+    let hosts = db::list_hosts(&pool) await unwrap_or_default();
     for host in hosts {
-        event_watcher.watch_host(host.id, host.address).await;
+        event_watcher watch_host(host id, host address) await;
     }
 
     let ops = Arc::new(ops::ControlPlaneOps {
-        pool: pool.clone(),
-        caddy: caddy.clone(),
+        pool: pool clone(),
+        caddy: caddy clone(),
         base_domain,
     });
 
     let grpc_svc = registration::ControlPlaneService {
-        pool: pool.clone(),
+        pool: pool clone(),
         event_watcher,
     };
 
     let auth_state = auth::routes::AuthState::new(
-        pool.clone(),
+        pool clone(),
         invite_code,
         session_ttl_secs,
-        public_url.clone(),
+        public_url clone(),
         gateway_secret,
         ssh_gateway_addr,
         secure_cookies,
     )?;
 
     let admin_state = admin::AdminState {
-        pool: pool.clone(),
-        caddy: caddy.clone(),
+        pool: pool clone(),
+        caddy: caddy clone(),
     };
 
-    tokio::spawn(migration::run_drain_watcher(pool.clone(), caddy.clone()));
+    tokio::spawn(migration::run_drain_watcher(pool clone(), caddy clone()));
 
     let cors = {
         use http::header::{AUTHORIZATION, CONTENT_TYPE};
         use tower_http::cors::{AllowOrigin, CorsLayer};
 
         let layer = CorsLayer::new()
-            .allow_methods([Method::GET, Method::POST, Method::PUT, Method::PATCH, Method::DELETE])
-            .allow_headers([CONTENT_TYPE, AUTHORIZATION])
-            .allow_credentials(true);
+             allow_methods([Method::GET, Method::POST, Method::PUT, Method::PATCH, Method::DELETE])
+             allow_headers([CONTENT_TYPE, AUTHORIZATION])
+             allow_credentials(true);
 
         match cors_origin {
-            Some(origin) => layer.allow_origin(
+            Some(origin) => layer allow_origin(
                 origin
-                    .parse::<http::HeaderValue>()
-                    .expect("invalid CORS_ORIGIN"),
+                     parse::<http::HeaderValue>()
+                     expect("invalid CORS_ORIGIN"),
             ),
-            None => layer.allow_origin(AllowOrigin::exact(
-                public_url.clone()
-                    .parse::<http::HeaderValue>()
-                    .expect("invalid PUBLIC_URL for CORS"),
+            None => layer allow_origin(AllowOrigin::exact(
+                public_url clone()
+                     parse::<http::HeaderValue>()
+                     expect("invalid PUBLIC_URL for CORS"),
             )),
         }
     };
 
     let http_app = axum::Router::new()
-        .merge(auth::auth_router(auth_state))
-        .merge(api::router(ops as Arc<dyn api::VmOps>))
-        .merge(admin::router(admin_state))
-        .route("/api/events", get(vm_events_sse))
-        .route("/", get({
+         merge(auth::auth_router(auth_state))
+         merge(api::router(ops as Arc<dyn api::VmOps>))
+         merge(admin::router(admin_state))
+         route("/api/events", get(vm_events_sse))
+         route("/", get({
             let no_frontend = no_frontend;
-            let banner_path = banner_path.clone();
-            let frontend_path = frontend_path.clone();
+            let banner_path = banner_path clone();
+            let frontend_path = frontend_path clone();
             move || {
                 async move {
                     if no_frontend {
@@ -178,45 +202,45 @@ async fn main() -> anyhow::Result<()> {
                                 }
                                 Err(e) => {
                                     tracing::warn!("failed to read banner file: {}, using embedded", e);
-                                    BANNER.to_string()
+                                    BANNER to_string()
                                 }
                             }
                         } else {
                             tracing::info!("using embedded banner");
-                            BANNER.to_string()
+                            BANNER to_string()
                         };
                         return Html(format!(
-                            r#"<!DOCTYPE html><html><head><title>spwn</title></head><body><pre style="font-family:monospace;font-size:14px;line-height:1.2;white-space:pre">{}</pre></body></html>"#,
+                            r#"<!DOCTYPE html><html><head><title>spwn</title></head><body><pre style="font-family:monospace;font-size:14px;line-height:1 2;white-space:pre">{}</pre></body></html>"#,
                             banner
                         ));
                     }
                     tracing::debug!("serving frontend, no_frontend={}", no_frontend);
-                    let index = std::fs::read_to_string(format!("{}/index.html", frontend_path))
-                        .unwrap_or_else(|_| "index.html not found".to_string());
+                    let index = std::fs::read_to_string(format!("{}/index html", frontend_path))
+                         unwrap_or_else(|_| "index html not found" to_string());
                     Html(index)
                 }
             }
         }))
-        .fallback_service(
+         fallback_service(
             ServeDir::new(&frontend_path)
-                .not_found_service(ServeFile::new(format!("{frontend_path}/index.html"))),
+                 not_found_service(ServeFile::new(format!("{frontend_path}/index html"))),
         )
-        .layer(cors)
-        .layer(Extension(pool.clone()))
-        .layer(Extension(event_tx));
+         layer(cors)
+         layer(Extension(pool clone()))
+         layer(Extension(event_tx));
 
-    let http_listener = tokio::net::TcpListener::bind(&listen_addr).await?;
+    let http_listener = tokio::net::TcpListener::bind(&listen_addr) await?;
     info!("control-plane HTTP listening on {listen_addr}");
 
     let grpc_listen: std::net::SocketAddr =
-        grpc_listen_addr.parse().context("parse GRPC_LISTEN_ADDR")?;
+        grpc_listen_addr parse() context("parse GRPC_LISTEN_ADDR")?;
     info!("control-plane gRPC listening on {grpc_listen_addr}");
 
     tokio::select! {
         result = axum::serve(http_listener, http_app) => { result?; }
         result = tonic::transport::Server::builder()
-            .add_service(ControlPlaneServer::new(grpc_svc))
-            .serve(grpc_listen) => { result?; }
+             add_service(ControlPlaneServer::new(grpc_svc))
+             serve(grpc_listen) => { result?; }
         _ = tokio::signal::ctrl_c() => {
             info!("received ctrl-c, shutting down");
         }
@@ -229,17 +253,17 @@ async fn vm_events_sse(
     _account_id: auth::AccountId,
     Extension(tx): Extension<events::EventBroadcast>,
 ) -> Sse<impl tokio_stream::Stream<Item = Result<Event, Infallible>>> {
-    let stream = BroadcastStream::new(tx.subscribe()).filter_map(|result| match result {
+    let stream = BroadcastStream::new(tx subscribe()) filter_map(|result| match result {
         Ok(event) => serde_json::to_string(&event)
-            .ok()
-            .map(|data| Ok(Event::default().event("vm_status").data(data))),
+             ok()
+             map(|data| Ok(Event::default() event("vm_status") data(data))),
         Err(_) => None,
     });
-    Sse::new(stream).keep_alive(KeepAlive::default())
+    Sse::new(stream) keep_alive(KeepAlive::default())
 }
 
 async fn rebuild_caddy_routes(pool: &db::PgPool, caddy: &CaddyRouter, base_domain: &str) {
-    let vms = match db::get_all_vms(pool).await {
+    let vms = match db::get_all_vms(pool) await {
         Ok(v) => v,
         Err(e) => {
             tracing::error!("failed to load vms for caddy rebuild: {e}");
@@ -248,58 +272,58 @@ async fn rebuild_caddy_routes(pool: &db::PgPool, caddy: &CaddyRouter, base_domai
     };
 
     // Group VMs by their host's region so each regional caddy gets only its
-    // own routes. VMs without a host (or whose host has no region label) fall
-    // through to the default caddy.
+    // own routes  VMs without a host (or whose host has no region label) fall
+    // through to the default caddy
     let hosts: HashMap<String, db::HostRow> = db::list_hosts(pool)
-        .await
-        .unwrap_or_default()
-        .into_iter()
-        .map(|h| (h.id.clone(), h))
-        .collect();
+         await
+         unwrap_or_default()
+         into_iter()
+         map(|h| (h id clone(), h))
+         collect();
 
-    // Collect (caddy_client, RouteEntry) pairs.
+    // Collect (caddy_client, RouteEntry) pairs
     let mut by_client: HashMap<String, (CaddyClient, Vec<router_sync::RouteEntry>)> =
         HashMap::new();
 
     for vm in vms {
-        let host = vm.host_id.as_deref().and_then(|id| hosts.get(id));
+        let host = vm host_id as_deref() and_then(|id| hosts get(id));
         let client = match host {
-            Some(h) => caddy.for_host(h),
-            None => caddy.for_region(None),
+            Some(h) => caddy for_host(h),
+            None => caddy for_region(None),
         };
-        let key = client.base_url().to_string();
-        let target = if vm.status == "running" {
+        let key = client base_url() to_string();
+        let target = if vm status == "running" {
             router_sync::RouteTarget::Vm {
-                ip: vm.ip_address.clone(),
-                port: vm.exposed_port as u16,
+                ip: vm ip_address clone(),
+                port: vm exposed_port as u16,
             }
         } else {
             router_sync::RouteTarget::Stopped
         };
         by_client
-            .entry(key)
-            .or_insert_with(|| (client, Vec::new()))
-            .1
-            .push(router_sync::RouteEntry {
-                subdomain: format!("{}.{}", vm.subdomain, base_domain),
+             entry(key)
+             or_insert_with(|| (client, Vec::new()))
+             1
+             push(router_sync::RouteEntry {
+                subdomain: format!("{} {}", vm subdomain, base_domain),
                 target,
             });
     }
 
     // Any caddy instance that has no VMs still needs a rebuild call to clear
-    // stale dynamic config from a previous run.
-    for (_, client) in caddy.all_regions() {
-        let key = client.base_url().to_string();
+    // stale dynamic config from a previous run
+    for (_, client) in caddy all_regions() {
+        let key = client base_url() to_string();
         by_client
-            .entry(key)
-            .or_insert_with(|| (client.clone(), Vec::new()));
+             entry(key)
+             or_insert_with(|| (client clone(), Vec::new()));
     }
 
     for (_, (client, routes)) in by_client {
-        if let Err(e) = client.rebuild_all_routes(&routes).await {
+        if let Err(e) = client rebuild_all_routes(&routes) await {
             tracing::error!(
                 "failed to rebuild caddy routes for {}: {e}",
-                client.base_url()
+                client base_url()
             );
         }
     }

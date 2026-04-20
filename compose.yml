@@ -1,90 +1,96 @@
 services:
-  postgres:
-    image: docker.io/postgres:17.4
-    restart: unless-stopped
-    volumes:
-      - postgresql_data:/var/lib/postgresql/data
-    env_file: .env
-    environment:
-      POSTGRES_DB: ${POSTGRES_DB}
-      POSTGRES_USER: ${POSTGRES_USER}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-    networks:
-      - spwn
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
-      interval: 5s
-      timeout: 5s
-      retries: 10
+    postgres:
+        image: docker.io/postgres:17.4
+        restart: unless-stopped
+        volumes:
+            - postgresql_data:/var/lib/postgresql/data
+        env_file: .env
+        ports:
+            - "5432:5432"
+        environment:
+            POSTGRES_DB: ${POSTGRES_DB}
+            POSTGRES_USER: ${POSTGRES_USER}
+            POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+        networks:
+            - spwn
+        healthcheck:
+            test:
+                [
+                    "CMD-SHELL",
+                    "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}",
+                ]
+            interval: 5s
+            timeout: 5s
+            retries: 10
 
-  caddy:
-    image: ghcr.io/espeon/spwn-caddy:latest
-    build:
-      context: .
-      dockerfile: docker/caddy.Dockerfile
-    restart: unless-stopped
-    ports:
-      - "80:80"
-      - "443:443"
-    env_file: .env
-    volumes:
-      - ./${CADDY_CONFIG:-config/caddy-compose.json}:/etc/caddy/config.json:ro
-      - caddy_data:/data
-      - caddy_config:/config
-      - spwn_static:/var/lib/spwn/static:ro
-    networks:
-      - spwn
-    command: caddy run --config /etc/caddy/config.json
+    caddy:
+        image: ghcr.io/espeon/spwn-caddy:latest
+        build:
+            context: .
+            dockerfile: docker/caddy.Dockerfile
+        restart: unless-stopped
+        ports:
+            - "80:80"
+            - "443:443"
+        env_file: .env
+        volumes:
+            - ./${CADDY_CONFIG:-config/caddy-compose.json}:/etc/caddy/config.json:ro
+            - caddy_data:/data
+            - caddy_config:/config
+            - spwn_static:/var/lib/spwn/static:ro
+        networks:
+            - spwn
+        command: caddy run --config /etc/caddy/config.json
 
-  control-plane:
-    image: ghcr.io/espeon/spwn-control-plane:latest
-    build:
-      context: .
-      dockerfile: docker/control-plane.Dockerfile
-    restart: unless-stopped
-    depends_on:
-      postgres:
-        condition: service_healthy
-    env_file: .env
-    environment:
-      DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
-      LISTEN_ADDR: 0.0.0.0:3019
-      GRPC_LISTEN_ADDR: 0.0.0.0:5000
-      CADDY_URL: http://caddy:2019
-      STATIC_FILES_PATH: /var/lib/spwn/static
-      FRONTEND_PATH: /app/frontend/dist
-    volumes:
-      - spwn_static:/var/lib/spwn/static
-    networks:
-      - spwn
+    control-plane:
+        image: ghcr.io/espeon/spwn-control-plane:latest
+        build:
+            context: .
+            dockerfile: docker/control-plane.Dockerfile
+        restart: unless-stopped
+        depends_on:
+            postgres:
+                condition: service_healthy
+        env_file: .env
+        environment:
+            DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+            LISTEN_ADDR: 0.0.0.0:3019
+            GRPC_LISTEN_ADDR: 0.0.0.0:5000
+            CADDY_URL: http://caddy:2019
+            STATIC_FILES_PATH: /var/lib/spwn/static
+            FRONTEND_PATH: /app/frontend/dist
+        volumes:
+            - spwn_static:/var/lib/spwn/static
+        networks:
+            - spwn
 
-  ssh-gateway:
-    image: ghcr.io/espeon/spwn-ssh-gateway:latest
-    build:
-      context: .
-      dockerfile: docker/ssh-gateway.Dockerfile
-    restart: unless-stopped
-    depends_on:
-      - control-plane
-    ports:
-      - "2222:2222"
-    env_file: .env
-    environment:
-      CONTROL_PLANE_HTTP_URL: http://control-plane:3019
-      SSH_GATEWAY_LISTEN_ADDR: 0.0.0.0:2222
-      SSH_GATEWAY_HOST_KEY_PATH: /var/lib/spwn/gateway_host_key
-    volumes:
-      - spwn_state:/var/lib/spwn
-    networks:
-      - spwn
+    ssh-gateway:
+        image: ghcr.io/espeon/spwn-ssh-gateway:latest
+        build:
+            context: .
+            dockerfile: docker/ssh-gateway.Dockerfile
+        restart: unless-stopped
+        depends_on:
+            - control-plane
+        ports:
+            - "2222:2222"
+        env_file: .env
+        environment:
+            CONTROL_PLANE_HTTP_URL: http://control-plane:3019
+            SSH_GATEWAY_LISTEN_ADDR: 0.0.0.0:2222
+            SSH_GATEWAY_HOST_KEY_PATH: /var/lib/spwn/gateway_host_key
+        volumes:
+            - spwn_state:/var/lib/spwn
+        networks:
+            - spwn
 
 volumes:
-  postgresql_data:
-  caddy_data:
-  caddy_config:
-  spwn_static:
-  spwn_state:
+    postgresql_data:
+    caddy_data:
+    caddy_config:
+    spwn_static:
+    spwn_state:
 
 networks:
-  spwn:
-    driver: bridge
+    spwn:
+        driver: bridge
