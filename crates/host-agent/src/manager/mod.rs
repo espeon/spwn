@@ -393,8 +393,8 @@ impl VmManager {
                 ])
                 .await;
 
-            if let Some(ref overlay_path) = vm.overlay_path {
-                if let Err(e) = persist_overlay_from_jail(
+            if let Some(ref overlay_path) = vm.overlay_path
+                && let Err(e) = persist_overlay_from_jail(
                     &util::jail_root_path(&self.chroot_base_dir, &self.installation, vm_id),
                     std::path::Path::new(overlay_path),
                 )
@@ -402,7 +402,6 @@ impl VmManager {
                 {
                     warn!("failed to persist overlay for vm {vm_id}: {e}");
                 }
-            }
 
             let _ = fc_vm.cleanup().await;
         } else {

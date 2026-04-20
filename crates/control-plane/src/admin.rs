@@ -256,7 +256,6 @@ async fn build_image(
 
     tokio::spawn(async move {
         let channel = match Channel::from_shared(host.address.clone())
-            .and_then(|e| Ok(e))
             .map_err(|e| anyhow::anyhow!(e))
         {
             Ok(ep) => match ep.connect().await {

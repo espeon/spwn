@@ -433,13 +433,11 @@ fn total_mem_mb() -> u32 {
         return 0;
     };
     for line in info.lines() {
-        if let Some(rest) = line.strip_prefix("MemTotal:") {
-            if let Some(kb) = rest.trim().split_whitespace().next() {
-                if let Ok(kb) = kb.parse::<u32>() {
+        if let Some(rest) = line.strip_prefix("MemTotal:")
+            && let Some(kb) = rest.split_whitespace().next()
+                && let Ok(kb) = kb.parse::<u32>() {
                     return kb / 1024;
                 }
-            }
-        }
     }
     0
 }

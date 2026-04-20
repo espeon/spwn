@@ -80,13 +80,10 @@ async fn watch_loop(
         tokio::time::sleep(backoff).await;
         backoff = (backoff * 2).min(Duration::from_secs(30));
 
-        match db::get_host(&pool, &host_id).await {
-            Ok(None) => {
-                info!("host {host_id} no longer in DB, stopping watcher");
-                watcher.watched.lock().await.remove(&host_id);
-                return;
-            }
-            _ => {}
+        if let Ok(None) = db::get_host(&pool, &host_id).await {
+            info!("host {host_id} no longer in DB, stopping watcher");
+            watcher.watched.lock().await.remove(&host_id);
+            return;
         }
     }
 }

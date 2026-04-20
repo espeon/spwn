@@ -50,8 +50,8 @@ fn select_from_hosts(
             if free_vcpus < vcpus_needed || free_mem < mem_mb_needed {
                 return false;
             }
-            if let Some(required) = required_labels {
-                if let Some(req_map) = required.as_object() {
+            if let Some(required) = required_labels
+                && let Some(req_map) = required.as_object() {
                     if let Some(host_map) = h.labels.as_object() {
                         for (k, v) in req_map {
                             if host_map.get(k) != Some(v) {
@@ -62,7 +62,6 @@ fn select_from_hosts(
                         return false;
                     }
                 }
-            }
             true
         })
         .collect();

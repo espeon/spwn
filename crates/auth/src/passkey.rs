@@ -398,15 +398,12 @@ pub async fn passkey_login_finish(
 
     // Update the passkey counter if needed.
     let cred_id_bytes: Vec<u8> = auth_result.cred_id().to_vec();
-    if let Ok(Some(row)) = db::get_passkey_by_credential_id(&state.pool, &cred_id_bytes).await {
-        if let Ok(mut passkey) = serde_json::from_str::<Passkey>(&row.passkey_json) {
-            if passkey.update_credential(&auth_result) == Some(true) {
-                if let Ok(updated_json) = serde_json::to_string(&passkey) {
+    if let Ok(Some(row)) = db::get_passkey_by_credential_id(&state.pool, &cred_id_bytes).await
+        && let Ok(mut passkey) = serde_json::from_str::<Passkey>(&row.passkey_json)
+            && passkey.update_credential(&auth_result) == Some(true)
+                && let Ok(updated_json) = serde_json::to_string(&passkey) {
                     let _ = db::update_passkey_json(&state.pool, &row.id, &updated_json).await;
                 }
-            }
-        }
-    }
 
     match create_session(&state, jar, &account_id).await {
         Ok(jar) => (jar, StatusCode::OK).into_response(),
@@ -471,15 +468,12 @@ pub async fn passkey_verify(
     };
 
     let cred_id_bytes: Vec<u8> = auth_result.cred_id().to_vec();
-    if let Ok(Some(row)) = db::get_passkey_by_credential_id(&state.pool, &cred_id_bytes).await {
-        if let Ok(mut passkey) = serde_json::from_str::<Passkey>(&row.passkey_json) {
-            if passkey.update_credential(&auth_result) == Some(true) {
-                if let Ok(updated_json) = serde_json::to_string(&passkey) {
+    if let Ok(Some(row)) = db::get_passkey_by_credential_id(&state.pool, &cred_id_bytes).await
+        && let Ok(mut passkey) = serde_json::from_str::<Passkey>(&row.passkey_json)
+            && passkey.update_credential(&auth_result) == Some(true)
+                && let Ok(updated_json) = serde_json::to_string(&passkey) {
                     let _ = db::update_passkey_json(&state.pool, &row.id, &updated_json).await;
                 }
-            }
-        }
-    }
 
     match create_session(&state, jar, &token.account_id).await {
         Ok(jar) => (jar, StatusCode::OK).into_response(),

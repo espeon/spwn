@@ -34,7 +34,7 @@ pub fn provision_overlay(path: &Path, size_mb: u64) -> anyhow::Result<()> {
         .args([
             "-l",
             &size_bytes.to_string(),
-            &path.to_string_lossy().as_ref(),
+            path.to_string_lossy().as_ref(),
         ])
         .status()
         .context("run fallocate")?;

@@ -37,7 +37,7 @@ pub async fn reconcile_once(manager: &VmManager) -> anyhow::Result<()> {
         .iter()
         .filter(|v| v.status == "starting" || v.status == "stopping")
     {
-        let is_alive = vm.pid.map_or(false, |pid| pid_is_alive(pid as u32));
+        let is_alive = vm.pid.is_some_and(|pid| pid_is_alive(pid as u32));
         let new_status = if is_alive { "running" } else { "error" };
         warn!(
             "vm {} stuck in '{}', resetting to '{new_status}'",

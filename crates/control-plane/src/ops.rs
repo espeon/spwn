@@ -22,11 +22,10 @@ pub struct ControlPlaneOps {
 
 impl ControlPlaneOps {
     async fn caddy_for_vm(&self, vm: &db::VmRow) -> CaddyClient {
-        if let Some(host_id) = &vm.host_id {
-            if let Ok(Some(h)) = db::get_host(&self.pool, host_id).await {
+        if let Some(host_id) = &vm.host_id
+            && let Ok(Some(h)) = db::get_host(&self.pool, host_id).await {
                 return self.caddy.for_host(&h);
             }
-        }
         self.caddy.for_region(None)
     }
 

@@ -70,11 +70,10 @@ pub(crate) async fn read_jailer_pid(
     let pid_file = jail_root.join(format!("{fc_name}.pid"));
 
     for _ in 0..20 {
-        if let Ok(contents) = std::fs::read_to_string(&pid_file) {
-            if let Ok(pid) = contents.trim().parse::<i64>() {
+        if let Ok(contents) = std::fs::read_to_string(&pid_file)
+            && let Ok(pid) = contents.trim().parse::<i64>() {
                 return Some(pid);
             }
-        }
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
 
