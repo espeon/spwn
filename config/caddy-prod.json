@@ -30,7 +30,16 @@
       "servers": {
         "main": {
           "listen": [":80", ":443"],
-          "routes": []
+          "routes": [
+            {
+              "@id": "route-api",
+              "match": [{"host": ["{env.API_DOMAIN}"]}],
+              "handle": [{
+                "handler": "reverse_proxy",
+                "upstreams": [{"dial": "control-plane:3019"}]
+              }]
+            }
+          ]
         }
       }
     }

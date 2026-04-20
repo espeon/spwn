@@ -31,6 +31,7 @@ fn test_app(pool: db::PgPool) -> Router {
         "http://localhost:3019".into(),
         None,
         "localhost:2222".into(),
+        false,
     )
     .expect("AuthState::new");
     auth::auth_router(state).layer(Extension(pool))

@@ -718,6 +718,7 @@ dependencies = [
  "axum 0.8.8",
  "db",
  "dotenvy",
+ "http",
  "rand 0.8.5",
  "router-sync",
  "serde",

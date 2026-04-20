@@ -48,6 +48,10 @@ async fn main() -> anyhow::Result<()> {
         .unwrap_or(604800);
     let public_url = std::env::var("PUBLIC_URL").unwrap_or_else(|_| "https://spwn.run".into());
     let base_domain = std::env::var("BASE_DOMAIN").unwrap_or_else(|_| "spwn.run".into());
+    let cors_origin = std::env::var("CORS_ORIGIN").ok();
+    let secure_cookies = std::env::var("SECURE_COOKIES")
+        .map(|v| v == "true" || v == "1")
+        .unwrap_or(false);
     let gateway_secret = std::env::var("GATEWAY_SECRET").ok();
     let ssh_gateway_addr =
         std::env::var("SSH_GATEWAY_ADDR").unwrap_or_else(|_| "localhost:2222".into());
@@ -113,6 +117,7 @@ async fn main() -> anyhow::Result<()> {
         public_url,
         gateway_secret,
         ssh_gateway_addr,
+        secure_cookies,
     )?;
 
     let admin_state = admin::AdminState {
@@ -121,6 +126,29 @@ async fn main() -> anyhow::Result<()> {
     };
 
     tokio::spawn(migration::run_drain_watcher(pool.clone(), caddy.clone()));
+
+    let cors = {
+        use http::header::{AUTHORIZATION, CONTENT_TYPE};
+        use tower_http::cors::{AllowOrigin, CorsLayer};
+
+        let layer = CorsLayer::new()
+            .allow_methods(tower_http::cors::Any)
+            .allow_headers([CONTENT_TYPE, AUTHORIZATION])
+            .allow_credentials(true);
+
+        match cors_origin {
+            Some(origin) => layer.allow_origin(
+                origin
+                    .parse::<http::HeaderValue>()
+                    .expect("invalid CORS_ORIGIN"),
+            ),
+            None => layer.allow_origin(AllowOrigin::exact(
+                public_url
+                    .parse::<http::HeaderValue>()
+                    .expect("invalid PUBLIC_URL for CORS"),
+            )),
+        }
+    };
 
     let http_app = axum::Router::new()
         .merge(auth::auth_router(auth_state))
@@ -131,6 +159,7 @@ async fn main() -> anyhow::Result<()> {
             ServeDir::new(&frontend_path)
                 .not_found_service(ServeFile::new(format!("{frontend_path}/index.html"))),
         )
+        .layer(cors)
         .layer(Extension(pool.clone()))
         .layer(Extension(event_tx));
 

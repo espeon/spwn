@@ -29,6 +29,7 @@ pub struct AuthState {
     pub gateway_secret: Option<String>,
     pub ssh_gateway_addr: String,
     pub webauthn: Arc<Webauthn>,
+    pub secure_cookies: bool,
 }
 
 impl AuthState {
@@ -39,6 +40,7 @@ impl AuthState {
         public_url: String,
         gateway_secret: Option<String>,
         ssh_gateway_addr: String,
+        secure_cookies: bool,
     ) -> anyhow::Result<Self> {
         let rp_origin = url::Url::parse(&public_url)?;
         let rp_id = rp_origin
@@ -58,6 +60,7 @@ impl AuthState {
             gateway_secret,
             ssh_gateway_addr,
             webauthn,
+            secure_cookies,
         })
     }
 }
@@ -458,7 +461,8 @@ async fn login(
 
     let cookie = Cookie::build(("session_id", session.id))
         .http_only(true)
-        .same_site(SameSite::Lax)
+        .same_site(if state.secure_cookies { SameSite::None } else { SameSite::Lax })
+        .secure(state.secure_cookies)
         .path("/")
         .build();
 

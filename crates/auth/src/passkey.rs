@@ -577,7 +577,8 @@ async fn create_session(
 
     let cookie = Cookie::build(("session_id", session.id))
         .http_only(true)
-        .same_site(SameSite::Lax)
+        .same_site(if state.secure_cookies { SameSite::None } else { SameSite::Lax })
+        .secure(state.secure_cookies)
         .path("/")
         .build();
 

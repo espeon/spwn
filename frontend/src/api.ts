@@ -75,6 +75,8 @@ class ApiError extends Error {
   }
 }
 
+const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "";
+
 async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   const headers: Record<string, string> = {
     ...(options.headers as Record<string, string>),
@@ -82,7 +84,7 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   if (options.body !== undefined) {
     headers["Content-Type"] = "application/json";
   }
-  const resp = await fetch(path, { ...options, headers });
+  const resp = await fetch(API_BASE + path, { ...options, headers, credentials: "include" });
   if (!resp.ok) {
     const text = await resp.text().catch(() => resp.statusText);
     throw new ApiError(resp.status, text);
@@ -140,7 +142,7 @@ export function uploadAvatar(file: File): Promise<void> {
 }
 
 export function avatarUrl(accountId: string): string {
-  return `/auth/avatar/${accountId}`;
+  return `${API_BASE}/auth/avatar/${accountId}`;
 }
 
 export function changeUsername(username: string): Promise<void> {
