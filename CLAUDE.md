@@ -90,6 +90,8 @@ tests live in:
 - `crates/db/tests/integration.rs` — account/session CRUD, quota enforcement
 - `crates/auth/tests/integration.rs` — signup/login/logout/me routes
 
+**always run `just test` and `just check` after any large change** — especially anything touching shared types like `db::NewAccount`, `AccountRow`, or `AuthState`. these are used across multiple test crates and breakage won't surface until test time.
+
 ---
 
 ## gotchas
