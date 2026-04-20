@@ -5,7 +5,7 @@ After=network.target
 [Service]
 Type=simple
 User=root
-EnvironmentFile=/etc/spwn/env
+EnvironmentFile=/etc/spwn/.env
 ExecStart=/usr/local/bin/spwn-host-agent
 Restart=on-failure
 RestartSec=5
