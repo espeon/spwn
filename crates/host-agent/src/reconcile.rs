@@ -100,6 +100,24 @@ pub async fn reconcile_once(manager: &VmManager) -> anyhow::Result<()> {
         }
     }
 
+    // Claim any VMs whose overlay lives on this host but have no host assignment.
+    // This repairs VMs created before the set_vm_host fix was deployed.
+    let unassigned = db::get_vms_without_host(&manager.pool).await?;
+    for vm in unassigned {
+        let Some(overlay_path) = vm.overlay_path.as_deref() else {
+            continue;
+        };
+        if PathBuf::from(overlay_path).exists() {
+            info!("claiming unassigned vm {} (overlay found locally)", vm.id);
+            db::set_vm_host(&manager.pool, &vm.id, &manager.host_id)
+                .await
+                .ok();
+            db::log_event(&manager.pool, &vm.id, "reconcile_host_claimed", None)
+                .await
+                .ok();
+        }
+    }
+
     info!("reconciliation complete");
     Ok(())
 }

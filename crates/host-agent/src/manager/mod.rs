@@ -158,6 +158,8 @@ impl VmManager {
         )
         .await?;
 
+        db::set_vm_host(&self.pool, vm_id, &self.host_id).await?;
+
         let usage = overlay::measure_overlay_usage_mb(&overlay_path);
         db::update_disk_usage_mb(&self.pool, vm_id, usage)
             .await

@@ -164,13 +164,18 @@ impl api::VmOps for ControlPlaneOps {
             Err(e) => return Err(anyhow!("{e}")),
         }
 
-        let mut agent = self.agent_client(id).await?;
+        let mut agent = match self.agent_client(id).await {
+            Ok(a) => a,
+            Err(e) => {
+                let _ = db::set_vm_status(&self.pool, id, "stopped").await;
+                return Err(e);
+            }
+        };
         let resp = agent
             .start_vm(StartVmRequest { vm_id: id.into() })
             .await?
             .into_inner();
         if !resp.ok {
-            // revert status on agent failure
             let _ = db::set_vm_status(&self.pool, id, "stopped").await;
             return Err(anyhow!("agent start_vm failed: {}", resp.error));
         }

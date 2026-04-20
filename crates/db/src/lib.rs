@@ -307,6 +307,18 @@ pub async fn get_vms_by_host(pool: &PgPool, host_id: &str) -> Result<Vec<VmRow>>
     Ok(rows.into_iter().map(row_to_vm).collect())
 }
 
+pub async fn get_vms_without_host(pool: &PgPool) -> Result<Vec<VmRow>> {
+    let rows = sqlx::query(
+        "SELECT id, account_id, name, status, subdomain, vcpus, memory_mb, disk_mb, bandwidth_mbps,
+         kernel_path, rootfs_path, overlay_path, real_init, ip_address, exposed_port, tap_device, pid,
+         socket_path, host_id, base_image, cloned_from, disk_usage_mb, created_at, last_started_at,
+         placement_strategy, required_labels, region FROM vms WHERE host_id IS NULL",
+    )
+    .fetch_all(pool)
+    .await?;
+    Ok(rows.into_iter().map(row_to_vm).collect())
+}
+
 pub async fn set_vm_host(pool: &PgPool, vm_id: &str, host_id: &str) -> Result<()> {
     sqlx::query("UPDATE vms SET host_id = $1 WHERE id = $2")
         .bind(host_id)
