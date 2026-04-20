@@ -22,7 +22,7 @@ fn new_account_with_username(email: &str, username: &str) -> db::NewAccount {
     db::NewAccount {
         id: uuid::Uuid::new_v4().to_string(),
         email: email.to_string(),
-        password_hash: "hash".to_string(),
+        password_hash: Some("hash".to_string()),
         username: username.to_string(),
         created_at: 1_000_000,
     }

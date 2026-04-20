@@ -24,14 +24,15 @@ async fn setup() -> (ContainerAsync<Postgres>, db::PgPool) {
 }
 
 fn test_app(pool: db::PgPool) -> Router {
-    let state = AuthState {
-        pool: pool.clone(),
-        invite_code: "testcode".into(),
-        session_ttl_secs: 604800,
-        public_url: "http://localhost:3019".into(),
-        gateway_secret: None,
-        ssh_gateway_addr: "localhost:2222".into(),
-    };
+    let state = AuthState::new(
+        pool.clone(),
+        "testcode".into(),
+        604800,
+        "http://localhost:3019".into(),
+        None,
+        "localhost:2222".into(),
+    )
+    .expect("AuthState::new");
     auth::auth_router(state).layer(Extension(pool))
 }
 
