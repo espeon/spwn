@@ -315,7 +315,7 @@ async fn resize_running_vm_with_restart_error_returns_422() {
         async fn restore_snapshot(&self, _: &str, _: &str) -> anyhow::Result<()> { Ok(()) }
         async fn change_username(&self, _: &str, _: &str) -> anyhow::Result<()> { Ok(()) }
         async fn resize_resources(&self, _: &str, _: &str, _: VmResourcePatch) -> anyhow::Result<db::VmRow> {
-            Err(anyhow::anyhow!("restart required to apply CPU changes"))
+            Err(api::VmOpsError::RestartRequired("restart required to apply CPU changes".into()).into())
         }
         async fn update_vm(&self, _: &str, _: &str, _: VmPatch) -> anyhow::Result<db::VmRow> { unimplemented!() }
     }

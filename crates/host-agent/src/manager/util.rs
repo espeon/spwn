@@ -3,6 +3,19 @@ use std::{path::PathBuf, time::Duration};
 use anyhow::{Context, anyhow};
 use fctools::vmm::{id::VmmId, installation::VmmInstallation};
 
+pub fn read_fc_log_tail(path: &std::path::Path) -> Option<String> {
+    let content = std::fs::read_to_string(path).ok()?;
+    if content.is_empty() {
+        return None;
+    }
+    let trimmed = if content.len() > 2000 {
+        content[content.len() - 2000..].trim_start()
+    } else {
+        content.trim()
+    };
+    Some(trimmed.to_string())
+}
+
 pub(crate) fn jail_root_path(
     chroot_base_dir: &std::path::Path,
     installation: &VmmInstallation,

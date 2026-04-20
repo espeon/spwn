@@ -206,7 +206,7 @@ async fn test_signup_duplicate_email() {
 #[tokio::test]
 async fn test_login_success_sets_cookie() {
     let (_c, pool) = setup().await;
-    signup(pool.clone(), "u@b.com").await;
+    signup_with_username(pool.clone(), "u@b.com", "loginuser").await;
 
     let resp = login(pool, "u@b.com").await;
     assert_eq!(resp.status(), StatusCode::OK);
@@ -262,7 +262,7 @@ async fn test_me_unauthenticated() {
 #[tokio::test]
 async fn test_me_returns_account_info() {
     let (_c, pool) = setup().await;
-    signup(pool.clone(), "me@b.com").await;
+    signup_with_username(pool.clone(), "me@b.com", "meuser").await;
 
     let login_resp = login(pool.clone(), "me@b.com").await;
     let set_cookie = extract_set_cookie(&login_resp).expect("cookie");
@@ -284,7 +284,7 @@ async fn test_me_returns_account_info() {
 #[tokio::test]
 async fn test_logout_invalidates_session() {
     let (_c, pool) = setup().await;
-    signup(pool.clone(), "lo@b.com").await;
+    signup_with_username(pool.clone(), "lo@b.com", "logoutuser").await;
 
     let login_resp = login(pool.clone(), "lo@b.com").await;
     let set_cookie = extract_set_cookie(&login_resp).expect("cookie");

@@ -10,11 +10,10 @@ pub fn default_route_iface() -> Result<String> {
     for line in stdout.lines() {
         let mut parts = line.split_whitespace();
         while let Some(token) = parts.next() {
-            if token == "dev" {
-                if let Some(iface) = parts.next() {
+            if token == "dev"
+                && let Some(iface) = parts.next() {
                     return Ok(iface.to_string());
                 }
-            }
         }
     }
     Err(NetworkError::CommandFailed {

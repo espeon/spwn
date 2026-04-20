@@ -2,6 +2,8 @@ mod clone;
 mod snapshot;
 pub(crate) mod util;
 
+pub use util::read_fc_log_tail;
+
 use std::{collections::HashMap, path::PathBuf, time::Duration};
 
 use anyhow::{Context, anyhow};
@@ -96,6 +98,11 @@ impl VmManager {
         self.events.subscribe()
     }
 
+    pub fn jail_log_path(&self, vm_id: &str) -> std::path::PathBuf {
+        util::jail_root_path(&self.chroot_base_dir, &self.installation, vm_id)
+            .join("firecracker.log")
+    }
+
     pub async fn create_vm(
         &self,
         vm_id: &str,
@@ -146,7 +153,7 @@ impl VmManager {
                 cloned_from: None,
                 placement_strategy: "best_fit".into(),
                 required_labels: None,
-                host_id: Some(self.host_id.clone()),
+                region: None,
             },
         )
         .await?;
