@@ -51,13 +51,11 @@ async fn main() -> anyhow::Result<()> {
     let base_domain = std::env::var("BASE_DOMAIN").unwrap_or_else(|_| "spwn.run".into());
     let no_frontend = std::env::var("NO_FRONTEND").is_ok();
 
-    const BANNER: &str = r#"
-   __  __      __      _____
-  /  _/ /_    / /___  / ____/
-  / // __/   / / _ \/ /_
- /_/ \__/   /_/\___/\____/
+    let banner_path = std::env::var("BANNER_FILE")
+        .map(|p| PathBuf::from_str(&p).expect("BANNER_FILE must be a valid path"))
+        .ok();
+    static BANNER: &str = include_str!("../static/banner.txt");
 
-"#;
     let cors_origin = std::env::var("CORS_ORIGIN").ok();
     let secure_cookies = std::env::var("SECURE_COOKIES")
         .map(|v| v == "true" || v == "1")
