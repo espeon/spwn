@@ -38,6 +38,13 @@
                 "handler": "reverse_proxy",
                 "upstreams": [{"dial": "control-plane:3019"}]
               }]
+            },
+            {
+              "@id": "vm-routes-container",
+              "handle": [{
+                "handler": "subroute",
+                "routes": []
+              }]
             }
           ]
         }

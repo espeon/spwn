@@ -20,7 +20,7 @@ mod registration;
 mod scheduler;
 mod subdomain;
 
-const BANNER: &str = &"
+const BANNER: &str = "
 
 
              #@*                   :****

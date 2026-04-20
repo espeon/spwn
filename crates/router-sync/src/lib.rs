@@ -95,7 +95,7 @@ impl CaddyClient {
                 RouteTarget::Stopped => self.stopped_route(&r.subdomain),
             })
             .collect::<Result<Vec<Value>>>()?;
-        self.patch("/config/apps/http/servers/main/routes", &array)
+        self.patch("/id/vm-routes-container/handle/0/routes", &array)
             .await?;
         Ok(())
     }
@@ -105,7 +105,7 @@ impl CaddyClient {
         let id_url = format!("{}/id/route-{subdomain}", self.base);
         let resp = self.client.put(&id_url).json(&route).send().await?;
         if resp.status() == 404 {
-            self.post("/config/apps/http/servers/main/routes/", &route)
+            self.post("/id/vm-routes-container/handle/0/routes/", &route)
                 .await?;
         } else {
             check(resp).await?;
