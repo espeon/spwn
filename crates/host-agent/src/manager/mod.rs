@@ -442,6 +442,12 @@ impl VmManager {
         if let Some(ref path) = vm.overlay_path {
             overlay::remove_overlay(std::path::Path::new(path));
         }
+        let jail_root = util::jail_root_path(&self.chroot_base_dir, &self.installation, vm_id);
+        if jail_root.exists() {
+            if let Err(e) = tokio::fs::remove_dir_all(&jail_root).await {
+                warn!("failed to remove jail dir {}: {e}", jail_root.display());
+            }
+        }
         Ok(())
     }
 

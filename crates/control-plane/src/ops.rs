@@ -51,10 +51,6 @@ impl api::VmOps for ControlPlaneOps {
         account_id: String,
         req: api::CreateVmRequest,
     ) -> anyhow::Result<db::VmRow> {
-        let account = db::get_account(&self.pool, &account_id)
-            .await?
-            .ok_or_else(|| anyhow!("account not found: {account_id}"))?;
-
         let (image_name, image_tag) = match req.image.split_once(':') {
             Some((n, t)) => (n, t),
             None => (req.image.as_str(), "latest"),
@@ -96,7 +92,7 @@ impl api::VmOps for ControlPlaneOps {
         let used_ips = db::get_used_ips_for_host(&self.pool, &host.id).await?;
         let slot = scheduler::next_free_slot(&used_ips);
         let ip_address = format!("172.16.{slot}.2");
-        let sub = subdomain::generate(&self.pool, &req.name, &account.username).await?;
+        let sub = subdomain::generate(&self.pool, &req.name).await?;
 
         let channel = Channel::from_shared(host.address.clone())?
             .connect()
@@ -286,15 +282,11 @@ impl api::VmOps for ControlPlaneOps {
     async fn update_vm(
         &self,
         vm_id: &str,
-        account_id: &str,
+        _account_id: &str,
         patch: api::VmPatch,
     ) -> anyhow::Result<db::VmRow> {
         if let Some(new_name) = &patch.name {
-            let account = db::get_account(&self.pool, account_id)
-                .await?
-                .ok_or_else(|| anyhow!("account not found: {account_id}"))?;
-            let new_subdomain =
-                subdomain::generate(&self.pool, new_name, &account.username).await?;
+            let new_subdomain = subdomain::generate(&self.pool, new_name).await?;
 
             let current = db::get_vm(&self.pool, vm_id)
                 .await?
@@ -419,10 +411,6 @@ impl api::VmOps for ControlPlaneOps {
             return Err(anyhow!("vm not found: {source_id}"));
         }
 
-        let account = db::get_account(&self.pool, account_id)
-            .await?
-            .ok_or_else(|| anyhow!("account not found: {account_id}"))?;
-
         let host_id = source
             .host_id
             .as_deref()
@@ -436,7 +424,7 @@ impl api::VmOps for ControlPlaneOps {
         let slot = scheduler::next_free_slot(&used_ips);
         let ip_address = format!("172.16.{slot}.2");
         let name = req.name.clone();
-        let sub = subdomain::generate(&self.pool, &name, &account.username).await?;
+        let sub = subdomain::generate(&self.pool, &name).await?;
 
         let channel = Channel::from_shared(host.address.clone())?
             .connect()

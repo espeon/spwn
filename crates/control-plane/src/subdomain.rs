@@ -1,30 +1,35 @@
 use db::PgPool;
+use rand::Rng;
 
-pub async fn generate(pool: &PgPool, vm_name: &str, username: &str) -> anyhow::Result<String> {
-    let base_name = slugify(vm_name);
-    let slug = format!("{base_name}.{username}");
+pub async fn generate(pool: &PgPool, vm_name: &str) -> anyhow::Result<String> {
+    let base = slugify(vm_name);
 
-    let row = sqlx::query("SELECT id FROM vms WHERE subdomain = $1")
-        .bind(&slug)
-        .fetch_optional(pool)
-        .await?;
-
-    if row.is_none() {
-        return Ok(slug);
+    if is_available(pool, &base).await? {
+        return Ok(base);
     }
 
-    for n in 2u32..=99 {
-        let candidate = format!("{base_name}-{n}.{username}");
-        let row = sqlx::query("SELECT id FROM vms WHERE subdomain = $1")
-            .bind(&candidate)
-            .fetch_optional(pool)
-            .await?;
-        if row.is_none() {
+    for _ in 0..20 {
+        let suffix = random_suffix();
+        let candidate = format!("{base}-{suffix}");
+        if is_available(pool, &candidate).await? {
             return Ok(candidate);
         }
     }
 
-    anyhow::bail!("could not generate unique subdomain for {slug} after 99 attempts")
+    anyhow::bail!("could not generate unique subdomain for '{vm_name}' after 20 attempts")
+}
+
+async fn is_available(pool: &PgPool, subdomain: &str) -> anyhow::Result<bool> {
+    let row = sqlx::query("SELECT id FROM vms WHERE subdomain = $1")
+        .bind(subdomain)
+        .fetch_optional(pool)
+        .await?;
+    Ok(row.is_none())
+}
+
+fn random_suffix() -> String {
+    let mut rng = rand::thread_rng();
+    (0..3).map(|_| rng.gen_range(b'a'..=b'z') as char).collect()
 }
 
 fn slugify(name: &str) -> String {
@@ -43,22 +48,22 @@ mod tests {
     use super::slugify;
 
     #[test]
-    fn test_slugify_basic() {
+    fn slugify_basic() {
         assert_eq!(slugify("my-app"), "my-app");
     }
 
     #[test]
-    fn test_slugify_spaces_and_specials() {
+    fn slugify_spaces_and_specials() {
         assert_eq!(slugify("My Cool VM!"), "my-cool-vm");
     }
 
     #[test]
-    fn test_slugify_leading_trailing_hyphens() {
+    fn slugify_leading_trailing_hyphens() {
         assert_eq!(slugify("--hello--"), "hello");
     }
 
     #[test]
-    fn test_slugify_uppercase() {
+    fn slugify_uppercase() {
         assert_eq!(slugify("WebServer"), "webserver");
     }
 }
