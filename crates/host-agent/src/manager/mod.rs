@@ -248,8 +248,9 @@ impl VmManager {
             .context("register overlay resource")?;
 
         let mut boot_args = format!(
-            "console=ttyS0 reboot=k panic=1 pci=off {} init=/sbin/overlay-init overlay_root=vdb",
-            networking::ip::kernel_boot_args(slot)
+            "console=ttyS0 reboot=k panic=1 pci=off {} init=/sbin/overlay-init overlay_root=vdb hostname={}",
+            networking::ip::kernel_boot_args(slot),
+            vm.name
         );
         if vm.real_init != "/sbin/init" {
             boot_args.push_str(&format!(" real_init={}", vm.real_init));

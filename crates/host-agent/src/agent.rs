@@ -41,6 +41,7 @@ for x in $(cat /proc/cmdline); do
     case "$x" in
     overlay_root=*)  OVERLAY_ROOT="${x#overlay_root=}" ;;
     real_init=*)     REAL_INIT="${x#real_init=}" ;;
+    hostname=*)      hostname "${x#hostname=}" 2>/dev/null || true ;;
     esac
 done
 

@@ -14,7 +14,7 @@ var testVM = client.VM{
 	ID:        "550e8400-e29b-41d4-a716-446655440000",
 	Name:      "epic vm",
 	Status:    "running",
-	Subdomain: "epic-vm.nat",
+	Subdomain: "epic-vm",
 }
 
 // newTestServer returns an httptest.Server that mimics /api/vms behaviour.
@@ -47,8 +47,7 @@ func newTestServer(t *testing.T, vm client.VM) *httptest.Server {
 			}
 
 			if sub := q.Get("subdomain"); sub != "" {
-				// match full subdomain ("epic-vm.nat") or bare prefix ("epic-vm")
-				if sub == vm.Subdomain || sub == bareSubdomain(vm.Subdomain) {
+				if sub == vm.Subdomain {
 					json.NewEncoder(w).Encode([]client.VM{vm})
 				} else {
 					json.NewEncoder(w).Encode([]client.VM{})
@@ -62,16 +61,6 @@ func newTestServer(t *testing.T, vm client.VM) *httptest.Server {
 
 		http.NotFound(w, r)
 	}))
-}
-
-// bareSubdomain strips the ".username" suffix from a full subdomain.
-func bareSubdomain(sub string) string {
-	for i := len(sub) - 1; i >= 0; i-- {
-		if sub[i] == '.' {
-			return sub[:i]
-		}
-	}
-	return sub
 }
 
 func clientForServer(srv *httptest.Server) *client.Client {
@@ -91,24 +80,11 @@ func TestResolveVM_ByName(t *testing.T) {
 	}
 }
 
-func TestResolveVM_ByFullSubdomain(t *testing.T) {
+func TestResolveVM_BySubdomain(t *testing.T) {
 	srv := newTestServer(t, testVM)
 	defer srv.Close()
 
-	got, err := resolveVM(clientForServer(srv), "epic-vm.nat")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if got.ID != testVM.ID {
-		t.Errorf("got ID %q, want %q", got.ID, testVM.ID)
-	}
-}
-
-func TestResolveVM_ByBareSubdomain(t *testing.T) {
-	srv := newTestServer(t, testVM)
-	defer srv.Close()
-
-	// "epic-vm" has no dot and no exact name match — should fall back to subdomain lookup
+	// "epic-vm" has no exact name match — should fall back to subdomain lookup
 	got, err := resolveVM(clientForServer(srv), "epic-vm")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -184,10 +160,10 @@ func TestGetVMBySubdomainRequest(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client.New(srv.URL, "tok").GetVMBySubdomain("epic-vm.nat")
+	client.New(srv.URL, "tok").GetVMBySubdomain("epic-vm")
 
-	if got := capturedQuery.Get("subdomain"); got != "epic-vm.nat" {
-		t.Errorf("subdomain query param = %q, want %q", got, "epic-vm.nat")
+	if got := capturedQuery.Get("subdomain"); got != "epic-vm" {
+		t.Errorf("subdomain query param = %q, want %q", got, "epic-vm")
 	}
 	if name := capturedQuery.Get("name"); name != "" {
 		t.Errorf("unexpected name param %q in subdomain request", name)

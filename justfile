@@ -151,3 +151,21 @@ gateway: ssh-gateway-build
 # tidy Go deps
 go-tidy:
     cd services && go mod tidy
+
+# ── prod CLI ──────────────────────────────────────────────────────────────────
+
+prod_url := "https://api-prod.spwn.run"
+prod_gateway := "ssh.spwn.town:2222"
+prod_env := "SPWN_API_URL=" + prod_url + " SPWN_GATEWAY_ADDR=" + prod_gateway
+
+# log in to prod
+prod-login: spwn-build
+    {{prod_env}} ./target/spwn login
+
+# open the TUI against prod
+prod: spwn-build
+    {{prod_env}} ./target/spwn
+
+# run any CLI command against prod (e.g. just prod-run vm list)
+prod-run *args: spwn-build
+    {{prod_env}} ./target/spwn {{args}}

@@ -29,14 +29,14 @@ func configDir() (string, error) {
 func LoadConfig() (Config, error) {
 	dir, err := configDir()
 	if err != nil {
-		return defaultConfig(), nil
+		return applyEnv(defaultConfig()), nil
 	}
 	data, err := os.ReadFile(filepath.Join(dir, "config.json"))
 	if os.IsNotExist(err) {
-		return defaultConfig(), nil
+		return applyEnv(defaultConfig()), nil
 	}
 	if err != nil {
-		return defaultConfig(), nil
+		return applyEnv(defaultConfig()), nil
 	}
 	var c Config
 	if err := json.Unmarshal(data, &c); err != nil {
@@ -45,7 +45,17 @@ func LoadConfig() (Config, error) {
 	if c.APIURL == "" {
 		c.APIURL = defaultConfig().APIURL
 	}
-	return c, nil
+	return applyEnv(c), nil
+}
+
+func applyEnv(c Config) Config {
+	if url := os.Getenv("SPWN_API_URL"); url != "" {
+		c.APIURL = url
+	}
+	if addr := os.Getenv("SPWN_GATEWAY_ADDR"); addr != "" {
+		c.GatewayAddr = addr
+	}
+	return c
 }
 
 func defaultConfig() Config {

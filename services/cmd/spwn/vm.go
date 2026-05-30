@@ -38,7 +38,6 @@ func resolveVM(c *client.Client, nameOrID string) (client.VM, error) {
 		return c.GetVM(nameOrID)
 	}
 
-	// full subdomain: "epic-vm.nat" — contains a dot
 	if strings.Contains(nameOrID, ".") {
 		vms, err := c.GetVMBySubdomain(nameOrID)
 		if err == nil && len(vms) > 0 {
@@ -53,7 +52,6 @@ func resolveVM(c *client.Client, nameOrID string) (client.VM, error) {
 		return vms[0], nil
 	}
 
-	// fall back to bare subdomain prefix ("epic-vm" without the ".username" suffix)
 	vms, err = c.GetVMBySubdomain(nameOrID)
 	if err == nil && len(vms) > 0 {
 		return vms[0], nil
