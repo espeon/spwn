@@ -141,8 +141,24 @@ func relayConsole(ctx context.Context, agentAddr, vmID, command string, s cssh.S
 		return fmt.Errorf("open stream: %w", err)
 	}
 
-	// First frame: identify the VM and optionally specify a command.
-	if err := stream.Send(&agentpb.ConsoleInput{VmId: vmID, Command: command}); err != nil {
+	// First frame: identify the VM, command, and initial terminal size.
+	var initCols, initRows uint32 = 80, 24
+	var initTerm string = "xterm-256color"
+	pty, winCh, hasPty := s.Pty()
+	if hasPty {
+		initCols = uint32(pty.Window.Width)
+		initRows = uint32(pty.Window.Height)
+		if pty.Term != "" {
+			initTerm = pty.Term
+		}
+	}
+	if err := stream.Send(&agentpb.ConsoleInput{
+		VmId:    vmID,
+		Command: command,
+		Cols:    initCols,
+		Rows:    initRows,
+		Term:    initTerm,
+	}); err != nil {
 		return fmt.Errorf("send vm_id: %w", err)
 	}
 
@@ -168,7 +184,7 @@ func relayConsole(ctx context.Context, agentAddr, vmID, command string, s cssh.S
 		}
 	}()
 
-	// SSH session → gRPC input
+	// SSH session → gRPC input (data + window resize)
 	go func() {
 		buf := make([]byte, 4096)
 		for {
@@ -180,14 +196,24 @@ func relayConsole(ctx context.Context, agentAddr, vmID, command string, s cssh.S
 				}
 			}
 			if err != nil {
-				// stdin EOF or close: signal no more input but don't end the relay —
-				// the output side may still have data to deliver.
 				_ = stream.CloseSend()
 				inputDone <- nil
 				return
 			}
 		}
 	}()
+
+	// Window resize events → gRPC resize frames
+	if hasPty {
+		go func() {
+			for win := range winCh {
+				_ = stream.Send(&agentpb.ConsoleInput{
+					Cols: uint32(win.Width),
+					Rows: uint32(win.Height),
+				})
+			}
+		}()
+	}
 
 	if command != "" {
 		// For exec: stdin EOF is expected and harmless; wait for output to finish.

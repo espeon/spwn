@@ -29,6 +29,7 @@ const (
 	HostAgent_MigrateVm_FullMethodName       = "/agent.HostAgent/MigrateVm"
 	HostAgent_ResizeCpu_FullMethodName       = "/agent.HostAgent/ResizeCpu"
 	HostAgent_ResizeBandwidth_FullMethodName = "/agent.HostAgent/ResizeBandwidth"
+	HostAgent_DeleteSnapshot_FullMethodName  = "/agent.HostAgent/DeleteSnapshot"
 	HostAgent_WatchEvents_FullMethodName     = "/agent.HostAgent/WatchEvents"
 	HostAgent_BuildImage_FullMethodName      = "/agent.HostAgent/BuildImage"
 	HostAgent_StreamConsole_FullMethodName   = "/agent.HostAgent/StreamConsole"
@@ -50,6 +51,7 @@ type HostAgentClient interface {
 	MigrateVm(ctx context.Context, in *MigrateVmRequest, opts ...grpc.CallOption) (*MigrateVmResponse, error)
 	ResizeCpu(ctx context.Context, in *ResizeCpuRequest, opts ...grpc.CallOption) (*ResizeCpuResponse, error)
 	ResizeBandwidth(ctx context.Context, in *ResizeBandwidthRequest, opts ...grpc.CallOption) (*ResizeBandwidthResponse, error)
+	DeleteSnapshot(ctx context.Context, in *DeleteSnapshotRequest, opts ...grpc.CallOption) (*DeleteSnapshotResponse, error)
 	WatchEvents(ctx context.Context, in *WatchRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[AgentEvent], error)
 	BuildImage(ctx context.Context, in *BuildImageRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[BuildImageEvent], error)
 	// bidirectional SSH console relay; first ConsoleInput frame carries vm_id
@@ -164,6 +166,16 @@ func (c *hostAgentClient) ResizeBandwidth(ctx context.Context, in *ResizeBandwid
 	return out, nil
 }
 
+func (c *hostAgentClient) DeleteSnapshot(ctx context.Context, in *DeleteSnapshotRequest, opts ...grpc.CallOption) (*DeleteSnapshotResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(DeleteSnapshotResponse)
+	err := c.cc.Invoke(ctx, HostAgent_DeleteSnapshot_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *hostAgentClient) WatchEvents(ctx context.Context, in *WatchRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[AgentEvent], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	stream, err := c.cc.NewStream(ctx, &HostAgent_ServiceDesc.Streams[0], HostAgent_WatchEvents_FullMethodName, cOpts...)
@@ -231,6 +243,7 @@ type HostAgentServer interface {
 	MigrateVm(context.Context, *MigrateVmRequest) (*MigrateVmResponse, error)
 	ResizeCpu(context.Context, *ResizeCpuRequest) (*ResizeCpuResponse, error)
 	ResizeBandwidth(context.Context, *ResizeBandwidthRequest) (*ResizeBandwidthResponse, error)
+	DeleteSnapshot(context.Context, *DeleteSnapshotRequest) (*DeleteSnapshotResponse, error)
 	WatchEvents(*WatchRequest, grpc.ServerStreamingServer[AgentEvent]) error
 	BuildImage(*BuildImageRequest, grpc.ServerStreamingServer[BuildImageEvent]) error
 	// bidirectional SSH console relay; first ConsoleInput frame carries vm_id
@@ -274,6 +287,9 @@ func (UnimplementedHostAgentServer) ResizeCpu(context.Context, *ResizeCpuRequest
 }
 func (UnimplementedHostAgentServer) ResizeBandwidth(context.Context, *ResizeBandwidthRequest) (*ResizeBandwidthResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ResizeBandwidth not implemented")
+}
+func (UnimplementedHostAgentServer) DeleteSnapshot(context.Context, *DeleteSnapshotRequest) (*DeleteSnapshotResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method DeleteSnapshot not implemented")
 }
 func (UnimplementedHostAgentServer) WatchEvents(*WatchRequest, grpc.ServerStreamingServer[AgentEvent]) error {
 	return status.Error(codes.Unimplemented, "method WatchEvents not implemented")
@@ -485,6 +501,24 @@ func _HostAgent_ResizeBandwidth_Handler(srv interface{}, ctx context.Context, de
 	return interceptor(ctx, in, info, handler)
 }
 
+func _HostAgent_DeleteSnapshot_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DeleteSnapshotRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(HostAgentServer).DeleteSnapshot(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: HostAgent_DeleteSnapshot_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(HostAgentServer).DeleteSnapshot(ctx, req.(*DeleteSnapshotRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _HostAgent_WatchEvents_Handler(srv interface{}, stream grpc.ServerStream) error {
 	m := new(WatchRequest)
 	if err := stream.RecvMsg(m); err != nil {
@@ -560,6 +594,10 @@ var HostAgent_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ResizeBandwidth",
 			Handler:    _HostAgent_ResizeBandwidth_Handler,
+		},
+		{
+			MethodName: "DeleteSnapshot",
+			Handler:    _HostAgent_DeleteSnapshot_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

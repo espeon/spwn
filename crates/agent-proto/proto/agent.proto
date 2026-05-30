@@ -133,6 +133,9 @@ message ConsoleInput {
   string vm_id    = 1;  // set only in the first frame to identify the target VM
   bytes  data     = 2;
   string command  = 3;  // set only in the first frame to exec instead of a shell
+  uint32 cols     = 4;  // terminal width  (first frame = initial size; subsequent = resize)
+  uint32 rows     = 5;  // terminal height (first frame = initial size; subsequent = resize)
+  string term     = 6;  // TERM type, e.g. "xterm-256color" (first frame only)
 }
 message ConsoleOutput { bytes data = 1; }
 

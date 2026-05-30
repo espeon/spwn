@@ -1095,6 +1095,9 @@ impl HostAgent for HostAgentService {
         }
         let initial_data = first.data;
         let command = first.command;
+        let init_cols = if first.cols > 0 { first.cols } else { 80 };
+        let init_rows = if first.rows > 0 { first.rows } else { 24 };
+        let init_term = if first.term.is_empty() { "xterm-256color".to_string() } else { first.term.clone() };
 
         let vm = db::get_vm(&self.manager.pool, &vm_id)
             .await
@@ -1139,7 +1142,7 @@ impl HostAgent for HostAgentService {
 
         if command.is_empty() {
             channel
-                .request_pty(false, "xterm-256color", 80, 24, 0, 0, &[])
+                .request_pty(false, &init_term, init_cols, init_rows, 0, 0, &[])
                 .await
                 .map_err(|e| Status::internal(format!("pty request: {e}")))?;
 
@@ -1154,49 +1157,59 @@ impl HostAgent for HostAgentService {
                 .map_err(|e| Status::internal(format!("exec request: {e}")))?;
         }
 
-        let ssh_stream = channel.into_stream();
-        let (mut ssh_reader, mut ssh_writer) = tokio::io::split(ssh_stream);
+        let ssh_writer = channel.make_writer();
 
         let (out_tx, out_rx) = tokio::sync::mpsc::channel::<Result<ConsoleOutput, Status>>(64);
         let out_stream = ReceiverStream::new(out_rx);
+        let (resize_tx, mut resize_rx) = tokio::sync::mpsc::channel::<(u32, u32)>(8);
 
-        // SSH → gRPC output
+        // SSH → gRPC output + resize (owns channel for wait() and window_change())
         tokio::spawn(async move {
-            let mut buf = vec![0u8; 4096];
+            use russh::ChannelMsg;
+            let mut channel = channel;
             loop {
-                match ssh_reader.read(&mut buf).await {
-                    Ok(0) | Err(_) => break,
-                    Ok(n) => {
-                        if out_tx
-                            .send(Ok(ConsoleOutput {
-                                data: buf[..n].to_vec(),
-                            }))
-                            .await
-                            .is_err()
-                        {
+                let msg = tokio::select! {
+                    sz = resize_rx.recv() => {
+                        if let Some((cols, rows)) = sz {
+                            let _ = channel.window_change(cols, rows, 0, 0).await;
+                        }
+                        continue;
+                    }
+                    m = channel.wait() => m,
+                };
+                match msg {
+                    Some(ChannelMsg::Data { data }) => {
+                        if out_tx.send(Ok(ConsoleOutput { data: data.to_vec() })).await.is_err() {
                             break;
                         }
                     }
+                    Some(ChannelMsg::ExtendedData { data, .. }) => {
+                        if out_tx.send(Ok(ConsoleOutput { data: data.to_vec() })).await.is_err() {
+                            break;
+                        }
+                    }
+                    None | Some(ChannelMsg::Eof) | Some(ChannelMsg::Close) => break,
+                    _ => {}
                 }
             }
-            // keep handle alive until SSH reader closes; suppress warning
             let _ = handle.disconnect(Disconnect::ByApplication, "", "").await;
         });
 
-        // gRPC input → SSH
+        // gRPC input → SSH (initial data, subsequent data frames, resize frames)
         tokio::spawn(async move {
+            let mut ssh_writer = ssh_writer;
             if !initial_data.is_empty() {
                 let _ = ssh_writer.write_all(&initial_data).await;
             }
             while let Some(Ok(frame)) = input_stream.next().await {
-                if frame.data.is_empty() {
-                    continue;
-                }
-                if ssh_writer.write_all(&frame.data).await.is_err() {
-                    break;
+                if frame.rows > 0 || frame.cols > 0 {
+                    let _ = resize_tx.send((frame.cols, frame.rows)).await;
+                } else if !frame.data.is_empty() {
+                    if ssh_writer.write_all(&frame.data).await.is_err() {
+                        break;
+                    }
                 }
             }
-            let _ = ssh_writer.shutdown().await;
         });
 
         Ok(Response::new(Box::pin(out_stream)))

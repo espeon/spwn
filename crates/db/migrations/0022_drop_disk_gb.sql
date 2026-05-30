@@ -1,0 +1,1 @@
+ALTER TABLE vms DROP COLUMN disk_gb;
