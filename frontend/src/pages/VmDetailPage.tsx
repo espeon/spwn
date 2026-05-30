@@ -304,6 +304,9 @@ export function VmDetailPage() {
           <p className="text-sm text-muted-foreground font-mono">
             {vm.subdomain}
           </p>
+          <p className="text-xs text-muted-foreground/50 font-mono mt-0.5">
+            {vm.id}
+          </p>
         </div>
         <Button
           variant="ghost"
@@ -321,7 +324,7 @@ export function VmDetailPage() {
           [
             ["vcpus", vm.vcpus / 1000],
             ["memory", `${vm.memory_mb} mb`],
-            ["ip", vm.ip_address],
+            ["image", vm.image],
             ["port", vm.exposed_port],
           ] as const
         ).map(([label, value]) => (
