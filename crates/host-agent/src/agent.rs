@@ -7,7 +7,7 @@ use russh::Disconnect;
 use russh::client::{self, Config as SshConfig};
 use russh::keys::ssh_key::LineEnding;
 use russh::keys::{Algorithm, PrivateKey, PrivateKeyWithHashAlg, load_secret_key};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::AsyncWriteExt;
 use tokio_stream::StreamExt;
 use tokio_stream::wrappers::{BroadcastStream, ReceiverStream};
 use tonic::{Request, Response, Status, Streaming};
@@ -1202,7 +1202,7 @@ impl HostAgent for HostAgentService {
                 let _ = ssh_writer.write_all(&initial_data).await;
             }
             while let Some(Ok(frame)) = input_stream.next().await {
-                if frame.rows > 0 || frame.cols > 0 {
+                if frame.rows > 0 && frame.cols > 0 {
                     let _ = resize_tx.send((frame.cols, frame.rows)).await;
                 } else if !frame.data.is_empty() {
                     if ssh_writer.write_all(&frame.data).await.is_err() {
