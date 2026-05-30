@@ -31,7 +31,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
               className={`-mt-1 flex items-center gap-2 px-2 py-2 hover:text-sidebar-foreground hover:bg-sidebar-accent data-[status=active]:bg-sidebar-accent data-[status=active]:text-sidebar-foreground duration-200 rounded-md`}
             >
               <IconGalaxy className="size-5!" />
-              <span className="text-lg font-semibold -mt-1">spwn</span>
+              <span className="font-display text-lg font-semibold -mt-1">spwn</span>
             </Link>
           </SidebarMenuItem>
         </SidebarMenu>

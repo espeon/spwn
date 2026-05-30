@@ -4,6 +4,22 @@
 @import "@fontsource-variable/cormorant";
 @import "@fontsource/maple-mono";
 
+@font-face {
+  font-family: "Valley Sans";
+  src: url("/fonts/ValleySans-variable.woff2") format("woff2");
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Valley Sans";
+  src: url("/fonts/ValleySans-italic-variable.woff2") format("woff2");
+  font-weight: 100 900;
+  font-style: italic;
+  font-display: swap;
+}
+
 * {
   @apply duration-150 ease-in-out;
 }
@@ -11,6 +27,7 @@
 @theme inline {
   --font-sans: "Instrument Sans Variable", ui-sans-serif, system-ui, sans-serif;
   --font-serif: "Cormorant Variable", ui-serif, Georgia, serif;
+  --font-display: "Valley Sans", ui-sans-serif, system-ui, sans-serif;
   --font-mono:
     "Maple Mono", ui-monospace, SF Mono, SF Mono Regular, Consolas,
     "Liberation Mono", Menlo, Courier, monospace;
@@ -778,6 +795,10 @@
   --sidebar-accent-foreground: hsl(213 6.35% 37.65%);
   --sidebar-border: hsl(210 7.69% 86.27%);
   --sidebar-ring: hsl(210 7.69% 86.27%);
+}
+
+h1, h2, h3 {
+  font-family: var(--font-display);
 }
 
 * {
