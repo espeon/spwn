@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-for cmd in docker gh; do
+for cmd in docker gh jq; do
   if ! command -v "$cmd" &>/dev/null; then
     echo "error: $cmd is not installed or not in PATH" >&2
     exit 1
@@ -13,6 +13,28 @@ REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 COMPOSE_FILE="$REPO_ROOT/compose.yml"
 TMPDIR=$(mktemp -d)
 trap 'rm -rf "$TMPDIR"' EXIT
+
+echo "==> checking CI status on main"
+LATEST_RUN=$(gh run list --repo "$REPO" --branch main --workflow ci --limit 1 --json status,conclusion,headSha,createdAt,databaseId)
+RUN_STATUS=$(echo "$LATEST_RUN" | jq -r '.[0].status')
+RUN_CONCLUSION=$(echo "$LATEST_RUN" | jq -r '.[0].conclusion')
+RUN_SHA=$(echo "$LATEST_RUN" | jq -r '.[0].headSha' | head -c 8)
+RUN_ID=$(echo "$LATEST_RUN" | jq -r '.[0].databaseId')
+
+if [[ "$RUN_STATUS" != "completed" ]]; then
+  echo "error: latest CI run ($RUN_ID) is still $RUN_STATUS — wait for it to finish" >&2
+  echo "  https://github.com/$REPO/actions/runs/$RUN_ID" >&2
+  exit 1
+fi
+
+if [[ "$RUN_CONCLUSION" != "success" ]]; then
+  echo "error: latest CI run ($RUN_ID) $RUN_CONCLUSION — fix it before deploying" >&2
+  echo "  commit: $RUN_SHA" >&2
+  echo "  https://github.com/$REPO/actions/runs/$RUN_ID" >&2
+  exit 1
+fi
+
+echo "  CI passed ($RUN_SHA) — deploying"
 
 if [[ ! -f /etc/spwn/env ]]; then
   echo "==> installing /etc/spwn/env"
