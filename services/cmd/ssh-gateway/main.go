@@ -143,7 +143,7 @@ func (cfg *gatewayConfig) lookupVM(vmID string) (*vmLookupResponse, error) {
 
 // ── gRPC console relay ────────────────────────────────────────────────────────
 
-func relayConsole(ctx context.Context, agentAddr, vmID string, stdin io.Reader, stdout io.Writer) error {
+func relayConsole(ctx context.Context, agentAddr, vmID string, stdin io.Reader, stdout io.Writer, cols, rows uint32, term string, resizeCh <-chan [2]uint32) error {
 	agentAddr = strings.TrimPrefix(agentAddr, "https://")
 	agentAddr = strings.TrimPrefix(agentAddr, "http://")
 	conn, err := grpc.NewClient(agentAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
@@ -159,9 +159,9 @@ func relayConsole(ctx context.Context, agentAddr, vmID string, stdin io.Reader, 
 
 	if err := stream.Send(&agentpb.ConsoleInput{
 		VmId: vmID,
-		Cols: 80,
-		Rows: 24,
-		Term: "xterm-256color",
+		Cols: cols,
+		Rows: rows,
+		Term: term,
 	}); err != nil {
 		return fmt.Errorf("send init frame: %w", err)
 	}
@@ -204,6 +204,17 @@ func relayConsole(ctx context.Context, agentAddr, vmID string, stdin io.Reader, 
 			}
 		}
 	}()
+
+	// Forward terminal resize events.
+	if resizeCh != nil {
+		go func() {
+			for sz := range resizeCh {
+				if serr := stream.Send(&agentpb.ConsoleInput{Cols: sz[0], Rows: sz[1]}); serr != nil {
+					return
+				}
+			}
+		}()
+	}
 
 	select {
 	case err := <-outputDone:
@@ -294,7 +305,28 @@ func tryDirectRelay(cfg *gatewayConfig, sess cssh.Session) bool {
 	}
 
 	log.Printf("direct relay: user %s -> vm %s (subdomain %s)", accountID, vmInfo.VMID, username)
-	if err := relayConsole(sess.Context(), vmInfo.HostAgentAddr, vmInfo.VMID, sess, sess); err != nil {
+
+	// Read PTY dimensions from the SSH session.
+	pty, winCh, hasPty := sess.Pty()
+	cols, rows := uint32(80), uint32(24)
+	term := "xterm-256color"
+	if hasPty {
+		cols, rows = uint32(pty.Window.Width), uint32(pty.Window.Height)
+		if pty.Term != "" {
+			term = pty.Term
+		}
+	}
+
+	// Convert the window change channel to our resize format.
+	resizeCh := make(chan [2]uint32, 1)
+	go func() {
+		for win := range winCh {
+			resizeCh <- [2]uint32{uint32(win.Width), uint32(win.Height)}
+		}
+		close(resizeCh)
+	}()
+
+	if err := relayConsole(sess.Context(), vmInfo.HostAgentAddr, vmInfo.VMID, sess, sess, cols, rows, term, resizeCh); err != nil {
 		log.Printf("direct relay error: %v", err)
 		fmt.Fprintf(sess.Stderr(), "connection error: %v\r\n", err)
 		_ = sess.Exit(1)
@@ -338,15 +370,41 @@ func tuiHandler(cfg *gatewayConfig) bm.Handler {
 
 		c := client.New(cfg.controlPlaneURL, token)
 
+		pty, winCh, hasPty := s.Pty()
+		initCols, initRows := uint32(80), uint32(24)
+		initTerm := "xterm-256color"
+		if hasPty {
+			initCols, initRows = uint32(pty.Window.Width), uint32(pty.Window.Height)
+			if pty.Term != "" {
+				initTerm = pty.Term
+			}
+		}
+
+		// Fan-out: relay needs its own resize channel so it doesn't steal
+		// events from the TUI.
+		relayWinCh := make(chan cssh.Window, 1)
+		go func() {
+			for win := range winCh {
+				relayWinCh <- win
+			}
+			close(relayWinCh)
+		}()
+
 		connectFn := func(vmID string, stdin io.Reader, stdout io.Writer) error {
 			vmInfo, err := cfg.lookupVM(vmID)
 			if err != nil {
 				return fmt.Errorf("vm lookup: %w", err)
 			}
-			return relayConsole(s.Context(), vmInfo.HostAgentAddr, vmID, stdin, stdout)
+			resizeCh := make(chan [2]uint32, 1)
+			go func() {
+				for win := range relayWinCh {
+					resizeCh <- [2]uint32{uint32(win.Width), uint32(win.Height)}
+				}
+				close(resizeCh)
+			}()
+			return relayConsole(s.Context(), vmInfo.HostAgentAddr, vmID, stdin, stdout, initCols, initRows, initTerm, resizeCh)
 		}
 
-		pty, _, hasPty := s.Pty()
 		w, h := 80, 24
 		if hasPty {
 			w, h = pty.Window.Width, pty.Window.Height
