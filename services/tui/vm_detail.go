@@ -89,16 +89,16 @@ func (a *App) vmDetailView() string {
 	var b strings.Builder
 
 	crumb := styleHeader.Render("spwn") + styleDim.Render(" / ") + styleTitle.Render(vm.Name)
-	b.WriteString(crumb + "\n")
-	b.WriteString(styleDim.Render(strings.Repeat("─", a.width)) + "\n\n")
+	fmt.Fprintln(&b, crumb)
+	fmt.Fprintln(&b, styleDim.Render(strings.Repeat("─", a.width)))
+	b.WriteByte('\n')
 
-	// Status line
-	b.WriteString(fmt.Sprintf("  %s %s   %dvc   %dMB   %s\n\n",
+	fmt.Fprintf(&b, "  %s %s   %dvc   %dMB   %s\n\n",
 		statusDot(vm.Status),
 		statusColor(vm.Status).Render(vm.Status),
 		vm.Vcpus, vm.MemoryMb,
 		styleDim.Render(vm.Subdomain),
-	))
+	)
 
 	// Two-column: events + snapshots
 	eventsCol := a.eventsColumn()
@@ -108,11 +108,13 @@ func (a *App) vmDetailView() string {
 	leftPad := fmt.Sprintf("%-*s", colWidth, eventsCol)
 	_ = leftPad
 
-	b.WriteString("  " + styleTitle.Render("Recent events") +
-		strings.Repeat(" ", colWidth-len("Recent events")-2) +
-		styleTitle.Render("Snapshots") + "\n")
-	b.WriteString("  " + styleDim.Render(strings.Repeat("─", colWidth-2)) +
-		"  " + styleDim.Render(strings.Repeat("─", colWidth-2)) + "\n")
+	fmt.Fprintf(&b, "  %s%s%s\n",
+		styleTitle.Render("Recent events"),
+		strings.Repeat(" ", colWidth-len("Recent events")-2),
+		styleTitle.Render("Snapshots"))
+	fmt.Fprintf(&b, "  %s  %s\n",
+		styleDim.Render(strings.Repeat("─", colWidth-2)),
+		styleDim.Render(strings.Repeat("─", colWidth-2)))
 
 	evLines := strings.Split(eventsCol, "\n")
 	snLines := strings.Split(snapsCol, "\n")
@@ -128,14 +130,16 @@ func (a *App) vmDetailView() string {
 		if i < len(snLines) {
 			right = snLines[i]
 		}
-		b.WriteString(fmt.Sprintf("  %-*s  %s\n", colWidth-2, left, right))
+		fmt.Fprintf(&b, "  %-*s  %s\n", colWidth-2, left, right)
 	}
 
-	b.WriteString("\n")
-	b.WriteString(styleDim.Render(strings.Repeat("─", a.width)) + "\n")
-	b.WriteString(styleDim.Render(
-		"[s] start/stop  [p] snapshot  [r] rename  [d] delete  [enter] snap detail  [esc] back",
-	))
+	b.WriteByte('\n')
+	fmt.Fprintln(&b, styleDim.Render(strings.Repeat("─", a.width)))
+	hint := "[s] start/stop  [p] snapshot  [r] rename  [d] delete  [enter] snap detail  [esc] back"
+	if a.connectFn != nil {
+		hint = "[c] connect  [s] start/stop  [p] snapshot  [r] rename  [d] delete  [enter] snap detail  [esc] back"
+	}
+	b.WriteString(styleDim.Render(hint))
 
 	return b.String()
 }
@@ -242,22 +246,23 @@ func (a *App) snapshotDetailView() string {
 	crumb := styleHeader.Render("spwn") +
 		styleDim.Render(" / ") + styleTitle.Render(vm.Name) +
 		styleDim.Render(" / ") + styleTitle.Render(snap.ID[:8])
-	b.WriteString(crumb + "\n")
-	b.WriteString(styleDim.Render(strings.Repeat("─", a.width)) + "\n\n")
+	fmt.Fprintln(&b, crumb)
+	fmt.Fprintln(&b, styleDim.Render(strings.Repeat("─", a.width)))
+	b.WriteByte('\n')
 
 	label := "(no label)"
 	if snap.Label != nil {
 		label = *snap.Label
 	}
 
-	b.WriteString(fmt.Sprintf("  label      %s\n", label))
-	b.WriteString(fmt.Sprintf("  taken      %s  (%s)\n",
+	fmt.Fprintf(&b, "  label      %s\n", label)
+	fmt.Fprintf(&b, "  taken      %s  (%s)\n",
 		timeAgo(snap.CreatedAt),
-		time.Unix(snap.CreatedAt, 0).Format("2006-01-02 15:04")))
-	b.WriteString(fmt.Sprintf("  size       %.1f MB\n", float64(snap.SizeBytes)/1024/1024))
+		time.Unix(snap.CreatedAt, 0).Format("2006-01-02 15:04"))
+	fmt.Fprintf(&b, "  size       %.1f MB\n", float64(snap.SizeBytes)/1024/1024)
 
-	b.WriteString("\n")
-	b.WriteString(styleDim.Render(strings.Repeat("─", a.width)) + "\n")
+	b.WriteByte('\n')
+	fmt.Fprintln(&b, styleDim.Render(strings.Repeat("─", a.width)))
 	b.WriteString(styleDim.Render("[r] restore  [d] delete  [esc] back"))
 
 	return b.String()
@@ -275,21 +280,23 @@ func (a *App) updateAccount(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (a *App) accountView() string {
 	var b strings.Builder
-	b.WriteString(styleHeader.Render("spwn") + styleDim.Render(" / ") + styleTitle.Render("account") + "\n")
-	b.WriteString(styleDim.Render(strings.Repeat("─", a.width)) + "\n\n")
+	fmt.Fprintf(&b, "%s%s%s\n",
+		styleHeader.Render("spwn"), styleDim.Render(" / "), styleTitle.Render("account"))
+	fmt.Fprintln(&b, styleDim.Render(strings.Repeat("─", a.width)))
+	b.WriteByte('\n')
 
 	if a.account == nil {
-		b.WriteString("  " + styleDim.Render("loading…") + "\n")
+		fmt.Fprintf(&b, "  %s\n", styleDim.Render("loading…"))
 	} else {
 		acc := *a.account
-		b.WriteString("  " + styleTitle.Render(acc.Email) + "\n\n")
-		b.WriteString("  " + progressBar("vcpus", 0, int(acc.VcpuLimit/1000), a.width-4) + "\n")
-		b.WriteString("  " + progressBar("ram", 0, acc.MemLimitMb/1024, a.width-4) + "\n")
-		b.WriteString("  " + progressBar("vms", 0, acc.VmLimit, a.width-4) + "\n")
+		fmt.Fprintf(&b, "  %s\n\n", styleTitle.Render(acc.Email))
+		fmt.Fprintf(&b, "  %s\n", progressBar("vcpus", 0, int(acc.VcpuLimit/1000), a.width-4))
+		fmt.Fprintf(&b, "  %s\n", progressBar("ram", 0, acc.MemLimitMb/1024, a.width-4))
+		fmt.Fprintf(&b, "  %s\n", progressBar("vms", 0, acc.VmLimit, a.width-4))
 	}
 
-	b.WriteString("\n")
-	b.WriteString(styleDim.Render(strings.Repeat("─", a.width)) + "\n")
+	b.WriteByte('\n')
+	fmt.Fprintln(&b, styleDim.Render(strings.Repeat("─", a.width)))
 	b.WriteString(styleDim.Render("[esc] back"))
 	return b.String()
 }
@@ -378,8 +385,8 @@ func (a *App) submitNewVM() tea.Cmd {
 
 func (a *App) newVMView() string {
 	var b strings.Builder
-	b.WriteString(styleHeader.Render("spwn") + styleDim.Render(" / new VM") + "\n")
-	b.WriteString(styleDim.Render(strings.Repeat("─", a.width)) + "\n\n")
+	fmt.Fprintln(&b, styleHeader.Render("spwn")+styleDim.Render(" / new VM"))
+	fmt.Fprintf(&b, "%s\n\n", styleDim.Render(strings.Repeat("─", a.width)))
 
 	fields := []struct {
 		label string
@@ -402,11 +409,11 @@ func (a *App) newVMView() string {
 		if f.idx == a.newVMField {
 			val += "█"
 		}
-		b.WriteString(fmt.Sprintf("  %s %s%s\n", cursor, f.label, style.Render(val)))
+		fmt.Fprintf(&b, "  %s %s%s\n", cursor, f.label, style.Render(val))
 	}
 
-	b.WriteString("\n")
-	b.WriteString(styleDim.Render(strings.Repeat("─", a.width)) + "\n")
+	b.WriteByte('\n')
+	fmt.Fprintln(&b, styleDim.Render(strings.Repeat("─", a.width)))
 	b.WriteString(styleDim.Render("[tab/↑↓] next field  [enter] create  [esc] cancel"))
 	return b.String()
 }
@@ -429,10 +436,10 @@ func (a *App) updateConfirm(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (a *App) confirmView() string {
 	var b strings.Builder
-	b.WriteString(styleHeader.Render("spwn") + "\n")
-	b.WriteString(styleDim.Render(strings.Repeat("─", a.width)) + "\n\n")
-	b.WriteString("  " + styleTitle.Render(a.confirmMsg) + "\n\n")
-	b.WriteString("  " + styleDim.Render("[y] confirm  [n/esc] cancel"))
+	fmt.Fprintln(&b, styleHeader.Render("spwn"))
+	fmt.Fprintf(&b, "%s\n\n", styleDim.Render(strings.Repeat("─", a.width)))
+	fmt.Fprintf(&b, "  %s\n\n", styleTitle.Render(a.confirmMsg))
+	fmt.Fprintf(&b, "  %s", styleDim.Render("[y] confirm  [n/esc] cancel"))
 	return b.String()
 }
 
@@ -471,9 +478,9 @@ func (a *App) updateRename(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (a *App) renameView() string {
 	var b strings.Builder
-	b.WriteString(styleHeader.Render("spwn") + styleDim.Render(" / rename") + "\n")
-	b.WriteString(styleDim.Render(strings.Repeat("─", a.width)) + "\n\n")
-	b.WriteString("  Name: " + styleSelected.Render(a.renameValue+"█") + "\n\n")
+	fmt.Fprintln(&b, styleHeader.Render("spwn")+styleDim.Render(" / rename"))
+	fmt.Fprintf(&b, "%s\n\n", styleDim.Render(strings.Repeat("─", a.width)))
+	fmt.Fprintf(&b, "  Name: %s\n\n", styleSelected.Render(a.renameValue+"█"))
 	b.WriteString(styleDim.Render("[enter] confirm  [esc] cancel"))
 	return b.String()
 }

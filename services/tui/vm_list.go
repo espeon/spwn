@@ -92,19 +92,17 @@ func (a *App) toggleVM(vm client.VM) tea.Cmd {
 func (a *App) vmListView() string {
 	var b strings.Builder
 
-	// Header
-	header := styleHeader.Render("spwn")
-	b.WriteString(header + "\n")
-	b.WriteString(styleDim.Render(strings.Repeat("─", a.width)) + "\n")
+	fmt.Fprintln(&b, styleHeader.Render("spwn"))
+	fmt.Fprintln(&b, styleDim.Render(strings.Repeat("─", a.width)))
 
 	if a.vmLoading && len(a.vmList) == 0 {
-		b.WriteString("\n  " + styleDim.Render("loading…") + "\n")
+		fmt.Fprintln(&b, "\n  "+styleDim.Render("loading…"))
 	} else if a.vmErr != "" {
-		b.WriteString("\n  " + styleError.Render(a.vmErr) + "\n")
+		fmt.Fprintln(&b, "\n  "+styleError.Render(a.vmErr))
 	} else if len(a.vmList) == 0 {
-		b.WriteString("\n  " + styleDim.Render("no VMs — press n to create one") + "\n")
+		fmt.Fprintln(&b, "\n  "+styleDim.Render("no VMs — press n to create one"))
 	} else {
-		b.WriteString("\n")
+		b.WriteByte('\n')
 		for i, vm := range a.vmList {
 			cursor := "  "
 			nameStyle := lipgloss.NewStyle()
@@ -117,16 +115,15 @@ func (a *App) vmListView() string {
 			status := statusColor(vm.Status).Render(fmt.Sprintf("%-10s", vm.Status))
 			res := styleDim.Render(fmt.Sprintf("%dvc  %dMB", vm.Vcpus, vm.MemoryMb))
 			sub := styleDim.Render(vm.Subdomain)
-			b.WriteString(fmt.Sprintf("  %s%s %s  %s  %s  %s\n",
-				cursor, dot, name, status, res, sub))
+			fmt.Fprintf(&b, "  %s%s %s  %s  %s  %s\n", cursor, dot, name, status, res, sub)
 		}
-		b.WriteString("\n")
+		b.WriteByte('\n')
 	}
 
-	b.WriteString(styleDim.Render(strings.Repeat("─", a.width)) + "\n")
+	fmt.Fprintln(&b, styleDim.Render(strings.Repeat("─", a.width)))
 
 	if a.statusMsg != "" {
-		b.WriteString(styleStatusBar.Render(a.statusMsg) + "\n")
+		fmt.Fprintln(&b, styleStatusBar.Render(a.statusMsg))
 	}
 
 	hint := "[↑↓/jk] nav  [enter] detail  [s] start/stop  [n] new  [d] delete  [a] account  [?] help  [q] quit"
@@ -140,7 +137,8 @@ func (a *App) vmListView() string {
 
 func (a *App) helpView() string {
 	var b strings.Builder
-	b.WriteString(styleHeader.Render("spwn — key bindings") + "\n\n")
+	fmt.Fprint(&b, styleHeader.Render("spwn — key bindings"))
+	b.WriteString("\n\n")
 	bindings := []struct{ key, desc string }{
 		{"j / ↓", "move down"},
 		{"k / ↑", "move up"},
@@ -156,9 +154,9 @@ func (a *App) helpView() string {
 		{"q", "quit"},
 	}
 	for _, b2 := range bindings {
-		b.WriteString(fmt.Sprintf("  %-12s  %s\n",
-			styleSelected.Render(b2.key), b2.desc))
+		fmt.Fprintf(&b, "  %-12s  %s\n", styleSelected.Render(b2.key), b2.desc)
 	}
-	b.WriteString("\n" + styleDim.Render("press any key to close"))
+	b.WriteByte('\n')
+	b.WriteString(styleDim.Render("press any key to close"))
 	return b.String()
 }
