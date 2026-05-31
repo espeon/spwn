@@ -22,12 +22,12 @@ impl GrpcTls {
         match (ca_path, cert_path, key_path) {
             (None, None, None) => Ok(None),
             (Some(ca), Some(cert), Some(key)) => {
-                let ca_pem = std::fs::read(&ca)
-                    .with_context(|| format!("read GRPC_TLS_CA_PATH={ca}"))?;
+                let ca_pem =
+                    std::fs::read(&ca).with_context(|| format!("read GRPC_TLS_CA_PATH={ca}"))?;
                 let cert_pem = std::fs::read(&cert)
                     .with_context(|| format!("read GRPC_TLS_CERT_PATH={cert}"))?;
-                let key_pem = std::fs::read(&key)
-                    .with_context(|| format!("read GRPC_TLS_KEY_PATH={key}"))?;
+                let key_pem =
+                    std::fs::read(&key).with_context(|| format!("read GRPC_TLS_KEY_PATH={key}"))?;
                 Ok(Some(Self {
                     ca: Certificate::from_pem(ca_pem),
                     identity: Identity::from_pem(cert_pem, key_pem),
