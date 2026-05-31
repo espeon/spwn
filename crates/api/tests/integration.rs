@@ -263,6 +263,7 @@ async fn create_vm_returns_201() {
             Request::post("/api/vms")
                 .header(header::COOKIE, format!("session_id={session_id}"))
                 .header(header::CONTENT_TYPE, "application/json")
+                .header("x-forwarded-for", "127.0.0.1")
                 .body(Body::from(body.to_string()))
                 .unwrap(),
         )

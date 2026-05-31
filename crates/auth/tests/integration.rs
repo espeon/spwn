@@ -67,6 +67,7 @@ async fn post_json(app: Router, uri: &str, body: Value) -> Response {
             .method("POST")
             .uri(uri)
             .header(header::CONTENT_TYPE, "application/json")
+            .header("x-forwarded-for", "127.0.0.1")
             .body(json_body(body))
             .unwrap(),
     )
@@ -79,6 +80,7 @@ async fn get_authed(app: Router, uri: &str, cookie: &str) -> Response {
         Request::builder()
             .uri(uri)
             .header(header::COOKIE, cookie)
+            .header("x-forwarded-for", "127.0.0.1")
             .body(Body::empty())
             .unwrap(),
     )
