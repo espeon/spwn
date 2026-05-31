@@ -36,6 +36,14 @@ func (a *App) updateVMList(msg tea.Msg) (tea.Model, tea.Cmd) {
 				a.detailCursor = 0
 				return a, a.loadVMDetail(vm)
 			}
+		case key.Matches(msg, keys.Connect):
+			if len(a.vmList) > 0 && a.connectFn != nil {
+				vm := a.vmList[a.vmCursor]
+				if vm.Status == "running" {
+					return a, a.connectCmd(vm.ID)
+				}
+				a.statusMsg = vm.Name + " is not running"
+			}
 		case key.Matches(msg, keys.Start):
 			if len(a.vmList) > 0 {
 				vm := a.vmList[a.vmCursor]
@@ -121,9 +129,11 @@ func (a *App) vmListView() string {
 		b.WriteString(styleStatusBar.Render(a.statusMsg) + "\n")
 	}
 
-	b.WriteString(styleDim.Render(
-		"[↑↓/jk] nav  [enter] detail  [s] start/stop  [n] new  [d] delete  [a] account  [?] help  [q] quit",
-	))
+	hint := "[↑↓/jk] nav  [enter] detail  [s] start/stop  [n] new  [d] delete  [a] account  [?] help  [q] quit"
+	if a.connectFn != nil {
+		hint = "[↑↓/jk] nav  [enter] detail  [c] connect  [s] start/stop  [n] new  [d] delete  [a] account  [q] quit"
+	}
+	b.WriteString(styleDim.Render(hint))
 
 	return b.String()
 }

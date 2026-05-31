@@ -32,6 +32,13 @@ func (a *App) updateVMDetail(msg tea.Msg) (tea.Model, tea.Cmd) {
 				a.selectedSnap = &snap
 				a.current = viewSnapshotDetail
 			}
+		case key.Matches(msg, keys.Connect):
+			if a.detailVM != nil && a.connectFn != nil {
+				if a.detailVM.Status == "running" {
+					return a, a.connectCmd(a.detailVM.ID)
+				}
+				a.statusMsg = a.detailVM.Name + " is not running"
+			}
 		case key.Matches(msg, keys.Start):
 			if a.detailVM != nil {
 				return a, a.toggleVM(*a.detailVM)

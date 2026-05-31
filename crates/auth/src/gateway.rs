@@ -22,6 +22,9 @@ fn check_gateway_secret(state: &AuthState, headers: &HeaderMap) -> bool {
     token == secret
 }
 
+// TTL for gateway-issued sessions — short-lived, not persisted to browser.
+const GATEWAY_SESSION_TTL_SECS: i64 = 24 * 3600; // 24 hours
+
 fn unix_now() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -150,6 +153,38 @@ pub(crate) async fn gateway_auth_pubkey(
             error: Some("unknown key".into()),
         })
         .into_response(),
+    }
+}
+
+#[derive(Deserialize)]
+pub(crate) struct GatewaySessionRequest {
+    pub(crate) account_id: String,
+}
+
+#[derive(Serialize)]
+struct GatewaySessionResponse {
+    token: String,
+}
+
+pub(crate) async fn gateway_create_session(
+    State(state): State<AuthState>,
+    headers: HeaderMap,
+    Json(req): Json<GatewaySessionRequest>,
+) -> impl IntoResponse {
+    if !check_gateway_secret(&state, &headers) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+
+    let now = unix_now();
+    let session = db::NewSession {
+        id: uuid::Uuid::new_v4().to_string(),
+        account_id: req.account_id,
+        created_at: now,
+        expires_at: now + GATEWAY_SESSION_TTL_SECS,
+    };
+    match db::create_session(&state.pool, &session).await {
+        Ok(_) => Json(GatewaySessionResponse { token: session.id }).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     }
 }
 

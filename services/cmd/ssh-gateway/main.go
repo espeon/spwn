@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -8,19 +9,23 @@ import (
 	"log"
 	"net"
 	"net/http"
-	neturl "net/url"
 	"os"
 	"strings"
 	"time"
 
+	tea "github.com/charmbracelet/bubbletea"
 	cssh "github.com/charmbracelet/ssh"
 	"github.com/charmbracelet/wish"
+	bm "github.com/charmbracelet/wish/bubbletea"
 	"github.com/charmbracelet/wish/logging"
+	"github.com/muesli/termenv"
 	gossh "golang.org/x/crypto/ssh"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 
+	"github.com/spwn/spwn/services/client"
 	agentpb "github.com/spwn/spwn/services/proto/agent"
+	"github.com/spwn/spwn/services/tui"
 )
 
 // ── config ────────────────────────────────────────────────────────────────────
@@ -53,16 +58,7 @@ func envOr(key, def string) string {
 type authResponse struct {
 	OK        bool   `json:"ok"`
 	AccountID string `json:"account_id"`
-	Username  string `json:"username,omitempty"`
 	Error     string `json:"error,omitempty"`
-}
-
-type vmLookupResponse struct {
-	VMID          string `json:"vm_id"`
-	HostAgentAddr string `json:"host_agent_addr"`
-	VMIP          string `json:"vm_ip"`
-	Status        string `json:"status"`
-	ExposedPort   int    `json:"exposed_port"`
 }
 
 func (cfg *gatewayConfig) callAuth(path string, body map[string]string) (*authResponse, error) {
@@ -70,7 +66,7 @@ func (cfg *gatewayConfig) callAuth(path string, body map[string]string) (*authRe
 	req, err := http.NewRequestWithContext(
 		context.Background(), "POST",
 		cfg.controlPlaneURL+path,
-		strings.NewReader(string(data)),
+		bytes.NewReader(data),
 	)
 	if err != nil {
 		return nil, err
@@ -89,19 +85,40 @@ func (cfg *gatewayConfig) callAuth(path string, body map[string]string) (*authRe
 	return &out, nil
 }
 
-func looksLikeUUID(s string) bool {
-	return len(s) == 36 && strings.Count(s, "-") == 4
+func (cfg *gatewayConfig) createSession(accountID string) (string, error) {
+	data, _ := json.Marshal(map[string]string{"account_id": accountID})
+	req, err := http.NewRequestWithContext(
+		context.Background(), "POST",
+		cfg.controlPlaneURL+"/internal/gateway/session",
+		bytes.NewReader(data),
+	)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+cfg.gatewaySecret)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	var out struct {
+		Token string `json:"token"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return "", err
+	}
+	return out.Token, nil
 }
 
-func (cfg *gatewayConfig) lookupVM(username string) (*vmLookupResponse, error) {
-	var query string
-	if looksLikeUUID(username) {
-		query = "vm_id=" + neturl.QueryEscape(username)
-	} else {
-		query = "subdomain=" + neturl.QueryEscape(username)
-	}
-	url := fmt.Sprintf("%s/internal/gateway/vm?%s", cfg.controlPlaneURL, query)
-	log.Printf("lookupVM: url=%s", url)
+type vmLookupResponse struct {
+	VMID          string `json:"vm_id"`
+	HostAgentAddr string `json:"host_agent_addr"`
+	Status        string `json:"status"`
+}
+
+func (cfg *gatewayConfig) lookupVM(vmID string) (*vmLookupResponse, error) {
+	url := fmt.Sprintf("%s/internal/gateway/vm?vm_id=%s", cfg.controlPlaneURL, vmID)
 	req, err := http.NewRequestWithContext(context.Background(), "GET", url, nil)
 	if err != nil {
 		return nil, err
@@ -114,8 +131,7 @@ func (cfg *gatewayConfig) lookupVM(username string) (*vmLookupResponse, error) {
 	defer resp.Body.Close()
 	if resp.StatusCode != 200 {
 		body, _ := io.ReadAll(resp.Body)
-		log.Printf("lookupVM: non-200 status=%d body=%s url=%s", resp.StatusCode, strings.TrimSpace(string(body)), url)
-		return nil, fmt.Errorf("vm lookup failed (status %d): %s", resp.StatusCode, strings.TrimSpace(string(body)))
+		return nil, fmt.Errorf("vm lookup failed: %s", strings.TrimSpace(string(body)))
 	}
 	var out vmLookupResponse
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
@@ -126,11 +142,10 @@ func (cfg *gatewayConfig) lookupVM(username string) (*vmLookupResponse, error) {
 
 // ── gRPC console relay ────────────────────────────────────────────────────────
 
-func relayConsole(ctx context.Context, agentAddr, vmID, command string, s cssh.Session) error {
+func relayConsole(ctx context.Context, agentAddr, vmID string, stdin io.Reader, stdout io.Writer) error {
 	agentAddr = strings.TrimPrefix(agentAddr, "https://")
 	agentAddr = strings.TrimPrefix(agentAddr, "http://")
-	conn, err := grpc.NewClient(agentAddr,
-		grpc.WithTransportCredentials(insecure.NewCredentials()))
+	conn, err := grpc.NewClient(agentAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
 		return fmt.Errorf("grpc dial %s: %w", agentAddr, err)
 	}
@@ -141,31 +156,18 @@ func relayConsole(ctx context.Context, agentAddr, vmID, command string, s cssh.S
 		return fmt.Errorf("open stream: %w", err)
 	}
 
-	// First frame: identify the VM, command, and initial terminal size.
-	var initCols, initRows uint32 = 80, 24
-	var initTerm string = "xterm-256color"
-	pty, winCh, hasPty := s.Pty()
-	if hasPty {
-		initCols = uint32(pty.Window.Width)
-		initRows = uint32(pty.Window.Height)
-		if pty.Term != "" {
-			initTerm = pty.Term
-		}
-	}
 	if err := stream.Send(&agentpb.ConsoleInput{
-		VmId:    vmID,
-		Command: command,
-		Cols:    initCols,
-		Rows:    initRows,
-		Term:    initTerm,
+		VmId: vmID,
+		Cols: 80,
+		Rows: 24,
+		Term: "xterm-256color",
 	}); err != nil {
-		return fmt.Errorf("send vm_id: %w", err)
+		return fmt.Errorf("send init frame: %w", err)
 	}
 
 	outputDone := make(chan error, 1)
 	inputDone := make(chan error, 1)
 
-	// gRPC output → SSH session
 	go func() {
 		for {
 			msg, err := stream.Recv()
@@ -177,18 +179,17 @@ func relayConsole(ctx context.Context, agentAddr, vmID, command string, s cssh.S
 				}
 				return
 			}
-			if _, err := s.Write(msg.Data); err != nil {
+			if _, err := stdout.Write(msg.Data); err != nil {
 				outputDone <- err
 				return
 			}
 		}
 	}()
 
-	// SSH session → gRPC input (data + window resize)
 	go func() {
 		buf := make([]byte, 4096)
 		for {
-			n, err := s.Read(buf)
+			n, err := stdin.Read(buf)
 			if n > 0 {
 				if serr := stream.Send(&agentpb.ConsoleInput{Data: buf[:n]}); serr != nil {
 					inputDone <- serr
@@ -203,25 +204,6 @@ func relayConsole(ctx context.Context, agentAddr, vmID, command string, s cssh.S
 		}
 	}()
 
-	// Window resize events → gRPC resize frames
-	if hasPty {
-		go func() {
-			for win := range winCh {
-				_ = stream.Send(&agentpb.ConsoleInput{
-					Cols: uint32(win.Width),
-					Rows: uint32(win.Height),
-				})
-			}
-		}()
-	}
-
-	if command != "" {
-		// For exec: stdin EOF is expected and harmless; wait for output to finish.
-		<-inputDone
-		return <-outputDone
-	}
-
-	// For interactive shell: either side closing ends the session.
 	select {
 	case err := <-outputDone:
 		return err
@@ -230,90 +212,11 @@ func relayConsole(ctx context.Context, agentAddr, vmID, command string, s cssh.S
 	}
 }
 
-// ── session handler middleware ────────────────────────────────────────────────
+// ── auth ──────────────────────────────────────────────────────────────────────
 
 type contextKey string
 
 const accountIDKey contextKey = "account_id"
-const usernameKey contextKey = "username"
-
-func sessionMiddleware(cfg *gatewayConfig) wish.Middleware {
-	return func(_ cssh.Handler) cssh.Handler {
-		return func(s cssh.Session) {
-			username := s.User()
-			remoteAddr := s.RemoteAddr().String()
-			command := strings.Join(s.Command(), " ")
-
-			log.Printf("session: remote=%s ssh_user=%q command=%q", remoteAddr, username, command)
-
-			// Prefer pubkey auth: re-resolve the account ID from the key that
-			// was actually used to authenticate this session. The pubkey handler
-			// runs twice (probe + real) and context values set during the probe
-			// are not visible here, so we look it up again.
-			var accountID, accountUsername string
-			if pk := s.PublicKey(); pk != nil {
-				fp := gossh.FingerprintSHA256(pk)
-				log.Printf("session: pubkey auth fingerprint=%s", fp)
-				resp, err := cfg.callAuth("/internal/gateway/auth/pubkey", map[string]string{
-					"fingerprint": fp,
-				})
-				if err != nil {
-					log.Printf("session: pubkey auth error: %v", err)
-				} else if resp.OK {
-					accountID = resp.AccountID
-					accountUsername = resp.Username
-					log.Printf("session: pubkey auth ok account_id=%s username=%s", accountID, accountUsername)
-				} else {
-					log.Printf("session: pubkey auth rejected: %s", resp.Error)
-				}
-			}
-
-			// Fall back to the value set by password auth.
-			if accountID == "" {
-				accountID, _ = s.Context().Value(accountIDKey).(string)
-				accountUsername, _ = s.Context().Value(usernameKey).(string)
-				if accountID != "" {
-					log.Printf("session: password auth account_id=%s username=%s", accountID, accountUsername)
-				}
-			}
-
-			if accountID == "" {
-				log.Printf("session: no auth state for remote=%s ssh_user=%q", remoteAddr, username)
-				fmt.Fprintln(s.Stderr(), "error: authentication state missing")
-				_ = s.Exit(1)
-				return
-			}
-
-			log.Printf("session: looking up vm ssh_user=%q account_username=%q", username, accountUsername)
-			vm, err := cfg.lookupVM(username)
-			if err != nil {
-				log.Printf("session: vm lookup failed ssh_user=%q account_username=%q err=%v", username, accountUsername, err)
-				fmt.Fprintf(s.Stderr(), "error: %v\r\n", err)
-				_ = s.Exit(1)
-				return
-			}
-			log.Printf("session: vm found vm_id=%s status=%s host=%s", vm.VMID, vm.Status, vm.HostAgentAddr)
-
-			if vm.Status != "running" {
-				log.Printf("session: vm not running vm_id=%s status=%s", vm.VMID, vm.Status)
-				fmt.Fprintf(s.Stderr(), "vm '%s' is %s (must be running)\r\n", username, vm.Status)
-				_ = s.Exit(1)
-				return
-			}
-
-			log.Printf("session: relaying vm_id=%s command=%q", vm.VMID, command)
-			if err := relayConsole(s.Context(), vm.HostAgentAddr, vm.VMID, command, s); err != nil {
-				log.Printf("relay ended: vm=%s err=%v", vm.VMID, err)
-				_ = s.Exit(1)
-			} else {
-				log.Printf("relay ended: vm=%s clean", vm.VMID)
-				_ = s.Exit(0)
-			}
-		}
-	}
-}
-
-// ── auth ──────────────────────────────────────────────────────────────────────
 
 func passwordAuth(cfg *gatewayConfig) cssh.PasswordHandler {
 	return func(ctx cssh.Context, password string) bool {
@@ -325,7 +228,6 @@ func passwordAuth(cfg *gatewayConfig) cssh.PasswordHandler {
 			return false
 		}
 		ctx.SetValue(accountIDKey, resp.AccountID)
-		ctx.SetValue(usernameKey, resp.Username)
 		return true
 	}
 }
@@ -340,8 +242,59 @@ func pubkeyAuth(cfg *gatewayConfig) cssh.PublicKeyHandler {
 			return false
 		}
 		ctx.SetValue(accountIDKey, resp.AccountID)
-		ctx.SetValue(usernameKey, resp.Username)
 		return true
+	}
+}
+
+// ── TUI handler ───────────────────────────────────────────────────────────────
+
+func tuiHandler(cfg *gatewayConfig) bm.Handler {
+	return func(s cssh.Session) (tea.Model, []tea.ProgramOption) {
+		accountID, _ := s.Context().Value(accountIDKey).(string)
+
+		// Re-resolve from pubkey if password auth didn't set it.
+		if accountID == "" {
+			if pk := s.PublicKey(); pk != nil {
+				fp := gossh.FingerprintSHA256(pk)
+				if resp, err := cfg.callAuth("/internal/gateway/auth/pubkey", map[string]string{
+					"fingerprint": fp,
+				}); err == nil && resp.OK {
+					accountID = resp.AccountID
+				}
+			}
+		}
+
+		if accountID == "" {
+			fmt.Fprintln(s.Stderr(), "error: authentication state missing")
+			_ = s.Exit(1)
+			return nil, nil
+		}
+
+		token, err := cfg.createSession(accountID)
+		if err != nil {
+			log.Printf("create session for %s: %v", accountID, err)
+			fmt.Fprintln(s.Stderr(), "error: could not create session")
+			_ = s.Exit(1)
+			return nil, nil
+		}
+
+		c := client.New(cfg.controlPlaneURL, token)
+
+		connectFn := func(vmID string, stdin io.Reader, stdout io.Writer) error {
+			vmInfo, err := cfg.lookupVM(vmID)
+			if err != nil {
+				return fmt.Errorf("vm lookup: %w", err)
+			}
+			return relayConsole(s.Context(), vmInfo.HostAgentAddr, vmID, stdin, stdout)
+		}
+
+		pty, _, hasPty := s.Pty()
+		w, h := 80, 24
+		if hasPty {
+			w, h = pty.Window.Width, pty.Window.Height
+		}
+
+		return tui.NewSSHApp(c, w, h, connectFn), []tea.ProgramOption{tea.WithAltScreen()}
 	}
 }
 
@@ -360,7 +313,7 @@ func main() {
 		wish.WithPasswordAuth(passwordAuth(&cfg)),
 		wish.WithPublicKeyAuth(pubkeyAuth(&cfg)),
 		wish.WithMiddleware(
-			sessionMiddleware(&cfg),
+			bm.MiddlewareWithColorProfile(tuiHandler(&cfg), termenv.TrueColor),
 			logging.Middleware(),
 		),
 	)

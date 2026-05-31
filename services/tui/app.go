@@ -1,11 +1,16 @@
 package tui
 
 import (
+	"io"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/spwn/spwn/services/client"
 )
+
+// ConnectFn is called when the user connects to a VM shell from the TUI.
+// It blocks until the session ends. stdin/stdout are wired to the SSH session.
+type ConnectFn func(vmID string, stdin io.Reader, stdout io.Writer) error
 
 type view int
 
@@ -18,6 +23,8 @@ const (
 	viewConfirm
 	viewRename
 )
+
+type shellDoneMsg struct{ err error }
 
 type tickMsg struct{}
 type vmsLoadedMsg struct{ vms []client.VM }
@@ -38,10 +45,11 @@ func tickCmd() tea.Cmd {
 }
 
 type App struct {
-	client  *client.Client
-	current view
-	width   int
-	height  int
+	client    *client.Client
+	connectFn ConnectFn // nil when running as CLI binary (no shell relay)
+	current   view
+	width     int
+	height    int
 
 	// VM list state
 	vmList    []client.VM
@@ -82,14 +90,29 @@ type App struct {
 
 func Run(c *client.Client) error {
 	app := &App{
-		client:      c,
-		current:     viewVMList,
+		client:     c,
+		current:    viewVMList,
 		newVMVcpus: "2",
-		newVMMemMb:  "512",
+		newVMMemMb: "512",
 	}
 	p := tea.NewProgram(app, tea.WithAltScreen())
 	_, err := p.Run()
 	return err
+}
+
+// NewSSHApp creates an App for use inside an SSH session. w/h are the initial
+// terminal dimensions from the pty. connectFn is called when the user connects
+// to a VM shell; it blocks until the session ends.
+func NewSSHApp(c *client.Client, w, h int, connectFn ConnectFn) *App {
+	return &App{
+		client:     c,
+		connectFn:  connectFn,
+		current:    viewVMList,
+		width:      w,
+		height:     h,
+		newVMVcpus: "2",
+		newVMMemMb: "512",
+	}
 }
 
 func (a *App) Init() tea.Cmd {
@@ -162,6 +185,14 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case actionDoneMsg:
 		if msg.err != nil {
 			a.statusMsg = "error: " + msg.err.Error()
+		} else {
+			a.statusMsg = ""
+		}
+		return a, a.loadVMs()
+
+	case shellDoneMsg:
+		if msg.err != nil {
+			a.statusMsg = "shell: " + msg.err.Error()
 		} else {
 			a.statusMsg = ""
 		}

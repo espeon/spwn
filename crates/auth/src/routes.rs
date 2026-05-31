@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 use webauthn_rs::Webauthn;
 
-use crate::gateway::{gateway_auth_password, gateway_auth_pubkey, gateway_lookup_vm};
+use crate::gateway::{gateway_auth_password, gateway_auth_pubkey, gateway_create_session, gateway_lookup_vm};
 use crate::passkey;
 use crate::{password, session::AccountId};
 
@@ -180,6 +180,7 @@ pub fn auth_router(state: AuthState) -> Router {
             post(gateway_auth_password),
         )
         .route("/internal/gateway/auth/pubkey", post(gateway_auth_pubkey))
+        .route("/internal/gateway/session", post(gateway_create_session))
         .route("/internal/gateway/vm", get(gateway_lookup_vm))
         .with_state(state)
 }
