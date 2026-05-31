@@ -58,6 +58,7 @@ func envOr(key, def string) string {
 type authResponse struct {
 	OK        bool   `json:"ok"`
 	AccountID string `json:"account_id"`
+	Username  string `json:"username,omitempty"`
 	Error     string `json:"error,omitempty"`
 }
 
@@ -217,6 +218,7 @@ func relayConsole(ctx context.Context, agentAddr, vmID string, stdin io.Reader, 
 type contextKey string
 
 const accountIDKey contextKey = "account_id"
+const usernameKey contextKey = "username"
 
 func passwordAuth(cfg *gatewayConfig) cssh.PasswordHandler {
 	return func(ctx cssh.Context, password string) bool {
@@ -228,6 +230,9 @@ func passwordAuth(cfg *gatewayConfig) cssh.PasswordHandler {
 			return false
 		}
 		ctx.SetValue(accountIDKey, resp.AccountID)
+		if resp.Username != "" {
+			ctx.SetValue(usernameKey, resp.Username)
+		}
 		return true
 	}
 }
@@ -242,8 +247,61 @@ func pubkeyAuth(cfg *gatewayConfig) cssh.PublicKeyHandler {
 			return false
 		}
 		ctx.SetValue(accountIDKey, resp.AccountID)
+		if resp.Username != "" {
+			ctx.SetValue(usernameKey, resp.Username)
+		}
 		return true
 	}
+}
+
+// ── direct VM relay ──────────────────────────────────────────────────────────
+
+// tryDirectRelay checks if the SSH username matches a VM subdomain and relays
+// directly to it. Returns true if the session was handled (VM found and relayed).
+// Returns false if the username matches the account name (dashboard) or no VM found.
+func tryDirectRelay(cfg *gatewayConfig, sess cssh.Session) bool {
+	username := sess.User()
+
+	accountID, _ := sess.Context().Value(accountIDKey).(string)
+	accountUsername, _ := sess.Context().Value(usernameKey).(string)
+
+	// If SSH username matches the account username, show the dashboard.
+	if accountUsername != "" && username == accountUsername {
+		return false
+	}
+
+	// Try to look up a VM whose subdomain matches the SSH username.
+	vmInfo, err := cfg.lookupVM(username)
+	if err != nil {
+		// No VM with that subdomain — fall through to TUI.
+		return false
+	}
+
+	if accountID == "" {
+		if pk := sess.PublicKey(); pk != nil {
+			fp := gossh.FingerprintSHA256(pk)
+			if resp, err := cfg.callAuth("/internal/gateway/auth/pubkey", map[string]string{
+				"fingerprint": fp,
+			}); err == nil && resp.OK {
+				accountID = resp.AccountID
+			}
+		}
+	}
+	if accountID == "" {
+		fmt.Fprintln(sess.Stderr(), "error: authentication state missing")
+		_ = sess.Exit(1)
+		return true
+	}
+
+	log.Printf("direct relay: user %s -> vm %s (subdomain %s)", accountID, vmInfo.VMID, username)
+	if err := relayConsole(sess.Context(), vmInfo.HostAgentAddr, vmInfo.VMID, sess, sess); err != nil {
+		log.Printf("direct relay error: %v", err)
+		fmt.Fprintf(sess.Stderr(), "connection error: %v\r\n", err)
+		_ = sess.Exit(1)
+		return true
+	}
+	_ = sess.Exit(0)
+	return true
 }
 
 // ── TUI handler ───────────────────────────────────────────────────────────────
@@ -313,6 +371,13 @@ func main() {
 		wish.WithPasswordAuth(passwordAuth(&cfg)),
 		wish.WithPublicKeyAuth(pubkeyAuth(&cfg)),
 		wish.WithMiddleware(
+			func(next cssh.Handler) cssh.Handler {
+				return func(sess cssh.Session) {
+					if !tryDirectRelay(&cfg, sess) {
+						next(sess)
+					}
+				}
+			},
 			bm.MiddlewareWithColorProfile(tuiHandler(&cfg), termenv.TrueColor),
 			logging.Middleware(),
 		),

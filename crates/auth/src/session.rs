@@ -50,22 +50,29 @@ impl<S: Send + Sync> FromRequestParts<S> for AccountId {
             .strip_prefix("Bearer ")
             .ok_or(StatusCode::UNAUTHORIZED)?;
 
+        // First try as an API token (hashed lookup).
         let token_hash = hex::encode(Sha256::digest(raw_token.as_bytes()));
         let now = unix_now();
 
-        let account_id = db::get_account_id_by_token_hash(&pool, &token_hash)
+        if let Ok(Some(account_id)) = db::get_account_id_by_token_hash(&pool, &token_hash).await {
+            // Fire-and-forget last_used_at update.
+            let pool2 = pool.clone();
+            let hash2 = token_hash.clone();
+            tokio::spawn(async move {
+                let _ = db::touch_api_token(&pool2, &hash2, now).await;
+            });
+            return Ok(AccountId(account_id));
+        }
+
+        // If not an API token, try as a session ID (used by SSH gateway TUI).
+        let session = db::get_session(&pool, raw_token)
             .await
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
             .ok_or(StatusCode::UNAUTHORIZED)?;
-
-        // Fire-and-forget last_used_at update.
-        let pool2 = pool.clone();
-        let hash2 = token_hash.clone();
-        tokio::spawn(async move {
-            let _ = db::touch_api_token(&pool2, &hash2, now).await;
-        });
-
-        Ok(AccountId(account_id))
+        if session.expires_at < now {
+            return Err(StatusCode::UNAUTHORIZED);
+        }
+        Ok(AccountId(session.account_id))
     }
 }
 
