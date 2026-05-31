@@ -101,10 +101,16 @@ impl CaddyClient {
     }
 
     // Try PUT /id/route-<subdomain> first. On 404 (route doesn't exist yet), POST to append.
+    // On duplicate ID error (route was added by rebuild_all_routes), delete first then PUT.
     async fn upsert_route(&self, subdomain: &str, route: Value) -> Result<()> {
         let id_url = format!("{}/id/route-{subdomain}", self.base);
         let resp = self.client.put(&id_url).json(&route).send().await?;
         if resp.status() == 404 {
+            self.post("/id/vm-routes-container/handle/0/routes/", &route)
+                .await?;
+        } else if resp.status() == 400 {
+            // Duplicate ID — route exists from rebuild_all_routes. Delete then re-add.
+            self.delete_route(subdomain).await?;
             self.post("/id/vm-routes-container/handle/0/routes/", &route)
                 .await?;
         } else {
