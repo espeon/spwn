@@ -189,7 +189,7 @@ async fn main() -> anyhow::Result<()> {
         .merge(admin::router(admin_state))
         .route("/api/events", get(vm_events_sse))
         .route("/metrics", get(metrics::prometheus_handler))
-        .route("/api/vms/:id/metrics", get(metrics::vm_metrics_handler))
+        .route("/api/vms/{id}/metrics", get(metrics::vm_metrics_handler))
         .layer(middleware::from_fn_with_state(
             (),
             |axum::extract::State(()): axum::extract::State<()>,
