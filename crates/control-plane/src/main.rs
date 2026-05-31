@@ -20,6 +20,7 @@ mod ops;
 mod registration;
 mod scheduler;
 mod subdomain;
+mod tls;
 
 const BANNER: &str = "
 
@@ -85,6 +86,11 @@ async fn main() -> anyhow::Result<()> {
     let gateway_secret = std::env::var("GATEWAY_SECRET").ok();
     let ssh_gateway_addr =
         std::env::var("SSH_GATEWAY_ADDR").unwrap_or_else(|_| "localhost:2222".into());
+    let grpc_tls = tls::GrpcTls::from_env().context("load gRPC TLS config")?;
+    if grpc_tls.is_some() {
+        info!("gRPC mTLS enabled");
+    }
+
     info!("connecting to database");
     let pool = db::connect(&database_url).await?;
     db::migrate(&pool).await?;
@@ -121,7 +127,7 @@ async fn main() -> anyhow::Result<()> {
 
     rebuild_caddy_routes(&pool, &caddy, &base_domain).await;
 
-    let event_watcher = events::EventWatcher::new(pool.clone(), caddy.clone(), base_domain.clone());
+    let event_watcher = events::EventWatcher::new(pool.clone(), caddy.clone(), base_domain.clone(), grpc_tls.clone());
     let event_tx = event_watcher.tx.clone();
 
     let hosts = db::list_hosts(&pool).await.unwrap_or_default();
@@ -141,6 +147,7 @@ async fn main() -> anyhow::Result<()> {
         pool: pool.clone(),
         caddy: caddy.clone(),
         base_domain,
+        tls: grpc_tls.clone(),
     });
 
     let auth_state = auth::routes::AuthState::new(
@@ -156,12 +163,13 @@ async fn main() -> anyhow::Result<()> {
     let admin_state = admin::AdminState {
         pool: pool.clone(),
         caddy: caddy.clone(),
+        tls: grpc_tls.clone(),
     };
 
-    tokio::spawn(migration::run_drain_watcher(pool.clone(), caddy.clone()));
+    tokio::spawn(migration::run_drain_watcher(pool.clone(), caddy.clone(), grpc_tls.clone()));
 
     let metrics_cache = metrics::MetricsCache::new();
-    tokio::spawn(metrics::run_poller(metrics_cache.clone(), pool.clone()));
+    tokio::spawn(metrics::run_poller(metrics_cache.clone(), pool.clone(), grpc_tls.clone()));
 
     let cors = {
         use http::header::{AUTHORIZATION, CONTENT_TYPE};
@@ -247,14 +255,19 @@ async fn main() -> anyhow::Result<()> {
     tokio::select! {
         result = axum::serve(http_listener, http_app)
             .with_graceful_shutdown(shutdown) => { result?; }
-        result = tonic::transport::Server::builder()
-            .add_service(ControlPlaneServer::new(grpc_svc))
-            .serve_with_shutdown(grpc_listen, async {
-                tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
-                    .expect("install SIGTERM handler for gRPC")
-                    .recv()
-                    .await;
-            }) => { result?; }
+        result = {
+            let mut srv = tonic::transport::Server::builder();
+            if let Some(t) = &grpc_tls {
+                srv = srv.tls_config(t.server_config()).context("gRPC TLS config")?;
+            }
+            srv.add_service(ControlPlaneServer::new(grpc_svc))
+                .serve_with_shutdown(grpc_listen, async {
+                    tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+                        .expect("install SIGTERM handler for gRPC")
+                        .recv()
+                        .await;
+                })
+        } => { result?; }
         _ = tokio::signal::ctrl_c() => {
             info!("received ctrl-c, shutting down");
         }

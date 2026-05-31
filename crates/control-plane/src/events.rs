@@ -4,10 +4,9 @@ use std::time::Duration;
 use agent_proto::agent::{WatchRequest, host_agent_client::HostAgentClient};
 use serde::Serialize;
 use tokio::sync::{Mutex, broadcast};
-use tonic::transport::Channel;
 use tracing::{error, info, warn};
 
-use crate::caddy_router::CaddyRouter;
+use crate::{caddy_router::CaddyRouter, tls::GrpcTls};
 
 #[derive(Clone, Debug, Serialize)]
 pub struct VmStatusEvent {
@@ -22,17 +21,19 @@ pub struct EventWatcher {
     pool: db::PgPool,
     caddy: CaddyRouter,
     base_domain: String,
+    tls: Option<GrpcTls>,
     watched: Arc<Mutex<std::collections::HashSet<String>>>,
     pub tx: EventBroadcast,
 }
 
 impl EventWatcher {
-    pub fn new(pool: db::PgPool, caddy: CaddyRouter, base_domain: String) -> Self {
+    pub fn new(pool: db::PgPool, caddy: CaddyRouter, base_domain: String, tls: Option<GrpcTls>) -> Self {
         let (tx, _) = broadcast::channel(256);
         Self {
             pool,
             caddy,
             base_domain,
+            tls,
             watched: Arc::new(Mutex::new(std::collections::HashSet::new())),
             tx,
         }
@@ -49,10 +50,11 @@ impl EventWatcher {
         let pool = self.pool.clone();
         let caddy = self.caddy.clone();
         let base_domain = self.base_domain.clone();
+        let tls = self.tls.clone();
         let tx = self.tx.clone();
         let watcher = self.clone();
         tokio::spawn(async move {
-            watch_loop(host_id, address, pool, caddy, base_domain, tx, watcher).await;
+            watch_loop(host_id, address, pool, caddy, base_domain, tls, tx, watcher).await;
         });
     }
 }
@@ -63,13 +65,14 @@ async fn watch_loop(
     pool: db::PgPool,
     caddy: CaddyRouter,
     base_domain: String,
+    tls: Option<GrpcTls>,
     tx: EventBroadcast,
     watcher: EventWatcher,
 ) {
     let mut backoff = Duration::from_secs(1);
     loop {
         info!("connecting to host {host_id} for event stream ({address})");
-        match connect_and_stream(&host_id, &address, &pool, &caddy, &base_domain, &tx).await {
+        match connect_and_stream(&host_id, &address, &pool, &caddy, &base_domain, &tls, &tx).await {
             Ok(()) => {
                 warn!("event stream for host {host_id} closed, reconnecting...");
             }
@@ -94,9 +97,10 @@ async fn connect_and_stream(
     pool: &db::PgPool,
     caddy: &CaddyRouter,
     base_domain: &str,
+    tls: &Option<GrpcTls>,
     tx: &EventBroadcast,
 ) -> anyhow::Result<()> {
-    let channel = Channel::from_shared(address.to_string())?.connect().await?;
+    let channel = crate::tls::agent_channel(address, tls.as_ref()).await?;
     let mut client = HostAgentClient::new(channel);
     let mut stream = client.watch_events(WatchRequest {}).await?.into_inner();
 

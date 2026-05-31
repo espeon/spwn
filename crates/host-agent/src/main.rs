@@ -13,7 +13,6 @@ use axum::{
 };
 use fctools::vmm::installation::VmmInstallation;
 use networking::NetworkManager;
-use tonic::transport::Channel;
 use tracing::info;
 
 mod agent;
@@ -22,6 +21,7 @@ mod manager;
 mod metrics;
 mod overlay;
 mod reconcile;
+mod tls;
 
 use manager::VmManager;
 
@@ -210,6 +210,11 @@ async fn main() -> anyhow::Result<()> {
     networking::iptables::setup(&external_iface)?;
     setup_cgroup_controllers()?;
 
+    let grpc_tls = tls::GrpcTls::from_env().context("load gRPC TLS config")?;
+    if grpc_tls.is_some() {
+        info!("gRPC mTLS enabled");
+    }
+
     for dir in [&overlay_dir, &images_dir, &snapshot_dir] {
         std::fs::create_dir_all(dir).with_context(|| format!("create dir: {}", dir.display()))?;
     }
@@ -259,9 +264,8 @@ async fn main() -> anyhow::Result<()> {
     });
 
     // Register with control plane.
-    let cp_channel = Channel::from_shared(control_plane_url.clone())
-        .context("parse control plane URL")?
-        .connect_lazy();
+    let cp_channel = tls::agent_channel(&control_plane_url, grpc_tls.as_ref()).await
+        .context("connect to control plane")?;
     let mut cp_client = ControlPlaneClient::new(cp_channel);
 
     cp_client
@@ -286,10 +290,11 @@ async fn main() -> anyhow::Result<()> {
     let hb_manager = manager.clone();
     let hb_host_id = host_id.clone();
     let hb_cp_url = control_plane_url.clone();
+    let hb_tls = grpc_tls.clone();
     tokio::spawn(async move {
-        let channel = Channel::from_shared(hb_cp_url)
-            .expect("valid URL")
-            .connect_lazy();
+        let channel = tls::agent_channel(&hb_cp_url, hb_tls.as_ref())
+            .await
+            .expect("heartbeat channel");
         let mut client = ControlPlaneClient::new(channel);
         loop {
             tokio::time::sleep(Duration::from_secs(10)).await;
@@ -324,9 +329,13 @@ async fn main() -> anyhow::Result<()> {
     info!("host-agent gRPC listening on {agent_listen_addr}");
 
     tokio::select! {
-        result = tonic::transport::Server::builder()
-            .add_service(HostAgentServer::new(svc))
-            .serve(listen) => { result?; }
+        result = {
+            let mut srv = tonic::transport::Server::builder();
+            if let Some(t) = &grpc_tls {
+                srv = srv.tls_config(t.server_config()).context("gRPC TLS config")?;
+            }
+            srv.add_service(HostAgentServer::new(svc)).serve(listen)
+        } => { result?; }
         _ = tokio::signal::ctrl_c() => {
             info!("received ctrl-c, shutting down");
         }

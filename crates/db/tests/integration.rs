@@ -553,3 +553,121 @@ async fn test_list_regions_active_flag() {
     assert!(us.active);
     assert!(!eu.active);
 }
+
+// ── audit log ─────────────────────────────────────────────────────────────────
+
+#[tokio::test]
+async fn test_audit_write_and_list() {
+    let (_c, pool) = setup().await;
+    let account_id = Uuid::new_v4().to_string();
+    db::create_account(
+        &pool,
+        &db::NewAccount {
+            id: account_id.clone(),
+            email: format!("{account_id}@test.com"),
+            password_hash: None,
+            username: "audituser".into(),
+            created_at: 1_000_000,
+        },
+    )
+    .await
+    .expect("create account");
+
+    db::write_audit(
+        &pool,
+        &account_id,
+        "delete",
+        "vm",
+        Some("vm-abc-123"),
+        Some(serde_json::json!({"name": "my-vm"})),
+        Some("1.2.3.4"),
+    )
+    .await
+    .expect("write audit");
+
+    db::write_audit(&pool, &account_id, "stop", "vm", Some("vm-abc-123"), None, None)
+        .await
+        .expect("write second audit");
+
+    let entries = db::list_audit(&pool, &account_id, 10, None)
+        .await
+        .expect("list audit");
+
+    assert_eq!(entries.len(), 2);
+    // newest first
+    assert_eq!(entries[0].action, "stop");
+    assert_eq!(entries[1].action, "delete");
+    assert_eq!(entries[1].resource_id.as_deref(), Some("vm-abc-123"));
+    assert_eq!(entries[1].ip.as_deref(), Some("1.2.3.4"));
+}
+
+#[tokio::test]
+async fn test_audit_pagination() {
+    let (_c, pool) = setup().await;
+    let account_id = Uuid::new_v4().to_string();
+    db::create_account(
+        &pool,
+        &db::NewAccount {
+            id: account_id.clone(),
+            email: format!("{account_id}@test.com"),
+            password_hash: None,
+            username: "pageuser".into(),
+            created_at: 1_000_000,
+        },
+    )
+    .await
+    .expect("create account");
+
+    for i in 0..5 {
+        db::write_audit(&pool, &account_id, "stop", "vm", Some(&format!("vm-{i}")), None, None)
+            .await
+            .expect("write");
+    }
+
+    let first_page = db::list_audit(&pool, &account_id, 3, None)
+        .await
+        .expect("page 1");
+    assert_eq!(first_page.len(), 3);
+
+    let cursor = first_page.last().unwrap().id;
+    let second_page = db::list_audit(&pool, &account_id, 3, Some(cursor))
+        .await
+        .expect("page 2");
+    assert_eq!(second_page.len(), 2);
+
+    // no overlap
+    let first_ids: std::collections::HashSet<_> = first_page.iter().map(|e| e.id).collect();
+    assert!(second_page.iter().all(|e| !first_ids.contains(&e.id)));
+}
+
+#[tokio::test]
+async fn test_audit_isolated_by_account() {
+    let (_c, pool) = setup().await;
+    let a = Uuid::new_v4().to_string();
+    let b = Uuid::new_v4().to_string();
+    for (id, name) in [(&a, "auser"), (&b, "buser")] {
+        db::create_account(
+            &pool,
+            &db::NewAccount {
+                id: id.clone(),
+                email: format!("{id}@test.com"),
+                password_hash: None,
+                username: name.into(),
+                created_at: 1_000_000,
+            },
+        )
+        .await
+        .expect("create account");
+    }
+
+    db::write_audit(&pool, &a, "delete", "vm", Some("vm-a"), None, None).await.unwrap();
+    db::write_audit(&pool, &b, "delete", "vm", Some("vm-b"), None, None).await.unwrap();
+
+    let a_entries = db::list_audit(&pool, &a, 10, None).await.unwrap();
+    assert_eq!(a_entries.len(), 1);
+    assert_eq!(a_entries[0].resource_id.as_deref(), Some("vm-a"));
+
+    let b_entries = db::list_audit(&pool, &b, 10, None).await.unwrap();
+    assert_eq!(b_entries.len(), 1);
+    assert_eq!(b_entries[0].resource_id.as_deref(), Some("vm-b"));
+}

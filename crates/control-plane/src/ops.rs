@@ -1,7 +1,6 @@
 use anyhow::anyhow;
 use api::VmOpsError;
 use async_trait::async_trait;
-use tonic::transport::Channel;
 use tracing::{error, warn};
 
 use agent_proto::agent::{
@@ -12,12 +11,13 @@ use agent_proto::agent::{
 };
 use router_sync::CaddyClient;
 
-use crate::{caddy_router::CaddyRouter, scheduler, subdomain};
+use crate::{caddy_router::CaddyRouter, scheduler, subdomain, tls::GrpcTls};
 
 pub struct ControlPlaneOps {
     pub pool: db::PgPool,
     pub caddy: CaddyRouter,
     pub base_domain: String,
+    pub tls: Option<GrpcTls>,
 }
 
 impl ControlPlaneOps {
@@ -29,7 +29,7 @@ impl ControlPlaneOps {
         self.caddy.for_region(None)
     }
 
-    async fn agent_client(&self, vm_id: &str) -> anyhow::Result<HostAgentClient<Channel>> {
+    async fn agent_client(&self, vm_id: &str) -> anyhow::Result<HostAgentClient<tonic::transport::Channel>> {
         let vm = db::get_vm(&self.pool, vm_id)
             .await?
             .ok_or_else(|| anyhow!("vm not found: {vm_id}"))?;
@@ -39,7 +39,7 @@ impl ControlPlaneOps {
         let host = db::get_host(&self.pool, &host_id)
             .await?
             .ok_or_else(|| anyhow!("host {host_id} not found"))?;
-        let channel = Channel::from_shared(host.address)?.connect().await?;
+        let channel = crate::tls::agent_channel(&host.address, self.tls.as_ref()).await?;
         Ok(HostAgentClient::new(channel))
     }
 }
@@ -102,9 +102,7 @@ impl api::VmOps for ControlPlaneOps {
         let ip_address = format!("172.16.{slot}.2");
         let sub = subdomain::generate(&self.pool, &req.name).await?;
 
-        let channel = Channel::from_shared(host.address.clone())?
-            .connect()
-            .await?;
+        let channel = crate::tls::agent_channel(&host.address, self.tls.as_ref()).await?;
         let mut agent = HostAgentClient::new(channel);
 
         let resp = agent
@@ -452,9 +450,7 @@ impl api::VmOps for ControlPlaneOps {
         let name = req.name.clone();
         let sub = subdomain::generate(&self.pool, &name).await?;
 
-        let channel = Channel::from_shared(host.address.clone())?
-            .connect()
-            .await?;
+        let channel = crate::tls::agent_channel(&host.address, self.tls.as_ref()).await?;
         let mut agent = HostAgentClient::new(channel);
 
         let resp = agent
@@ -564,5 +560,38 @@ impl api::VmOps for ControlPlaneOps {
         }
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::MIN_VCPUS;
+
+    #[test]
+    fn min_vcpus_is_250() {
+        assert_eq!(MIN_VCPUS, 250);
+    }
+
+    #[test]
+    fn vcpu_below_floor_is_rejected() {
+        // Mirrors the validation logic in create_vm and resize_resources.
+        let cases = [0i64, 1, 100, 124, 249];
+        for vcpus in cases {
+            assert!(
+                vcpus < MIN_VCPUS,
+                "expected {vcpus} to be below MIN_VCPUS={MIN_VCPUS}"
+            );
+        }
+    }
+
+    #[test]
+    fn vcpu_at_or_above_floor_is_accepted() {
+        let cases = [250i64, 500, 1000, 2000, 8000];
+        for vcpus in cases {
+            assert!(
+                vcpus >= MIN_VCPUS,
+                "expected {vcpus} to be >= MIN_VCPUS={MIN_VCPUS}"
+            );
+        }
     }
 }

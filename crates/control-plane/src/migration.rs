@@ -7,12 +7,10 @@ use agent_proto::agent::{
     MigrateVmRequest, StopVmRequest, TakeSnapshotRequest, host_agent_client::HostAgentClient,
 };
 
-use crate::scheduler;
+use crate::{scheduler, tls::GrpcTls};
 
-async fn agent_client_for_host(host: &db::HostRow) -> anyhow::Result<HostAgentClient<Channel>> {
-    let channel = Channel::from_shared(host.address.clone())?
-        .connect()
-        .await?;
+async fn agent_client_for_host(host: &db::HostRow, tls: Option<&GrpcTls>) -> anyhow::Result<HostAgentClient<Channel>> {
+    let channel = crate::tls::agent_channel(&host.address, tls).await?;
     Ok(HostAgentClient::new(channel))
 }
 
@@ -29,6 +27,7 @@ pub async fn migrate_vm(
     _caddy: &CaddyRouter,
     vm_id: &str,
     target_host_id: &str,
+    tls: Option<&GrpcTls>,
 ) -> anyhow::Result<()> {
     let vm = db::get_vm(pool, vm_id)
         .await?
@@ -62,7 +61,7 @@ pub async fn migrate_vm(
     )
     .await?;
 
-    let mut src_agent = agent_client_for_host(&src_host).await?;
+    let mut src_agent = agent_client_for_host(&src_host, tls).await?;
 
     // Stop the VM if running.
     if vm.status == "running" {
@@ -96,7 +95,7 @@ pub async fn migrate_vm(
     info!("migration {migration_id}: snapshot {snap_id} taken on {src_host_id}");
 
     // Migrate on target.
-    let mut tgt_agent = agent_client_for_host(&tgt_host).await?;
+    let mut tgt_agent = agent_client_for_host(&tgt_host, tls).await?;
     let resp = tgt_agent
         .migrate_vm(MigrateVmRequest {
             vm_id: vm_id.into(),
@@ -144,17 +143,17 @@ pub async fn migrate_vm(
 
 /// Background drain task: periodically checks for draining hosts and migrates
 /// their VMs to other active hosts.
-pub async fn run_drain_watcher(pool: db::PgPool, caddy: CaddyRouter) {
+pub async fn run_drain_watcher(pool: db::PgPool, caddy: CaddyRouter, tls: Option<GrpcTls>) {
     let mut interval = tokio::time::interval(std::time::Duration::from_secs(30));
     loop {
         interval.tick().await;
-        if let Err(e) = drain_tick(&pool, &caddy).await {
+        if let Err(e) = drain_tick(&pool, &caddy, tls.as_ref()).await {
             error!("drain watcher error: {e}");
         }
     }
 }
 
-async fn drain_tick(pool: &db::PgPool, caddy: &CaddyRouter) -> anyhow::Result<()> {
+async fn drain_tick(pool: &db::PgPool, caddy: &CaddyRouter, tls: Option<&GrpcTls>) -> anyhow::Result<()> {
     let all_hosts = db::list_hosts(pool).await?;
     let draining: Vec<_> = all_hosts
         .iter()
@@ -193,7 +192,7 @@ async fn drain_tick(pool: &db::PgPool, caddy: &CaddyRouter) -> anyhow::Result<()
             };
             match target_result {
                 Ok(target) if target.id != host.id => {
-                    if let Err(e) = migrate_vm(pool, caddy, &vm.id, &target.id).await {
+                    if let Err(e) = migrate_vm(pool, caddy, &vm.id, &target.id, tls).await {
                         error!("drain: failed to migrate vm {}: {e}", vm.id);
                     }
                 }

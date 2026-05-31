@@ -14,7 +14,6 @@ use axum::{
 use prometheus::{CounterVec, Encoder, GaugeVec, HistogramVec, TextEncoder, register_counter_vec, register_gauge_vec, register_histogram_vec};
 use serde::Serialize;
 use tokio::sync::RwLock;
-use tonic::transport::Channel;
 use tracing::warn;
 
 const RING_BUFFER_SIZE: usize = 360; // 1 hour at 10 s intervals
@@ -170,7 +169,7 @@ impl MetricsCache {
 
 // ── poller ────────────────────────────────────────────────────────────────────
 
-pub async fn run_poller(cache: Arc<MetricsCache>, pool: db::PgPool) {
+pub async fn run_poller(cache: Arc<MetricsCache>, pool: db::PgPool, tls: Option<crate::tls::GrpcTls>) {
     let mut interval = tokio::time::interval(POLL_INTERVAL);
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
@@ -204,16 +203,10 @@ pub async fn run_poller(cache: Arc<MetricsCache>, pool: db::PgPool) {
         let mut active_vm_ids = Vec::new();
 
         for host in hosts {
-            let channel = match Channel::from_shared(host.address).and_then(|e| Ok(e)) {
-                Ok(e) => match e.connect().await {
-                    Ok(c) => c,
-                    Err(e) => {
-                        warn!("metrics poller: connect to host {}: {e}", host.id);
-                        continue;
-                    }
-                },
+            let channel = match crate::tls::agent_channel(&host.address, tls.as_ref()).await {
+                Ok(c) => c,
                 Err(e) => {
-                    warn!("metrics poller: invalid host address {}: {e}", host.id);
+                    warn!("metrics poller: connect to host {}: {e}", host.id);
                     continue;
                 }
             };

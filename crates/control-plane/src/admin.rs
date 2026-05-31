@@ -6,7 +6,6 @@ use axum::{
     routing::{delete, get, post},
 };
 use serde::{Deserialize, Serialize};
-use tonic::transport::Channel;
 
 use agent_proto::agent::{
     BuildImageRequest, build_image_event::Stage, host_agent_client::HostAgentClient,
@@ -18,6 +17,7 @@ use crate::{caddy_router::CaddyRouter, migration};
 pub struct AdminState {
     pub pool: db::PgPool,
     pub caddy: CaddyRouter,
+    pub tls: Option<crate::tls::GrpcTls>,
 }
 
 pub fn router(state: AdminState) -> Router {
@@ -166,9 +166,10 @@ async fn migrate_vm(
 ) -> impl IntoResponse {
     let pool = state.pool.clone();
     let caddy = state.caddy.clone();
+    let tls = state.tls.clone();
     let target = body.target_host_id.clone();
     tokio::spawn(async move {
-        if let Err(e) = migration::migrate_vm(&pool, &caddy, &vm_id, &target).await {
+        if let Err(e) = migration::migrate_vm(&pool, &caddy, &vm_id, &target, tls.as_ref()).await {
             tracing::error!("admin migrate {vm_id} → {target}: {e}");
         }
     });
@@ -252,23 +253,15 @@ async fn build_image(
     };
 
     let pool = state.pool.clone();
+    let tls = state.tls.clone();
     let source = body.source.clone();
     let name = body.name.clone();
 
     tokio::spawn(async move {
-        let channel = match Channel::from_shared(host.address.clone())
-            .map_err(|e| anyhow::anyhow!(e))
-        {
-            Ok(ep) => match ep.connect().await {
-                Ok(c) => c,
-                Err(e) => {
-                    tracing::error!("build_image: connect to agent: {e}");
-                    let _ = db::update_image_error(&pool, &image_id, &e.to_string()).await;
-                    return;
-                }
-            },
+        let channel = match crate::tls::agent_channel(&host.address, tls.as_ref()).await {
+            Ok(c) => c,
             Err(e) => {
-                tracing::error!("build_image: bad agent address: {e}");
+                tracing::error!("build_image: connect to agent: {e}");
                 let _ = db::update_image_error(&pool, &image_id, &e.to_string()).await;
                 return;
             }
