@@ -115,8 +115,7 @@ services:
             - spwn
         depends_on:
             - victoriametrics
-
-ssh-gateway:
+    ssh-gateway:
         image: ghcr.io/espeon/spwn-ssh-gateway:latest
         build:
             context: .
