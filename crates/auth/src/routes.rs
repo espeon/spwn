@@ -8,6 +8,7 @@ use axum::{
     response::IntoResponse,
     routing::{delete, get, patch, post, put},
 };
+use tower_governor::{GovernorLayer, governor::GovernorConfigBuilder, key_extractor::SmartIpKeyExtractor};
 use axum_extra::extract::cookie::{Cookie, CookieJar, SameSite};
 use image::{ImageFormat, imageops::FilterType};
 use rand::Rng;
@@ -111,10 +112,24 @@ struct LoginPendingResponse {
 }
 
 pub fn auth_router(state: AuthState) -> Router {
-    Router::new()
-        .route("/api/config", get(server_config))
+    // Login and signup are rate-limited tightly: 1 req / 10s per IP, burst of 5.
+    // SmartIpKeyExtractor reads X-Forwarded-For set by Caddy, falls back to peer IP.
+    let auth_limiter = GovernorLayer::<_, _, axum::body::Body>::new(
+        GovernorConfigBuilder::default()
+            .per_second(10)
+            .burst_size(5)
+            .key_extractor(SmartIpKeyExtractor)
+            .finish()
+            .unwrap(),
+    );
+
+    let rate_limited = Router::new()
         .route("/auth/signup", post(signup))
         .route("/auth/login", post(login))
+        .layer(auth_limiter);
+
+    Router::new()
+        .merge(rate_limited)
         .route("/auth/logout", post(logout))
         .route("/auth/me", get(me))
         .route("/auth/me", patch(update_profile))

@@ -28,6 +28,7 @@ pub fn router(state: AdminState) -> Router {
         .route("/api/admin/vms/{vm_id}/migrate", post(migrate_vm))
         .route("/api/admin/images", get(list_images).post(build_image))
         .route("/api/admin/images/{id}", delete(delete_image))
+        .route("/api/admin/audit", get(list_audit_admin))
         .with_state(state)
 }
 
@@ -348,6 +349,26 @@ async fn delete_image(
     }
     match db::delete_image(&state.pool, &id).await {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+#[derive(Deserialize)]
+struct AuditAdminQuery {
+    #[serde(default = "default_audit_limit")]
+    limit: i64,
+    before: Option<i64>,
+}
+
+fn default_audit_limit() -> i64 { 100 }
+
+async fn list_audit_admin(
+    _admin: auth::AdminId,
+    State(state): State<AdminState>,
+    axum::extract::Query(q): axum::extract::Query<AuditAdminQuery>,
+) -> impl IntoResponse {
+    match db::list_audit_admin(&state.pool, q.limit, q.before).await {
+        Ok(entries) => Json(entries).into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     }
 }

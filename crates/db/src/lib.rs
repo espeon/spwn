@@ -415,6 +415,127 @@ pub async fn log_event(
     Ok(())
 }
 
+// ── audit log ─────────────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct AuditEntry {
+    pub id: i64,
+    pub account_id: String,
+    pub action: String,
+    pub resource: String,
+    pub resource_id: Option<String>,
+    pub detail: Option<serde_json::Value>,
+    pub ip: Option<String>,
+    pub created_at: i64,
+}
+
+pub async fn write_audit(
+    pool: &PgPool,
+    account_id: &str,
+    action: &str,
+    resource: &str,
+    resource_id: Option<&str>,
+    detail: Option<serde_json::Value>,
+    ip: Option<&str>,
+) -> Result<()> {
+    let now = unix_now();
+    sqlx::query(
+        "INSERT INTO audit_log (account_id, action, resource, resource_id, detail, ip, created_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)",
+    )
+    .bind(account_id)
+    .bind(action)
+    .bind(resource)
+    .bind(resource_id)
+    .bind(detail)
+    .bind(ip)
+    .bind(now)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+pub async fn list_audit(
+    pool: &PgPool,
+    account_id: &str,
+    limit: i64,
+    before: Option<i64>,
+) -> Result<Vec<AuditEntry>> {
+    let rows = if let Some(before) = before {
+        sqlx::query(
+            "SELECT id, account_id, action, resource, resource_id, detail, ip, created_at
+             FROM audit_log WHERE account_id = $1 AND id < $2
+             ORDER BY id DESC LIMIT $3",
+        )
+        .bind(account_id)
+        .bind(before)
+        .bind(limit)
+        .fetch_all(pool)
+        .await?
+    } else {
+        sqlx::query(
+            "SELECT id, account_id, action, resource, resource_id, detail, ip, created_at
+             FROM audit_log WHERE account_id = $1
+             ORDER BY id DESC LIMIT $2",
+        )
+        .bind(account_id)
+        .bind(limit)
+        .fetch_all(pool)
+        .await?
+    };
+    Ok(rows
+        .into_iter()
+        .map(|r| AuditEntry {
+            id: r.get("id"),
+            account_id: r.get("account_id"),
+            action: r.get("action"),
+            resource: r.get("resource"),
+            resource_id: r.get("resource_id"),
+            detail: r.get("detail"),
+            ip: r.get("ip"),
+            created_at: r.get("created_at"),
+        })
+        .collect())
+}
+
+pub async fn list_audit_admin(
+    pool: &PgPool,
+    limit: i64,
+    before: Option<i64>,
+) -> Result<Vec<AuditEntry>> {
+    let rows = if let Some(before) = before {
+        sqlx::query(
+            "SELECT id, account_id, action, resource, resource_id, detail, ip, created_at
+             FROM audit_log WHERE id < $1 ORDER BY id DESC LIMIT $2",
+        )
+        .bind(before)
+        .bind(limit)
+        .fetch_all(pool)
+        .await?
+    } else {
+        sqlx::query(
+            "SELECT id, account_id, action, resource, resource_id, detail, ip, created_at
+             FROM audit_log ORDER BY id DESC LIMIT $1",
+        )
+        .bind(limit)
+        .fetch_all(pool)
+        .await?
+    };
+    Ok(rows
+        .into_iter()
+        .map(|r| AuditEntry {
+            id: r.get("id"),
+            account_id: r.get("account_id"),
+            action: r.get("action"),
+            resource: r.get("resource"),
+            resource_id: r.get("resource_id"),
+            detail: r.get("detail"),
+            ip: r.get("ip"),
+            created_at: r.get("created_at"),
+        })
+        .collect())
+}
+
 fn row_to_vm(r: sqlx::postgres::PgRow) -> VmRow {
     VmRow {
         id: r.get("id"),

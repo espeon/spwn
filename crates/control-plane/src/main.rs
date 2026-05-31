@@ -129,16 +129,19 @@ async fn main() -> anyhow::Result<()> {
         event_watcher.watch_host(host.id, host.address).await;
     }
 
+    let grpc_svc = registration::ControlPlaneService {
+        pool: pool.clone(),
+        event_watcher,
+        caddy: caddy.clone(),
+        base_domain: base_domain.clone(),
+        running_cache: std::sync::Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new())),
+    };
+
     let ops = Arc::new(ops::ControlPlaneOps {
         pool: pool.clone(),
         caddy: caddy.clone(),
         base_domain,
     });
-
-    let grpc_svc = registration::ControlPlaneService {
-        pool: pool.clone(),
-        event_watcher,
-    };
 
     let auth_state = auth::routes::AuthState::new(
         pool.clone(),
@@ -201,6 +204,7 @@ async fn main() -> anyhow::Result<()> {
             },
         ))
         .layer(Extension(metrics_cache))
+        .layer(Extension(pool.clone()))
         .route("/", get({
             let frontend_path = frontend_path.clone();
             move || {
@@ -232,11 +236,25 @@ async fn main() -> anyhow::Result<()> {
         grpc_listen_addr.parse().context("parse GRPC_LISTEN_ADDR")?;
     info!("control-plane gRPC listening on {grpc_listen_addr}");
 
+    let shutdown = async {
+        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+            .expect("install SIGTERM handler")
+            .recv()
+            .await;
+        info!("received SIGTERM, draining connections");
+    };
+
     tokio::select! {
-        result = axum::serve(http_listener, http_app) => { result?; }
+        result = axum::serve(http_listener, http_app)
+            .with_graceful_shutdown(shutdown) => { result?; }
         result = tonic::transport::Server::builder()
             .add_service(ControlPlaneServer::new(grpc_svc))
-            .serve(grpc_listen) => { result?; }
+            .serve_with_shutdown(grpc_listen, async {
+                tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+                    .expect("install SIGTERM handler for gRPC")
+                    .recv()
+                    .await;
+            }) => { result?; }
         _ = tokio::signal::ctrl_c() => {
             info!("received ctrl-c, shutting down");
         }

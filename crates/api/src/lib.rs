@@ -8,6 +8,7 @@ use axum::{
     routing::{delete, get, post},
 };
 use serde::{Deserialize, Serialize};
+use tower_governor::{GovernorLayer, governor::GovernorConfigBuilder, key_extractor::SmartIpKeyExtractor};
 
 use auth::AccountId;
 
@@ -249,8 +250,23 @@ impl From<db::VmEventRow> for VmEventResponse {
 type AppState = Arc<dyn VmOps>;
 
 pub fn router(ops: Arc<dyn VmOps>) -> Router {
+    // VM create: 1 per 5s per IP, burst of 10 — prevents quota-abuse spam.
+    let vm_create_limiter = GovernorLayer::<_, _, axum::body::Body>::new(
+        GovernorConfigBuilder::default()
+            .per_second(5)
+            .burst_size(10)
+            .key_extractor(SmartIpKeyExtractor)
+            .finish()
+            .unwrap(),
+    );
+
+    let vm_create_route = Router::new()
+        .route("/api/vms", post(create_vm))
+        .layer(vm_create_limiter);
+
     Router::new()
-        .route("/api/vms", get(list_vms).post(create_vm))
+        .merge(vm_create_route)
+        .route("/api/vms", get(list_vms))
         .route(
             "/api/vms/{id}",
             get(get_vm).delete(delete_vm).patch(patch_vm),
@@ -265,6 +281,7 @@ pub fn router(ops: Arc<dyn VmOps>) -> Router {
         .route("/api/vms/{id}/restore/{snap_id}", post(restore_snapshot))
         .route("/api/vms/{id}/events", get(list_vm_events))
         .route("/api/account/username", post(change_username))
+        .route("/api/account/audit", get(list_audit))
         .route("/api/images", get(list_images))
         .route("/api/regions", get(list_regions))
         .route("/healthz", get(|| async { "ok" }))
@@ -427,11 +444,19 @@ async fn get_vm(
 
 async fn delete_vm(
     State(ops): State<AppState>,
-    _account_id: AccountId,
+    account_id: AccountId,
+    Extension(pool): Extension<db::PgPool>,
+    headers: axum::http::HeaderMap,
     Path(id): Path<String>,
 ) -> impl IntoResponse {
     match ops.delete_vm(&id).await {
-        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Ok(()) => {
+            let ip = real_ip(&headers);
+            tokio::spawn(async move {
+                let _ = db::write_audit(&pool, &account_id.0, "delete", "vm", Some(&id), None, ip.as_deref()).await;
+            });
+            StatusCode::NO_CONTENT.into_response()
+        }
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     }
 }
@@ -451,10 +476,14 @@ async fn start_vm(
 
 async fn stop_vm(
     State(ops): State<AppState>,
-    _account_id: AccountId,
+    account_id: AccountId,
+    Extension(pool): Extension<db::PgPool>,
+    headers: axum::http::HeaderMap,
     Path(id): Path<String>,
 ) -> impl IntoResponse {
+    let ip = real_ip(&headers);
     tokio::spawn(async move {
+        let _ = db::write_audit(&pool, &account_id.0, "stop", "vm", Some(&id), None, ip.as_deref()).await;
         if let Err(e) = ops.stop_vm(&id).await {
             tracing::error!("stop_vm {id} failed: {e:#}");
         }
@@ -494,26 +523,70 @@ async fn list_snapshots(
 
 async fn delete_snapshot(
     State(ops): State<AppState>,
-    _account_id: AccountId,
+    account_id: AccountId,
+    Extension(pool): Extension<db::PgPool>,
+    headers: axum::http::HeaderMap,
     Path((id, snap_id)): Path<(String, String)>,
 ) -> impl IntoResponse {
     match ops.delete_snapshot(&id, &snap_id).await {
-        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Ok(()) => {
+            let ip = real_ip(&headers);
+            tokio::spawn(async move {
+                let detail = serde_json::json!({ "snap_id": snap_id });
+                let _ = db::write_audit(&pool, &account_id.0, "delete", "snapshot", Some(&id), Some(detail), ip.as_deref()).await;
+            });
+            StatusCode::NO_CONTENT.into_response()
+        }
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     }
 }
 
 async fn restore_snapshot(
     State(ops): State<AppState>,
-    _account_id: AccountId,
+    account_id: AccountId,
+    Extension(pool): Extension<db::PgPool>,
+    headers: axum::http::HeaderMap,
     Path((id, snap_id)): Path<(String, String)>,
 ) -> impl IntoResponse {
+    let ip = real_ip(&headers);
     tokio::spawn(async move {
+        let detail = serde_json::json!({ "snap_id": snap_id });
+        let _ = db::write_audit(&pool, &account_id.0, "restore", "snapshot", Some(&id), Some(detail), ip.as_deref()).await;
         if let Err(e) = ops.restore_snapshot(&id, &snap_id).await {
             tracing::error!("restore_snapshot {id}/{snap_id} failed: {e:#}");
         }
     });
     StatusCode::ACCEPTED
+}
+
+fn real_ip(headers: &axum::http::HeaderMap) -> Option<String> {
+    headers
+        .get("x-forwarded-for")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.split(',').next())
+        .map(|s| s.trim().to_string())
+}
+
+// ── audit log ─────────────────────────────────────────────────────────────────
+
+#[derive(Debug, Deserialize)]
+struct AuditQuery {
+    #[serde(default = "default_audit_limit")]
+    limit: i64,
+    before: Option<i64>,
+}
+
+fn default_audit_limit() -> i64 { 50 }
+
+async fn list_audit(
+    account_id: AccountId,
+    Extension(pool): Extension<db::PgPool>,
+    axum::extract::Query(q): axum::extract::Query<AuditQuery>,
+) -> impl IntoResponse {
+    match db::list_audit(&pool, &account_id.0, q.limit, q.before).await {
+        Ok(entries) => Json(entries).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
 }
 
 #[derive(Debug, Deserialize)]

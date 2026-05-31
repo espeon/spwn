@@ -81,6 +81,27 @@ pub async fn reconcile_once(manager: &VmManager) -> anyhow::Result<()> {
         }
     }
 
+    // Recover VMs the DB thinks are stopped but actually have a live process.
+    // This happens when the event stream drops during a VM start — the "started"
+    // event is lost, so the control-plane never updates the status or Caddy route.
+    for vm in db_vms.iter().filter(|v| v.status == "stopped" || v.status == "error") {
+        if let Some(pid) = read_pid_from_cgroup(&vm.id) {
+            if pid_is_alive(pid as u32) {
+                warn!(
+                    "vm {} is '{}' in DB but has live process (pid={pid}), recovering",
+                    vm.id, vm.status
+                );
+                db::set_vm_pid(&manager.pool, &vm.id, pid).await.ok();
+                let _ = manager.events.send(crate::manager::VmEvent::Started {
+                    vm_id: vm.id.clone(),
+                });
+                db::log_event(&manager.pool, &vm.id, "reconcile_running_recovery", None)
+                    .await
+                    .ok();
+            }
+        }
+    }
+
     if let Ok(tap_names) = manager.networking.list_tap_devices() {
         let tracked_taps: std::collections::HashSet<_> = db_vms
             .iter()

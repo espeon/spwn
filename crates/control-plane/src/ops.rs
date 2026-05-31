@@ -215,8 +215,8 @@ impl api::VmOps for ControlPlaneOps {
         }
         let fqdn = format!("{}.{}", vm.subdomain, self.base_domain);
         let caddy = self.caddy_for_vm(&vm).await;
-        if let Err(e) = caddy.set_stopped_route(&fqdn).await {
-            error!("failed to update caddy route for deleted {id}: {e}");
+        if let Err(e) = caddy.delete_route(&fqdn).await {
+            error!("failed to remove caddy route for deleted {id}: {e}");
         }
         Ok(())
     }
