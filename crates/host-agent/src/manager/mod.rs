@@ -4,6 +4,7 @@ pub(crate) mod util;
 
 pub use util::read_fc_log_tail;
 
+use std::collections::HashSet;
 use std::{collections::HashMap, path::PathBuf, time::Duration};
 
 use anyhow::{Context, anyhow};
@@ -58,6 +59,7 @@ pub struct VmManager {
     pub jailer_gid: u32,
     pub chroot_base_dir: PathBuf,
     pub(crate) running: Mutex<HashMap<String, RunningVm>>,
+    pub monitored_vm_ids: Mutex<HashSet<String>>,
     pub events: broadcast::Sender<VmEvent>,
     pub metrics: std::sync::Arc<crate::metrics::MetricsStore>,
 }
@@ -91,6 +93,7 @@ impl VmManager {
             jailer_gid,
             chroot_base_dir,
             running: Mutex::new(HashMap::new()),
+            monitored_vm_ids: Mutex::new(HashSet::new()),
             events,
             metrics: crate::metrics::MetricsStore::new(),
         }
@@ -348,6 +351,7 @@ impl VmManager {
         db::log_event(&self.pool, &vm_id, "started", None).await?;
 
         self.running.lock().await.insert(vm_id.clone(), fc_vm);
+        self.monitored_vm_ids.lock().await.insert(vm_id.clone());
         info!(
             "vm {vm_id} started (pid={pid}, tap={}, guest={})",
             tap.name, tap.guest_ip
@@ -434,6 +438,7 @@ impl VmManager {
             }
         }
         drop(running);
+        self.monitored_vm_ids.lock().await.remove(vm_id);
 
         if let Ok(slot) = ip_to_slot(&vm.ip_address) {
             self.networking.release_tap(slot).ok();
@@ -461,6 +466,7 @@ impl VmManager {
             tokio::fs::remove_file(&snap.mem_path).await.ok();
         }
         db::delete_vm(&self.pool, vm_id).await?;
+        self.monitored_vm_ids.lock().await.remove(vm_id);
         if let Some(ref path) = vm.overlay_path {
             overlay::remove_overlay(std::path::Path::new(path));
         }

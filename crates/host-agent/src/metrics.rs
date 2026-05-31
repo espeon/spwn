@@ -100,10 +100,10 @@ pub async fn run_collector(
     loop {
         interval.tick().await;
 
-        // Collect running VM IDs under a brief lock.
+        // Collect monitored VM IDs under a brief lock.
         let running_ids: Vec<String> = {
-            let running = manager.running.lock().await;
-            running.keys().cloned().collect()
+            let monitored = manager.monitored_vm_ids.lock().await;
+            monitored.iter().cloned().collect()
         };
 
         if running_ids.is_empty() {

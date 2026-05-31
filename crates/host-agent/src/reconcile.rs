@@ -81,6 +81,18 @@ pub async fn reconcile_once(manager: &VmManager) -> anyhow::Result<()> {
         }
     }
 
+    // Rebuild monitored_vm_ids so the metrics collector can find running VMs
+    // even after a host-agent restart (the in-process `running` HashMap is not
+    // persisted, but cgroup PIDs survive).
+    let alive_ids: std::collections::HashSet<String> = db_vms
+        .iter()
+        .filter(|v| v.status == "running")
+        .filter_map(|v| v.pid.map(|pid| (v.id.clone(), pid)))
+        .filter(|(_, pid)| pid_is_alive(*pid as u32))
+        .map(|(id, _)| id)
+        .collect();
+    *manager.monitored_vm_ids.lock().await = alive_ids;
+
     // Recover VMs the DB thinks are stopped but actually have a live process.
     // This happens when the event stream drops during a VM start — the "started"
     // event is lost, so the control-plane never updates the status or Caddy route.
