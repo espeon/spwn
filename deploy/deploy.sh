@@ -27,10 +27,10 @@ if ! id spwn-vm &>/dev/null; then
 fi
 
 echo "==> pulling latest images"
-docker compose -f "$COMPOSE_FILE" pull caddy control-plane ssh-gateway
+docker compose -f "$COMPOSE_FILE" pull caddy control-plane ssh-gateway grafana victoriametrics node-exporter
 
 echo "==> restarting compose services"
-docker compose -f "$COMPOSE_FILE" up -d caddy control-plane ssh-gateway
+docker compose -f "$COMPOSE_FILE" up -d caddy control-plane ssh-gateway grafana victoriametrics node-exporter
 
 echo "==> deploying host-agent"
 gh run download \
