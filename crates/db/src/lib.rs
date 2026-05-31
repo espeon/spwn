@@ -1279,15 +1279,19 @@ pub async fn update_vm_resources(
     vm_id: &str,
     vcpus: i64,
     memory_mb: i32,
+    disk_mb: i32,
     bandwidth_mbps: i32,
 ) -> Result<()> {
-    sqlx::query("UPDATE vms SET vcpus = $1, memory_mb = $2, bandwidth_mbps = $3 WHERE id = $4")
-        .bind(vcpus)
-        .bind(memory_mb)
-        .bind(bandwidth_mbps)
-        .bind(vm_id)
-        .execute(pool)
-        .await?;
+    sqlx::query(
+        "UPDATE vms SET vcpus = $1, memory_mb = $2, disk_mb = $3, bandwidth_mbps = $4 WHERE id = $5",
+    )
+    .bind(vcpus)
+    .bind(memory_mb)
+    .bind(disk_mb)
+    .bind(bandwidth_mbps)
+    .bind(vm_id)
+    .execute(pool)
+    .await?;
     Ok(())
 }
 

@@ -67,7 +67,56 @@ services:
         networks:
             - spwn
 
-    ssh-gateway:
+    victoriametrics:
+        image: docker.io/victoriametrics/victoria-metrics:v1.115.0
+        restart: unless-stopped
+        command:
+            - "-storageDataPath=/storage"
+            - "-retentionPeriod=180d"
+            - "-promscrape.config=/etc/victoriametrics/scrape.yml"
+            - "-httpListenAddr=0.0.0.0:8428"
+        volumes:
+            - victoriametrics_data:/storage
+            - ./config/victoriametrics.yml:/etc/victoriametrics/scrape.yml:ro
+        ports:
+            - "127.0.0.1:8428:8428"
+        networks:
+            - spwn
+        depends_on:
+            - control-plane
+
+    node-exporter:
+        image: docker.io/prom/node-exporter:v1.9.1
+        restart: unless-stopped
+        command:
+            - "--path.rootfs=/host"
+            - "--collector.filesystem.mount-points-exclude=^/(dev|proc|sys|run|var/lib/docker|var/lib/containers)($|/)"
+        network_mode: host
+        pid: host
+        volumes:
+            - /:/host:ro,rslave
+
+    grafana:
+        image: docker.io/grafana/grafana:11.6.1
+        restart: unless-stopped
+        environment:
+            GF_SERVER_ROOT_URL: https://grafana.${DOMAIN}
+            GF_SERVER_DOMAIN: grafana.${DOMAIN}
+            GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+            GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?GRAFANA_ADMIN_PASSWORD required}
+            GF_USERS_ALLOW_SIGN_UP: "false"
+            GF_AUTH_ANONYMOUS_ENABLED: "false"
+        volumes:
+            - grafana_data:/var/lib/grafana
+            - ./config/grafana/provisioning:/etc/grafana/provisioning:ro
+        ports:
+            - "127.0.0.1:3000:3000"
+        networks:
+            - spwn
+        depends_on:
+            - victoriametrics
+
+ssh-gateway:
         image: ghcr.io/espeon/spwn-ssh-gateway:latest
         build:
             context: .
@@ -93,6 +142,8 @@ volumes:
     caddy_config:
     spwn_static:
     spwn_state:
+    victoriametrics_data:
+    grafana_data:
 
 networks:
     spwn:

@@ -19,6 +19,7 @@ use tracing::info;
 mod agent;
 mod health;
 mod manager;
+mod metrics;
 mod overlay;
 mod reconcile;
 
@@ -239,6 +240,7 @@ async fn main() -> anyhow::Result<()> {
 
     tokio::spawn(reconcile::run_reconciliation(manager.clone()));
     tokio::spawn(health::run_health_checks(manager.clone()));
+    tokio::spawn(metrics::run_collector(manager.metrics.clone(), manager.clone()));
 
     // Snapshot HTTP server — serves overlay files to peer agents for migration.
     let snap_state = SnapshotServerState {

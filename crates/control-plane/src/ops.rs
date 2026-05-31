@@ -44,6 +44,8 @@ impl ControlPlaneOps {
     }
 }
 
+const MIN_VCPUS: i64 = 250;
+
 #[async_trait]
 impl api::VmOps for ControlPlaneOps {
     async fn create_vm(
@@ -51,6 +53,12 @@ impl api::VmOps for ControlPlaneOps {
         account_id: String,
         req: api::CreateVmRequest,
     ) -> anyhow::Result<db::VmRow> {
+        if req.vcpus < MIN_VCPUS {
+            return Err(anyhow!(
+                "vcpus must be at least {MIN_VCPUS} millicores (0.25 vCPU)"
+            ));
+        }
+
         let (image_name, image_tag) = match req.image.split_once(':') {
             Some((n, t)) => (n, t),
             None => (req.image.as_str(), "latest"),
@@ -352,11 +360,29 @@ impl api::VmOps for ControlPlaneOps {
             .into());
         }
 
+        if patch.disk_mb.is_some_and(|d| d != vm.disk_mb) && vm.status == "running" {
+            return Err(VmOpsError::RestartRequired(
+                "disk changes cannot be applied to a running vm".into(),
+            )
+            .into());
+        }
+
+        if patch.disk_mb.is_some_and(|d| d < vm.disk_mb) {
+            return Err(anyhow!("disk cannot be shrunk (current: {} MB)", vm.disk_mb));
+        }
+
+        if patch.vcpus.is_some_and(|v| v < MIN_VCPUS) {
+            return Err(anyhow!(
+                "vcpus must be at least {MIN_VCPUS} millicores (0.25 vCPU)"
+            ));
+        }
+
         let new_vcpus = patch.vcpus.unwrap_or(vm.vcpus);
         let new_memory = patch.memory_mb.unwrap_or(vm.memory_mb);
+        let new_disk = patch.disk_mb.unwrap_or(vm.disk_mb);
         let new_bandwidth = patch.bandwidth_mbps.unwrap_or(vm.bandwidth_mbps);
 
-        db::update_vm_resources(&self.pool, vm_id, new_vcpus, new_memory, new_bandwidth).await?;
+        db::update_vm_resources(&self.pool, vm_id, new_vcpus, new_memory, new_disk, new_bandwidth).await?;
 
         let resize_cpu = vm.status == "running" && patch.vcpus.is_some_and(|v| v != vm.vcpus);
         let resize_bw =

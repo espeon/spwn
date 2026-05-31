@@ -72,6 +72,7 @@ pub struct VmPatch {
 pub struct VmResourcePatch {
     pub vcpus: Option<i64>,
     pub memory_mb: Option<i32>,
+    pub disk_mb: Option<i32>,
     pub bandwidth_mbps: Option<i32>,
 }
 
@@ -147,6 +148,7 @@ pub struct VmPatchRequest {
 pub struct VmResourcePatchRequest {
     pub vcpus: Option<i64>,
     pub memory_mb: Option<i32>,
+    pub disk_mb: Option<i32>,
     pub bandwidth_mbps: Option<i32>,
 }
 
@@ -594,6 +596,7 @@ async fn resize_resources(
     let p = VmResourcePatch {
         vcpus: body.vcpus,
         memory_mb: body.memory_mb,
+        disk_mb: body.disk_mb,
         bandwidth_mbps: body.bandwidth_mbps,
     };
     match ops.resize_resources(&id, &account_id.0, p).await {

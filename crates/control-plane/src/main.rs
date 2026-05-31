@@ -5,7 +5,7 @@ use crate::caddy_router::CaddyRouter;
 use agent_proto::agent::control_plane_server::ControlPlaneServer;
 use anyhow::Context;
 use axum::response::sse::{Event, KeepAlive, Sse};
-use axum::{response::Html, Extension, routing::get};
+use axum::{extract::MatchedPath, middleware, response::Html, Extension, routing::get};
 use router_sync::CaddyClient;
 use tokio_stream::{StreamExt, wrappers::BroadcastStream};
 use tower_http::services::{ServeDir, ServeFile};
@@ -14,6 +14,7 @@ use tracing::info;
 mod admin;
 mod caddy_router;
 mod events;
+mod metrics;
 mod migration;
 mod ops;
 mod registration;
@@ -156,6 +157,9 @@ async fn main() -> anyhow::Result<()> {
 
     tokio::spawn(migration::run_drain_watcher(pool.clone(), caddy.clone()));
 
+    let metrics_cache = metrics::MetricsCache::new();
+    tokio::spawn(metrics::run_poller(metrics_cache.clone(), pool.clone()));
+
     let cors = {
         use http::header::{AUTHORIZATION, CONTENT_TYPE};
         use tower_http::cors::{AllowOrigin, CorsLayer};
@@ -184,6 +188,19 @@ async fn main() -> anyhow::Result<()> {
         .merge(api::router(ops as Arc<dyn api::VmOps>))
         .merge(admin::router(admin_state))
         .route("/api/events", get(vm_events_sse))
+        .route("/metrics", get(metrics::prometheus_handler))
+        .route("/api/vms/:id/metrics", get(metrics::vm_metrics_handler))
+        .layer(middleware::from_fn_with_state(
+            (),
+            |axum::extract::State(()): axum::extract::State<()>,
+             Extension(cache): Extension<Arc<metrics::MetricsCache>>,
+             matched_path: Option<MatchedPath>,
+             req: axum::extract::Request,
+             next: middleware::Next| async move {
+                metrics::track_requests(Extension(cache), matched_path, req, next).await
+            },
+        ))
+        .layer(Extension(metrics_cache))
         .route("/", get({
             let frontend_path = frontend_path.clone();
             move || {

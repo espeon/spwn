@@ -15,11 +15,11 @@ use tonic::{Request, Response, Status, Streaming};
 use agent_proto::agent::{
     AgentEvent, BuildImageEvent, BuildImageRequest, CloneVmRequest, CloneVmResponse, ConsoleInput,
     ConsoleOutput, CreateVmRequest, CreateVmResponse, DeleteSnapshotRequest, DeleteSnapshotResponse,
-    DeleteVmRequest, DeleteVmResponse, MigrateVmRequest, MigrateVmResponse,
+    DeleteVmRequest, DeleteVmResponse, GetVmMetricsRequest, MigrateVmRequest, MigrateVmResponse,
     ResizeBandwidthRequest, ResizeBandwidthResponse, ResizeCpuRequest, ResizeCpuResponse,
     RestoreRequest, RestoreResponse, StartVmRequest, StartVmResponse, StopVmRequest,
-    StopVmResponse, TakeSnapshotRequest, TakeSnapshotResponse, WatchRequest,
-    build_image_event::Stage, host_agent_server::HostAgent,
+    StopVmResponse, TakeSnapshotRequest, TakeSnapshotResponse, VmMetricsResponse, VmMetricsSample,
+    WatchRequest, build_image_event::Stage, host_agent_server::HostAgent,
 };
 
 use crate::manager::{VmEvent, VmManager};
@@ -1213,5 +1213,36 @@ impl HostAgent for HostAgentService {
         });
 
         Ok(Response::new(Box::pin(out_stream)))
+    }
+
+    async fn get_vm_metrics(
+        &self,
+        req: Request<GetVmMetricsRequest>,
+    ) -> Result<Response<VmMetricsResponse>, Status> {
+        let r = req.into_inner();
+        let limit = r.limit as usize;
+
+        let raw_samples = if r.vm_id.is_empty() {
+            self.manager.metrics.get_latest_all().await
+        } else {
+            self.manager.metrics.get_samples(&r.vm_id, limit).await
+        };
+
+        let samples = raw_samples
+            .into_iter()
+            .map(|s| VmMetricsSample {
+                vm_id: s.vm_id,
+                timestamp: s.timestamp,
+                cpu_percent: s.cpu_percent,
+                memory_bytes: s.memory_bytes,
+                memory_limit_bytes: s.memory_limit_bytes,
+                disk_read_bytes: s.disk_read_bytes,
+                disk_write_bytes: s.disk_write_bytes,
+                net_rx_bytes: s.net_rx_bytes,
+                net_tx_bytes: s.net_tx_bytes,
+            })
+            .collect();
+
+        Ok(Response::new(VmMetricsResponse { samples }))
     }
 }

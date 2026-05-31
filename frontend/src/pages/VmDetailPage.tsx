@@ -15,9 +15,11 @@ import {
   deleteSnapshot,
   restoreSnapshot,
   listVmEvents,
+  getVmMetrics,
   ApiError,
   type VmEvent,
 } from "@/api";
+import { Sparkline } from "@/components/Sparkline";
 import { StatusBadge } from "@/components/StatusBadge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -42,6 +44,9 @@ export function VmDetailPage() {
   const [cloneMemory, setCloneMemory] = useState(false);
   const [resizeOpen, setResizeOpen] = useState(false);
   const [resizeVcpus, setResizeVcpus] = useState("");
+  const [resizeMemory, setResizeMemory] = useState("");
+  const [resizeDisk, setResizeDisk] = useState("");
+  const [resizeBandwidth, setResizeBandwidth] = useState("");
 
   const {
     data: vm,
@@ -55,6 +60,13 @@ export function VmDetailPage() {
   const { data: snapshots, isLoading: snapshotsLoading } = useQuery({
     queryKey: ["snapshots", vmId],
     queryFn: () => listSnapshots(vmId),
+  });
+
+  const { data: metrics = [] } = useQuery({
+    queryKey: ["metrics", vmId],
+    queryFn: () => getVmMetrics(vmId, 60),
+    refetchInterval: 5_000,
+    enabled: vm?.status === "running",
   });
 
   const invalidate = () => {
@@ -114,10 +126,11 @@ export function VmDetailPage() {
 
   const resizeMutation = useMutation({
     mutationFn: () => {
-      const vcpus = resizeVcpus
-        ? Math.round(parseFloat(resizeVcpus) * 1000)
-        : undefined;
-      return resizeVmResources(vmId, vcpus, undefined);
+      const vcpus = resizeVcpus ? Math.round(parseFloat(resizeVcpus) * 1000) : undefined;
+      const memory_mb = resizeMemory ? parseInt(resizeMemory) : undefined;
+      const disk_mb = resizeDisk ? parseInt(resizeDisk) : undefined;
+      const bandwidth_mbps = resizeBandwidth ? parseInt(resizeBandwidth) : undefined;
+      return resizeVmResources(vmId, vcpus, memory_mb, disk_mb, bandwidth_mbps);
     },
     onSuccess: () => {
       invalidate();
@@ -186,8 +199,11 @@ export function VmDetailPage() {
   }
 
   function openResize() {
-    if (!vm) return console.error("VM not found");
+    if (!vm) return;
     setResizeVcpus(String(vm.vcpus / 1000));
+    setResizeMemory(String(vm.memory_mb));
+    setResizeDisk(String(vm.disk_mb));
+    setResizeBandwidth(String(vm.bandwidth_mbps));
     setResizeOpen(true);
   }
 
@@ -255,8 +271,8 @@ export function VmDetailPage() {
             <DialogTitle>resize {vm.name}</DialogTitle>
             <DialogDescription>
               {vm.status === "running"
-                ? "cpu changes apply immediately. memory changes require a restart."
-                : "changes take effect on next start."}
+                ? "cpu and bandwidth apply immediately. memory and disk require a restart."
+                : "all changes take effect on next start."}
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4 py-2">
@@ -265,16 +281,56 @@ export function VmDetailPage() {
               <Input
                 id="resize-vcpus"
                 type="number"
-                min="0.1"
-                step="0.1"
+                min="0.25"
+                step="0.25"
                 value={resizeVcpus}
                 onChange={(e) => setResizeVcpus(e.target.value)}
                 placeholder="1"
                 autoFocus
               />
               <p className="text-xs text-muted-foreground">
-                e.g. 0.5, 1, 2 — fractional vCPUs allowed
+                minimum 0.25 — fractional vCPUs allowed
               </p>
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="resize-memory">memory (mb)</Label>
+              <Input
+                id="resize-memory"
+                type="number"
+                min="256"
+                step="256"
+                value={resizeMemory}
+                onChange={(e) => setResizeMemory(e.target.value)}
+                placeholder="512"
+              />
+              <p className="text-xs text-muted-foreground">requires restart</p>
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="resize-disk">disk (mb)</Label>
+              <Input
+                id="resize-disk"
+                type="number"
+                min={vm.disk_mb}
+                step="1024"
+                value={resizeDisk}
+                onChange={(e) => setResizeDisk(e.target.value)}
+                placeholder={String(vm.disk_mb)}
+              />
+              <p className="text-xs text-muted-foreground">
+                can only grow — resize applies on next start
+              </p>
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="resize-bandwidth">bandwidth (mbps)</Label>
+              <Input
+                id="resize-bandwidth"
+                type="number"
+                min="1"
+                step="10"
+                value={resizeBandwidth}
+                onChange={(e) => setResizeBandwidth(e.target.value)}
+                placeholder="100"
+              />
             </div>
           </div>
           <DialogFooter>
@@ -287,9 +343,9 @@ export function VmDetailPage() {
             </Button>
             <Button
               onClick={() => resizeMutation.mutate()}
-              disabled={!resizeVcpus || resizeMutation.isPending}
+              disabled={resizeMutation.isPending}
             >
-              {resizeMutation.isPending ? "resizing..." : "apply"}
+              {resizeMutation.isPending ? "applying..." : "apply"}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -319,7 +375,7 @@ export function VmDetailPage() {
         </Button>
       </div>
 
-      <div className="grid grid-cols-2 gap-3 mb-6 sm:grid-cols-4">
+      <div className="grid grid-cols-2 gap-3 mb-4 sm:grid-cols-4">
         {(
           [
             ["vcpus", vm.vcpus / 1000],
@@ -336,6 +392,35 @@ export function VmDetailPage() {
           </Card>
         ))}
       </div>
+
+      {metrics.length > 0 && (
+        <div className="grid grid-cols-2 gap-3 mb-6">
+          <Card>
+            <CardContent className="px-4 py-3">
+              <Sparkline
+                label="cpu"
+                values={metrics.map((m) => m.cpu_percent)}
+                current={`${metrics[metrics.length - 1].cpu_percent.toFixed(1)}%`}
+                color="hsl(var(--primary))"
+              />
+            </CardContent>
+          </Card>
+          <Card>
+            <CardContent className="px-4 py-3">
+              <Sparkline
+                label="memory"
+                values={metrics.map((m) =>
+                  m.memory_limit_bytes > 0
+                    ? (m.memory_bytes / m.memory_limit_bytes) * 100
+                    : 0
+                )}
+                current={formatBytes(metrics[metrics.length - 1].memory_bytes)}
+                color="hsl(var(--primary))"
+              />
+            </CardContent>
+          </Card>
+        </div>
+      )}
 
       <Dialog open={confirmDelete} onOpenChange={setConfirmDelete}>
         <DialogContent>
@@ -481,6 +566,13 @@ export function VmDetailPage() {
       </div>
     </>
   );
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes === 0) return "0 b";
+  const units = ["b", "kb", "mb", "gb"];
+  const i = Math.floor(Math.log(bytes) / Math.log(1024));
+  return `${(bytes / Math.pow(1024, i)).toFixed(1)} ${units[i]}`;
 }
 
 function eventColor(event: string): string {

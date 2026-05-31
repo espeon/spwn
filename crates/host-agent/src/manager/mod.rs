@@ -59,6 +59,7 @@ pub struct VmManager {
     pub chroot_base_dir: PathBuf,
     pub(crate) running: Mutex<HashMap<String, RunningVm>>,
     pub events: broadcast::Sender<VmEvent>,
+    pub metrics: std::sync::Arc<crate::metrics::MetricsStore>,
 }
 
 impl VmManager {
@@ -91,6 +92,7 @@ impl VmManager {
             chroot_base_dir,
             running: Mutex::new(HashMap::new()),
             events,
+            metrics: crate::metrics::MetricsStore::new(),
         }
     }
 
@@ -195,6 +197,9 @@ impl VmManager {
         if !overlay_p.exists() {
             overlay::provision_overlay(overlay_p, vm.disk_mb as u64)
                 .with_context(|| format!("provision overlay for vm {vm_id}"))?;
+        } else {
+            overlay::resize_overlay(overlay_p, vm.disk_mb as u64)
+                .with_context(|| format!("resize overlay for vm {vm_id}"))?;
         }
 
         let slot = ip_to_slot(&vm.ip_address)?;
@@ -381,11 +386,27 @@ impl VmManager {
 
         let mut running = self.running.lock().await;
         if let Some(mut fc_vm) = running.remove(vm_id) {
+            // Throttled VMs get a temporary CPU boost during shutdown so they
+            // can flush dirty pages and run systemd cleanup at full speed.
+            // Only applied below 1 vcore — no point touching unthrottled VMs.
+            if vm.vcpus < 1000 {
+                let cgroup_cpu = format!("/sys/fs/cgroup/firecracker/{vm_id}/cpu.max");
+                let _ = std::fs::write(&cgroup_cpu, cpu_max(1000));
+            }
+
+            // Scale the graceful-shutdown window by original CPU allocation so
+            // the caller's timeout still reflects the VM's normal pace.
+            // Formula: max(8s, 8s * 1000 / vcpus), capped at 60s.
+            let graceful_secs = if vm.vcpus > 0 {
+                (8 * 1000 / vm.vcpus).clamp(8, 60) as u64
+            } else {
+                60
+            };
             let _ = fc_vm
                 .shutdown([
                     VmShutdownAction {
                         method: VmShutdownMethod::CtrlAltDel,
-                        timeout: Some(Duration::from_secs(8)),
+                        timeout: Some(Duration::from_secs(graceful_secs)),
                         graceful: true,
                     },
                     VmShutdownAction {

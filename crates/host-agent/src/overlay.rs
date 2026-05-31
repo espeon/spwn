@@ -57,6 +57,43 @@ pub fn provision_overlay(path: &Path, size_mb: u64) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Grows an existing ext4 overlay to `new_size_mb`. Runs e2fsck then resize2fs.
+/// No-ops if the file is already at least `new_size_mb`.
+pub fn resize_overlay(path: &Path, new_size_mb: u64) -> anyhow::Result<()> {
+    let current_bytes = std::fs::metadata(path)
+        .map(|m| m.len())
+        .unwrap_or(0);
+    let new_bytes = new_size_mb * 1024 * 1024;
+
+    if current_bytes >= new_bytes {
+        return Ok(());
+    }
+
+    // Extend the file to the new size.
+    let status = Command::new("fallocate")
+        .args(["-l", &new_bytes.to_string(), path.to_string_lossy().as_ref()])
+        .status()
+        .context("run fallocate for resize")?;
+    if !status.success() {
+        bail!("fallocate failed while resizing {}", path.display());
+    }
+
+    // e2fsck required before resize2fs on an offline filesystem.
+    let _ = Command::new("e2fsck")
+        .args(["-f", "-p", path.to_string_lossy().as_ref()])
+        .status();
+
+    let status = Command::new("resize2fs")
+        .arg(path)
+        .status()
+        .context("run resize2fs")?;
+    if !status.success() {
+        bail!("resize2fs failed for {}", path.display());
+    }
+
+    Ok(())
+}
+
 pub fn remove_overlay(path: &Path) {
     let _ = std::fs::remove_file(path);
 }

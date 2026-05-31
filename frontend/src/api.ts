@@ -51,6 +51,8 @@ export interface Vm {
   image: string;
   vcpus: number;
   memory_mb: number;
+  disk_mb: number;
+  bandwidth_mbps: number;
   ip_address: string;
   exposed_port: number;
   created_at: number;
@@ -226,10 +228,12 @@ export function resizeVmResources(
   id: string,
   vcpus?: number,
   memory_mb?: number,
+  disk_mb?: number,
+  bandwidth_mbps?: number,
 ): Promise<Vm> {
   return request(`/api/vms/${id}/resources`, {
     method: "POST",
-    body: JSON.stringify({ vcpus, memory_mb }),
+    body: JSON.stringify({ vcpus, memory_mb, disk_mb, bandwidth_mbps }),
   });
 }
 
@@ -372,6 +376,24 @@ export function buildImage(req: BuildImageRequest): Promise<AdminImage> {
 
 export function deleteAdminImage(id: string): Promise<void> {
   return request(`/api/admin/images/${id}`, { method: "DELETE" });
+}
+
+// ── metrics ───────────────────────────────────────────────────────────────────
+
+export interface MetricSample {
+  vm_id: string;
+  timestamp: number;
+  cpu_percent: number;
+  memory_bytes: number;
+  memory_limit_bytes: number;
+  disk_read_bytes: number;
+  disk_write_bytes: number;
+  net_rx_bytes: number;
+  net_tx_bytes: number;
+}
+
+export function getVmMetrics(vmId: string, limit = 60): Promise<MetricSample[]> {
+  return request(`/api/vms/${vmId}/metrics?limit=${limit}`);
 }
 
 export { ApiError };

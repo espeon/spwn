@@ -19,9 +19,14 @@ func rootCmd() *cobra.Command {
 		snapshotCmd(),
 		sshCmd(),
 		execCmd(),
+		cpCmd(),
 		tunnelCmd(),
 		keysCmd(),
 		configCmd(),
+		initCmd(),
+		upCmd(),
+		downCmd(),
+		shellPromptCmd(),
 		loreCmd(),
 	)
 

@@ -20,6 +20,10 @@ service HostAgent {
 
   // bidirectional SSH console relay; first ConsoleInput frame carries vm_id
   rpc StreamConsole(stream ConsoleInput) returns (stream ConsoleOutput);
+
+  // Returns recent metric samples from the in-memory ring buffer.
+  // If vm_id is empty, returns the latest sample for every running VM.
+  rpc GetVmMetrics(GetVmMetricsRequest) returns (VmMetricsResponse);
 }
 
 // Implemented by control-plane; called by host-agent for registration
@@ -162,3 +166,26 @@ message HeartbeatRequest {
   uint32          mem_used_mb    = 4;
 }
 message HeartbeatResponse {}
+
+// ── Metrics ───────────────────────────────────────────────────────────────────
+
+message GetVmMetricsRequest {
+  string vm_id = 1;  // empty = latest sample for all running VMs
+  uint32 limit = 2;  // max samples per VM (0 = all stored, up to 300)
+}
+
+message VmMetricsSample {
+  string vm_id              = 1;
+  int64  timestamp          = 2;  // unix seconds
+  double cpu_percent        = 3;
+  uint64 memory_bytes       = 4;
+  uint64 memory_limit_bytes = 5;
+  uint64 disk_read_bytes    = 6;
+  uint64 disk_write_bytes   = 7;
+  uint64 net_rx_bytes       = 8;
+  uint64 net_tx_bytes       = 9;
+}
+
+message VmMetricsResponse {
+  repeated VmMetricsSample samples = 1;
+}

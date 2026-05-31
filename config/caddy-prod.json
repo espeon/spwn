@@ -40,6 +40,14 @@
               }]
             },
             {
+              "@id": "route-grafana",
+              "match": [{"host": ["grafana.{env.DOMAIN}"]}],
+              "handle": [{
+                "handler": "reverse_proxy",
+                "upstreams": [{"dial": "grafana:3000"}]
+              }]
+            },
+            {
               "@id": "vm-routes-container",
               "handle": [{
                 "handler": "subroute",
