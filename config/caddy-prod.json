@@ -1,85 +1,104 @@
 {
-  "admin": {
-    "listen": "caddy:2019"
-  },
-  "apps": {
-    "tls": {
-      "certificates": {
-        "automate": ["{env.DOMAIN}", "*.{env.DOMAIN}", "{env.API_DOMAIN}"]
-      },
-      "automation": {
-        "on_demand": {
-          "ask": "http://control-plane:3019/internal/caddy/ask"
-        },
-        "policies": [
-          {
-            "subjects": ["{env.DOMAIN}", "*.{env.DOMAIN}", "{env.API_DOMAIN}"],
-            "issuers": [
-              {
-                "module": "acme",
-                "email": "{env.ACME_EMAIL}",
-                "challenges": {
-                  "dns": {
-                    "provider": {
-                      "name": "cloudflare",
-                      "api_token": "{env.CF_API_TOKEN}"
-                    }
-                  }
-                }
-              }
-            ]
-          },
-          {
-            "issuers": [
-              {
-                "module": "acme",
-                "email": "{env.ACME_EMAIL}",
-                "challenges": {
-                  "dns": {
-                    "provider": {
-                      "name": "cloudflare",
-                      "api_token": "{env.CF_API_TOKEN}"
-                    }
-                  }
-                }
-              }
-            ],
-            "on_demand": true
-          }
-        ]
-      }
+    "admin": {
+        "listen": "caddy:2019"
     },
-    "http": {
-      "servers": {
-        "main": {
-          "listen": [":80", ":443"],
-          "routes": [
-            {
-              "@id": "route-api",
-              "match": [{"host": ["{env.API_DOMAIN}"]}],
-              "handle": [{
-                "handler": "reverse_proxy",
-                "upstreams": [{"dial": "control-plane:3019"}]
-              }]
+    "apps": {
+        "tls": {
+            "certificates": {
+                "automate": [
+                    "{env.DOMAIN}",
+                    "*.{env.DOMAIN}",
+                    "{env.API_DOMAIN}"
+                ]
             },
-            {
-              "@id": "route-grafana",
-              "match": [{"host": ["grafana.{env.DOMAIN}"]}],
-              "handle": [{
-                "handler": "reverse_proxy",
-                "upstreams": [{"dial": "grafana:3000"}]
-              }]
-            },
-            {
-              "@id": "vm-routes-container",
-              "handle": [{
-                "handler": "subroute",
-                "routes": []
-              }]
+            "automation": {
+                "on_demand": {
+                    "permission": {
+                        "module": "http",
+                        "endpoint": "http://control-plane:3019/internal/caddy/ask"
+                    }
+                },
+                "policies": [
+                    {
+                        "subjects": [
+                            "{env.DOMAIN}",
+                            "*.{env.DOMAIN}",
+                            "{env.API_DOMAIN}"
+                        ],
+                        "issuers": [
+                            {
+                                "module": "acme",
+                                "email": "{env.ACME_EMAIL}",
+                                "challenges": {
+                                    "dns": {
+                                        "provider": {
+                                            "name": "cloudflare",
+                                            "api_token": "{env.CF_API_TOKEN}"
+                                        }
+                                    }
+                                }
+                            }
+                        ]
+                    },
+                    {
+                        "issuers": [
+                            {
+                                "module": "acme",
+                                "email": "{env.ACME_EMAIL}",
+                                "challenges": {
+                                    "dns": {
+                                        "provider": {
+                                            "name": "cloudflare",
+                                            "api_token": "{env.CF_API_TOKEN}"
+                                        }
+                                    }
+                                }
+                            }
+                        ],
+                        "on_demand": true
+                    }
+                ]
             }
-          ]
+        },
+        "http": {
+            "servers": {
+                "main": {
+                    "listen": [":80", ":443"],
+                    "routes": [
+                        {
+                            "@id": "route-api",
+                            "match": [{ "host": ["{env.API_DOMAIN}"] }],
+                            "handle": [
+                                {
+                                    "handler": "reverse_proxy",
+                                    "upstreams": [
+                                        { "dial": "control-plane:3019" }
+                                    ]
+                                }
+                            ]
+                        },
+                        {
+                            "@id": "route-grafana",
+                            "match": [{ "host": ["grafana.{env.DOMAIN}"] }],
+                            "handle": [
+                                {
+                                    "handler": "reverse_proxy",
+                                    "upstreams": [{ "dial": "grafana:3000" }]
+                                }
+                            ]
+                        },
+                        {
+                            "@id": "vm-routes-container",
+                            "handle": [
+                                {
+                                    "handler": "subroute",
+                                    "routes": []
+                                }
+                            ]
+                        }
+                    ]
+                }
+            }
         }
-      }
     }
-  }
 }
