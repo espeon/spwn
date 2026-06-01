@@ -22,7 +22,7 @@
                 }
               }
             ],
-            "on_demand": {}
+            "on_demand": true
           }
         ]
       }
