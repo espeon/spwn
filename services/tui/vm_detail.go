@@ -74,6 +74,17 @@ func (a *App) updateVMDetail(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				a.current = viewConfirm
 			}
+		case key.Matches(msg, keys.Share):
+			if a.detailVM != nil {
+				vm := *a.detailVM
+				return a, func() tea.Msg {
+					_, err := a.client.SetVmPublic(vm.ID, !vm.IsPublic)
+					if err != nil {
+						return actionDoneMsg{err}
+					}
+					return actionDoneMsg{}
+				}
+			}
 		case key.Matches(msg, keys.Help):
 			a.showHelp = true
 		}
@@ -93,12 +104,19 @@ func (a *App) vmDetailView() string {
 	fmt.Fprintln(&b, styleDim.Render(strings.Repeat("─", a.width)))
 	b.WriteByte('\n')
 
-	fmt.Fprintf(&b, "  %s %s   %dvc   %dMB   %s\n\n",
+	fmt.Fprintf(&b, "  %s %s   %dvc   %dMB   %s\n",
 		statusDot(vm.Status),
 		statusColor(vm.Status).Render(vm.Status),
 		vm.Vcpus, vm.MemoryMb,
 		styleDim.Render(vm.Subdomain),
 	)
+
+	accessStatus := styleDim.Render("private")
+	if vm.IsPublic {
+		accessStatus = styleSuccess.Render("public")
+	}
+	fmt.Fprintf(&b, "  access: %s\n", accessStatus)
+	b.WriteByte('\n')
 
 	// Two-column: events + snapshots
 	eventsCol := a.eventsColumn()

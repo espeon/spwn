@@ -87,6 +87,8 @@ fn vm_row(account_id: &str) -> db::VmRow {
         placement_strategy: "best_fit".into(),
         required_labels: None,
         region: None,
+        is_public: false,
+        share_token: None,
     }
 }
 
@@ -170,7 +172,27 @@ impl VmOps for MockVmOps {
         let vm = vms.iter_mut().find(|v| v.id == vm_id).ok_or_else(|| anyhow::anyhow!("not found"))?;
         if let Some(name) = patch.name { vm.name = name; }
         if let Some(port) = patch.exposed_port { vm.exposed_port = port; }
+        if let Some(is_public) = patch.is_public { vm.is_public = is_public; }
         Ok(vm.clone())
+    }
+
+    async fn generate_share_token(&self, vm_id: &str, _account_id: &str) -> anyhow::Result<String> {
+        let token = uuid::Uuid::new_v4().to_string();
+        let mut vms = self.vms.lock().unwrap();
+        let vm = vms.iter_mut().find(|v| v.id == vm_id).ok_or_else(|| anyhow::anyhow!("not found"))?;
+        vm.share_token = Some(token.clone());
+        Ok(token)
+    }
+
+    async fn revoke_share_token(&self, vm_id: &str, _account_id: &str) -> anyhow::Result<()> {
+        let mut vms = self.vms.lock().unwrap();
+        let vm = vms.iter_mut().find(|v| v.id == vm_id).ok_or_else(|| anyhow::anyhow!("not found"))?;
+        vm.share_token = None;
+        Ok(())
+    }
+
+    async fn generate_vm_auth_token(&self, _vm_id: &str, _account_id: &str) -> anyhow::Result<String> {
+        Ok(uuid::Uuid::new_v4().to_string())
     }
 }
 
@@ -319,6 +341,9 @@ async fn resize_running_vm_with_restart_error_returns_422() {
             Err(api::VmOpsError::RestartRequired("restart required to apply CPU changes".into()).into())
         }
         async fn update_vm(&self, _: &str, _: &str, _: VmPatch) -> anyhow::Result<db::VmRow> { unimplemented!() }
+        async fn generate_share_token(&self, _: &str, _: &str) -> anyhow::Result<String> { unimplemented!() }
+        async fn revoke_share_token(&self, _: &str, _: &str) -> anyhow::Result<()> { unimplemented!() }
+        async fn generate_vm_auth_token(&self, _: &str, _: &str) -> anyhow::Result<String> { unimplemented!() }
     }
 
     let mut vm = vm_row(&account_id);

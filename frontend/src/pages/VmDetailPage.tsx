@@ -16,6 +16,9 @@ import {
   restoreSnapshot,
   listVmEvents,
   getVmMetrics,
+  setVmPublic,
+  generateShareToken,
+  revokeShareToken,
   ApiError,
   type VmEvent,
 } from "@/api";
@@ -157,6 +160,33 @@ export function VmDetailPage() {
       trackVmToast(vmId, toastId, "running", "vm restored", "restore failed");
     },
     onError: (err) => toast.error(`failed to restore: ${err.message}`),
+  });
+
+  const togglePublicMutation = useMutation({
+    mutationFn: () => setVmPublic(vmId, !vm?.is_public),
+    onSuccess: (updated) => {
+      invalidate();
+      toast.success(updated.is_public ? "vm is now public" : "vm is now private");
+    },
+    onError: (err) => toast.error(`failed to toggle: ${err.message}`),
+  });
+
+  const generateTokenMutation = useMutation({
+    mutationFn: () => generateShareToken(vmId),
+    onSuccess: () => {
+      invalidate();
+      toast.success("share link generated");
+    },
+    onError: (err) => toast.error(`failed to generate token: ${err.message}`),
+  });
+
+  const revokeTokenMutation = useMutation({
+    mutationFn: () => revokeShareToken(vmId),
+    onSuccess: () => {
+      invalidate();
+      toast.success("share link revoked");
+    },
+    onError: (err) => toast.error(`failed to revoke token: ${err.message}`),
   });
 
   if (isLoading)
@@ -501,6 +531,72 @@ export function VmDetailPage() {
         >
           resize
         </Button>
+      </div>
+
+      <div className="mt-4 rounded-md border p-4">
+        <h3 className="text-sm font-medium mb-2">access control</h3>
+        <p className="text-xs text-muted-foreground mb-3">
+          {vm.is_public
+            ? "this vm is public — anyone can access the web output"
+            : "this vm is private — only you can access the web output"}
+        </p>
+        <div className="flex items-center gap-3">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => togglePublicMutation.mutate()}
+            disabled={togglePublicMutation.isPending}
+          >
+            {togglePublicMutation.isPending
+              ? "updating..."
+              : vm.is_public
+                ? "make private"
+                : "make public"}
+          </Button>
+          {!vm.is_public && (
+            <>
+              {vm.share_token ? (
+                <div className="flex items-center gap-2">
+                  <span className="text-xs font-mono text-muted-foreground">
+                    {window.location.origin}/?token={vm.share_token}
+                  </span>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => {
+                      navigator.clipboard.writeText(
+                        `${window.location.origin}/?token=${vm.share_token}`,
+                      );
+                      toast.success("link copied");
+                    }}
+                  >
+                    copy
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => revokeTokenMutation.mutate()}
+                    disabled={revokeTokenMutation.isPending}
+                    className="text-destructive hover:text-destructive"
+                  >
+                    revoke
+                  </Button>
+                </div>
+              ) : (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => generateTokenMutation.mutate()}
+                  disabled={generateTokenMutation.isPending}
+                >
+                  {generateTokenMutation.isPending
+                    ? "generating..."
+                    : "generate share link"}
+                </Button>
+              )}
+            </>
+          )}
+        </div>
       </div>
 
       <EventLog vmId={vmId} status={vm.status} />

@@ -42,6 +42,8 @@ pub struct VmRow {
     pub placement_strategy: String,
     pub required_labels: Option<serde_json::Value>,
     pub region: Option<String>,
+    pub is_public: bool,
+    pub share_token: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -205,7 +207,7 @@ pub async fn get_vm(pool: &PgPool, id: &str) -> Result<Option<VmRow>> {
         "SELECT id, account_id, name, status, subdomain, vcpus, memory_mb, disk_mb, bandwidth_mbps,
          kernel_path, rootfs_path, overlay_path, real_init, ip_address, exposed_port, tap_device, pid,
          socket_path, host_id, base_image, cloned_from, disk_usage_mb, created_at, last_started_at,
-         placement_strategy, required_labels, region FROM vms WHERE id = $1",
+         placement_strategy, required_labels, region, is_public, share_token FROM vms WHERE id = $1",
     )
     .bind(id)
     .fetch_optional(pool)
@@ -218,7 +220,7 @@ pub async fn get_vm_by_subdomain(pool: &PgPool, subdomain: &str) -> Result<Optio
         "SELECT id, account_id, name, status, subdomain, vcpus, memory_mb, disk_mb, bandwidth_mbps,
          kernel_path, rootfs_path, overlay_path, real_init, ip_address, exposed_port, tap_device, pid,
          socket_path, host_id, base_image, cloned_from, disk_usage_mb, created_at, last_started_at,
-         placement_strategy, required_labels, region FROM vms WHERE subdomain = $1",
+         placement_strategy, required_labels, region, is_public, share_token FROM vms WHERE subdomain = $1",
     )
     .bind(subdomain)
     .fetch_optional(pool)
@@ -231,7 +233,7 @@ pub async fn list_vms(pool: &PgPool, account_id: &str) -> Result<Vec<VmRow>> {
         "SELECT id, account_id, name, status, subdomain, vcpus, memory_mb, disk_mb, bandwidth_mbps,
          kernel_path, rootfs_path, overlay_path, real_init, ip_address, exposed_port, tap_device, pid,
          socket_path, host_id, base_image, cloned_from, disk_usage_mb, created_at, last_started_at,
-         placement_strategy, required_labels, region FROM vms WHERE account_id = $1
+         placement_strategy, required_labels, region, is_public, share_token FROM vms WHERE account_id = $1
          ORDER BY created_at DESC",
     )
     .bind(account_id)
@@ -274,7 +276,7 @@ pub async fn get_vms_by_status(pool: &PgPool, status: &str) -> Result<Vec<VmRow>
         "SELECT id, account_id, name, status, subdomain, vcpus, memory_mb, disk_mb, bandwidth_mbps,
          kernel_path, rootfs_path, overlay_path, real_init, ip_address, exposed_port, tap_device, pid,
          socket_path, host_id, base_image, cloned_from, disk_usage_mb, created_at, last_started_at,
-         placement_strategy, required_labels, region FROM vms WHERE status = $1",
+         placement_strategy, required_labels, region, is_public, share_token FROM vms WHERE status = $1",
     )
     .bind(status)
     .fetch_all(pool)
@@ -287,7 +289,7 @@ pub async fn get_all_vms(pool: &PgPool) -> Result<Vec<VmRow>> {
         "SELECT id, account_id, name, status, subdomain, vcpus, memory_mb, disk_mb, bandwidth_mbps,
          kernel_path, rootfs_path, overlay_path, real_init, ip_address, exposed_port, tap_device, pid,
          socket_path, host_id, base_image, cloned_from, disk_usage_mb, created_at, last_started_at,
-         placement_strategy, required_labels, region FROM vms",
+         placement_strategy, required_labels, region, is_public, share_token FROM vms",
     )
     .fetch_all(pool)
     .await?;
@@ -299,7 +301,7 @@ pub async fn get_vms_by_host(pool: &PgPool, host_id: &str) -> Result<Vec<VmRow>>
         "SELECT id, account_id, name, status, subdomain, vcpus, memory_mb, disk_mb, bandwidth_mbps,
          kernel_path, rootfs_path, overlay_path, real_init, ip_address, exposed_port, tap_device, pid,
          socket_path, host_id, base_image, cloned_from, disk_usage_mb, created_at, last_started_at,
-         placement_strategy, required_labels, region FROM vms WHERE host_id = $1",
+         placement_strategy, required_labels, region, is_public, share_token FROM vms WHERE host_id = $1",
     )
     .bind(host_id)
     .fetch_all(pool)
@@ -312,7 +314,7 @@ pub async fn get_vms_without_host(pool: &PgPool) -> Result<Vec<VmRow>> {
         "SELECT id, account_id, name, status, subdomain, vcpus, memory_mb, disk_mb, bandwidth_mbps,
          kernel_path, rootfs_path, overlay_path, real_init, ip_address, exposed_port, tap_device, pid,
          socket_path, host_id, base_image, cloned_from, disk_usage_mb, created_at, last_started_at,
-         placement_strategy, required_labels, region FROM vms WHERE host_id IS NULL",
+         placement_strategy, required_labels, region, is_public, share_token FROM vms WHERE host_id IS NULL",
     )
     .fetch_all(pool)
     .await?;
@@ -565,6 +567,8 @@ fn row_to_vm(r: sqlx::postgres::PgRow) -> VmRow {
         placement_strategy: r.get("placement_strategy"),
         required_labels: r.get("required_labels"),
         region: r.get("region"),
+        is_public: r.get("is_public"),
+        share_token: r.get("share_token"),
     }
 }
 
@@ -575,6 +579,86 @@ pub async fn set_vm_region(pool: &PgPool, vm_id: &str, region: &str) -> Result<(
         .execute(pool)
         .await?;
     Ok(())
+}
+
+pub async fn set_vm_public(pool: &PgPool, vm_id: &str, is_public: bool) -> Result<()> {
+    sqlx::query("UPDATE vms SET is_public = $1 WHERE id = $2")
+        .bind(is_public)
+        .bind(vm_id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+pub async fn set_vm_share_token(pool: &PgPool, vm_id: &str, token: Option<&str>) -> Result<()> {
+    sqlx::query("UPDATE vms SET share_token = $1 WHERE id = $2")
+        .bind(token)
+        .bind(vm_id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+pub struct VmAuthToken {
+    pub id: String,
+    pub account_id: String,
+    pub vm_id: String,
+    pub expires_at: i64,
+}
+
+pub async fn create_vm_auth_token(
+    pool: &PgPool,
+    account_id: &str,
+    vm_id: &str,
+    ttl_secs: i64,
+) -> Result<VmAuthToken> {
+    let now = unix_now();
+    let token = VmAuthToken {
+        id: uuid::Uuid::new_v4().to_string(),
+        account_id: account_id.to_string(),
+        vm_id: vm_id.to_string(),
+        expires_at: now + ttl_secs,
+    };
+    sqlx::query(
+        "INSERT INTO vm_auth_tokens (id, account_id, vm_id, expires_at, created_at)
+         VALUES ($1, $2, $3, $4, $5)",
+    )
+    .bind(&token.id)
+    .bind(&token.account_id)
+    .bind(&token.vm_id)
+    .bind(token.expires_at)
+    .bind(now)
+    .execute(pool)
+    .await?;
+    Ok(token)
+}
+
+pub async fn consume_vm_auth_token(pool: &PgPool, token_id: &str) -> Result<Option<VmAuthToken>> {
+    let now = unix_now();
+    let row = sqlx::query(
+        "DELETE FROM vm_auth_tokens
+         WHERE id = $1 AND expires_at > $2
+         RETURNING id, account_id, vm_id, expires_at",
+    )
+    .bind(token_id)
+    .bind(now)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row.map(|r| VmAuthToken {
+        id: r.get("id"),
+        account_id: r.get("account_id"),
+        vm_id: r.get("vm_id"),
+        expires_at: r.get("expires_at"),
+    }))
+}
+
+pub async fn prune_expired_vm_auth_tokens(pool: &PgPool) -> Result<u64> {
+    let now = unix_now();
+    let result = sqlx::query("DELETE FROM vm_auth_tokens WHERE expires_at < $1")
+        .bind(now)
+        .execute(pool)
+        .await?;
+    Ok(result.rows_affected())
 }
 
 pub async fn list_regions(pool: &PgPool) -> Result<Vec<RegionInfo>> {
@@ -1324,7 +1408,7 @@ pub async fn get_vm_by_name(pool: &PgPool, account_id: &str, name: &str) -> Resu
         "SELECT id, account_id, name, status, subdomain, vcpus, memory_mb, disk_mb, bandwidth_mbps,
          kernel_path, rootfs_path, overlay_path, real_init, ip_address, exposed_port, tap_device, pid,
          socket_path, host_id, base_image, cloned_from, disk_usage_mb, created_at, last_started_at,
-         placement_strategy, required_labels, region FROM vms WHERE account_id = $1 AND name = $2",
+         placement_strategy, required_labels, region, is_public, share_token FROM vms WHERE account_id = $1 AND name = $2",
     )
     .bind(account_id)
     .bind(name)

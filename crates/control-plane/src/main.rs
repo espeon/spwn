@@ -156,6 +156,7 @@ async fn main() -> anyhow::Result<()> {
         invite_code,
         session_ttl_secs,
         public_url.clone(),
+        base_domain_for_caddy.clone(),
         gateway_secret,
         ssh_gateway_addr,
         secure_cookies,

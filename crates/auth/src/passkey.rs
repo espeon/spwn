@@ -574,6 +574,7 @@ async fn create_session(
         .same_site(if state.secure_cookies { SameSite::None } else { SameSite::Lax })
         .secure(state.secure_cookies)
         .path("/")
+        .domain(format!(".{}", state.base_domain))
         .build();
 
     Ok(jar.add(cookie))

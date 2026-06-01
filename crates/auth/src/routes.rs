@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 use webauthn_rs::Webauthn;
 
-use crate::gateway::{gateway_auth_password, gateway_auth_pubkey, gateway_create_session, gateway_lookup_vm};
+use crate::gateway::{gateway_auth_password, gateway_auth_pubkey, gateway_create_session, gateway_lookup_vm, caddy_auth};
 use crate::passkey;
 use crate::{password, session::AccountId};
 
@@ -27,6 +27,7 @@ pub struct AuthState {
     pub invite_code: String,
     pub session_ttl_secs: i64,
     pub public_url: String,
+    pub base_domain: String,
     pub gateway_secret: Option<String>,
     pub ssh_gateway_addr: String,
     pub webauthn: Arc<Webauthn>,
@@ -39,6 +40,7 @@ impl AuthState {
         invite_code: String,
         session_ttl_secs: i64,
         public_url: String,
+        base_domain: String,
         gateway_secret: Option<String>,
         ssh_gateway_addr: String,
         secure_cookies: bool,
@@ -58,6 +60,7 @@ impl AuthState {
             invite_code,
             session_ttl_secs,
             public_url,
+            base_domain,
             gateway_secret,
             ssh_gateway_addr,
             webauthn,
@@ -182,6 +185,7 @@ pub fn auth_router(state: AuthState) -> Router {
         .route("/internal/gateway/auth/pubkey", post(gateway_auth_pubkey))
         .route("/internal/gateway/session", post(gateway_create_session))
         .route("/internal/gateway/vm", get(gateway_lookup_vm))
+        .route("/internal/caddy/auth", get(caddy_auth))
         .with_state(state)
 }
 
@@ -480,6 +484,7 @@ async fn login(
         .same_site(if state.secure_cookies { SameSite::None } else { SameSite::Lax })
         .secure(state.secure_cookies)
         .path("/")
+        .domain(format!(".{}", state.base_domain))
         .build();
 
     (jar.add(cookie), StatusCode::OK).into_response()

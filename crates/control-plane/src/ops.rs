@@ -336,9 +336,41 @@ impl api::VmOps for ControlPlaneOps {
             }
         }
 
+        if let Some(is_public) = patch.is_public {
+            db::set_vm_public(&self.pool, vm_id, is_public).await?;
+        }
+
         db::get_vm(&self.pool, vm_id)
             .await?
             .ok_or_else(|| anyhow!("vm {vm_id} not found after update"))
+    }
+
+    async fn generate_share_token(
+        &self,
+        vm_id: &str,
+        _account_id: &str,
+    ) -> anyhow::Result<String> {
+        let token = uuid::Uuid::new_v4().to_string();
+        db::set_vm_share_token(&self.pool, vm_id, Some(&token)).await?;
+        Ok(token)
+    }
+
+    async fn revoke_share_token(
+        &self,
+        vm_id: &str,
+        _account_id: &str,
+    ) -> anyhow::Result<()> {
+        db::set_vm_share_token(&self.pool, vm_id, None).await?;
+        Ok(())
+    }
+
+    async fn generate_vm_auth_token(
+        &self,
+        vm_id: &str,
+        account_id: &str,
+    ) -> anyhow::Result<String> {
+        let token = db::create_vm_auth_token(&self.pool, account_id, vm_id, 300).await?; // 5 min TTL
+        Ok(token.id)
     }
 
     async fn resize_resources(

@@ -13,6 +13,7 @@ type keyMap struct {
 	Delete  key.Binding
 	Rename  key.Binding
 	Snap    key.Binding
+	Share   key.Binding
 	Account key.Binding
 	Help    key.Binding
 	Quit    key.Binding
@@ -29,6 +30,7 @@ var keys = keyMap{
 	Delete:  key.NewBinding(key.WithKeys("d"), key.WithHelp("d", "delete")),
 	Rename:  key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "rename")),
 	Snap:    key.NewBinding(key.WithKeys("p"), key.WithHelp("p", "snapshot")),
+	Share:   key.NewBinding(key.WithKeys("t"), key.WithHelp("t", "toggle public")),
 	Account: key.NewBinding(key.WithKeys("a"), key.WithHelp("a", "account")),
 	Help:    key.NewBinding(key.WithKeys("?"), key.WithHelp("?", "help")),
 	Quit:    key.NewBinding(key.WithKeys("q", "ctrl+c"), key.WithHelp("q", "quit")),

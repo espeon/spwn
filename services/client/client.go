@@ -150,6 +150,8 @@ type VM struct {
 	IPAddress   string `json:"ip_address"`
 	ExposedPort int    `json:"exposed_port"`
 	Image       string `json:"image"`
+	IsPublic    bool   `json:"is_public"`
+	ShareToken  string `json:"share_token,omitempty"`
 }
 
 type CreateVMRequest struct {
@@ -364,4 +366,32 @@ func (c *Client) GetServerConfig() (ServerConfig, error) {
 		return ServerConfig{}, err
 	}
 	return decode[ServerConfig](resp)
+}
+
+func (c *Client) SetVmPublic(id string, isPublic bool) (VM, error) {
+	resp, err := c.do("PATCH", "/api/vms/"+id, map[string]bool{"is_public": isPublic})
+	if err != nil {
+		return VM{}, err
+	}
+	return decode[VM](resp)
+}
+
+type ShareTokenResponse struct {
+	Token string `json:"token"`
+}
+
+func (c *Client) GenerateShareToken(id string) (ShareTokenResponse, error) {
+	resp, err := c.do("POST", "/api/vms/"+id+"/share-token", nil)
+	if err != nil {
+		return ShareTokenResponse{}, err
+	}
+	return decode[ShareTokenResponse](resp)
+}
+
+func (c *Client) RevokeShareToken(id string) error {
+	resp, err := c.do("DELETE", "/api/vms/"+id+"/share-token", nil)
+	if err != nil {
+		return err
+	}
+	return drain(resp)
 }

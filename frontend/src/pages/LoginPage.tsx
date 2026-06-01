@@ -1,7 +1,7 @@
 import { useState, type FormEvent } from "react";
-import { useNavigate, Link } from "@tanstack/react-router";
+import { useNavigate, Link, useSearch } from "@tanstack/react-router";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { login, getMe, ApiError } from "@/api";
+import { login, getMe, listVms, generateVmAuthToken, ApiError } from "@/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -14,9 +14,33 @@ import {
 } from "@/components/ui/card";
 import { IconGalaxy } from "@tabler/icons-react";
 
+function isVmDomain(url: string): boolean {
+  try {
+    const hostname = new URL(url).hostname;
+    return hostname.endsWith(".spwn.town");
+  } catch {
+    return false;
+  }
+}
+
+function getSubdomain(url: string): string | null {
+  try {
+    const hostname = new URL(url).hostname;
+    const suffix = ".spwn.town";
+    if (hostname.endsWith(suffix)) {
+      return hostname.slice(0, -suffix.length);
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
 export function LoginPage() {
   const qc = useQueryClient();
   const navigate = useNavigate();
+  const search = useSearch({ strict: false }) as Record<string, string>;
+  const redirect = search.redirect || "/vms";
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -26,8 +50,26 @@ export function LoginPage() {
       await login(email, password);
       const me = await getMe();
       qc.setQueryData(["me"], me);
+
+      // If redirecting to a VM subdomain, generate an auth token.
+      if (isVmDomain(redirect)) {
+        const subdomain = getSubdomain(redirect);
+        if (subdomain) {
+          const vms = await listVms();
+          const vm = vms.find((v) => v.subdomain === subdomain);
+          if (vm) {
+            const { token } = await generateVmAuthToken(vm.id);
+            const url = new URL(redirect);
+            url.searchParams.set("auth_token", token);
+            window.location.href = url.toString();
+            return;
+          }
+        }
+      }
+
+      // Default: navigate to the redirect URL.
+      window.location.href = redirect;
     },
-    onSuccess: () => navigate({ to: "/vms" }),
     onError: (err) => {
       if (err instanceof ApiError && err.status === 401) {
         setError("invalid email or password");

@@ -57,6 +57,8 @@ export interface Vm {
   exposed_port: number;
   created_at: number;
   region: string | null;
+  is_public: boolean;
+  share_token: string | null;
 }
 
 export interface CreateVmRequest {
@@ -246,6 +248,25 @@ export function cloneVm(
     method: "POST",
     body: JSON.stringify({ name, include_memory: includeMemory }),
   });
+}
+
+export function setVmPublic(id: string, isPublic: boolean): Promise<Vm> {
+  return request(`/api/vms/${id}`, {
+    method: "PATCH",
+    body: JSON.stringify({ is_public: isPublic }),
+  });
+}
+
+export function generateShareToken(id: string): Promise<{ token: string }> {
+  return request(`/api/vms/${id}/share-token`, { method: "POST" });
+}
+
+export function revokeShareToken(id: string): Promise<void> {
+  return request(`/api/vms/${id}/share-token`, { method: "DELETE" });
+}
+
+export function generateVmAuthToken(id: string): Promise<{ token: string }> {
+  return request(`/api/vms/${id}/auth-token`, { method: "POST" });
 }
 
 export function cliAuthorize(code: string): Promise<void> {

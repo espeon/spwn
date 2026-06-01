@@ -159,16 +159,25 @@ fn vm_route(subdomain: &str, vm_ip: &str, port: u16) -> Value {
     json!({
         "@id": format!("route-{subdomain}"),
         "match": [{"host": [subdomain]}],
-        "handle": [{
-            "handler": "reverse_proxy",
-            "upstreams": [{"dial": format!("{vm_ip}:{port}")}],
-            "flush_interval": -1,
-            "transport": {
-                "protocol": "http",
-                "read_timeout": "300s",
-                "write_timeout": "300s"
+        "handle": [
+            {
+                "handler": "forward_auth",
+                "uri": "http://control-plane:3019/internal/caddy/auth",
+                "headers": {
+                    "X-Forwarded-Host": ["{http.request.host}"]
+                }
+            },
+            {
+                "handler": "reverse_proxy",
+                "upstreams": [{"dial": format!("{vm_ip}:{port}")}],
+                "flush_interval": -1,
+                "transport": {
+                    "protocol": "http",
+                    "read_timeout": "300s",
+                    "write_timeout": "300s"
+                }
             }
-        }]
+        ]
     })
 }
 

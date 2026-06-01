@@ -29,6 +29,7 @@ fn test_app(pool: db::PgPool) -> Router {
         "testcode".into(),
         604800,
         "http://localhost:3019".into(),
+        "localhost".into(),
         None,
         "localhost:2222".into(),
         false,

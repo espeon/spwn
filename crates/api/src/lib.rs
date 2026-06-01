@@ -63,11 +63,27 @@ pub trait VmOps: Send + Sync {
         account_id: &str,
         patch: VmPatch,
     ) -> anyhow::Result<db::VmRow>;
+    async fn generate_share_token(
+        &self,
+        vm_id: &str,
+        account_id: &str,
+    ) -> anyhow::Result<String>;
+    async fn revoke_share_token(
+        &self,
+        vm_id: &str,
+        account_id: &str,
+    ) -> anyhow::Result<()>;
+    async fn generate_vm_auth_token(
+        &self,
+        vm_id: &str,
+        account_id: &str,
+    ) -> anyhow::Result<String>;
 }
 
 pub struct VmPatch {
     pub name: Option<String>,
     pub exposed_port: Option<i32>,
+    pub is_public: Option<bool>,
 }
 
 pub struct VmResourcePatch {
@@ -176,6 +192,8 @@ struct VmResponse {
     cloned_from: Option<String>,
     disk_usage_mb: i32,
     region: Option<String>,
+    is_public: bool,
+    share_token: Option<String>,
 }
 
 impl From<db::VmRow> for VmResponse {
@@ -201,6 +219,8 @@ impl From<db::VmRow> for VmResponse {
             cloned_from: v.cloned_from,
             disk_usage_mb: v.disk_usage_mb,
             region: v.region,
+            is_public: v.is_public,
+            share_token: v.share_token,
         }
     }
 }
@@ -279,6 +299,8 @@ pub fn router(ops: Arc<dyn VmOps>) -> Router {
         .route("/api/vms/{id}/clone", post(clone_vm))
         .route("/api/vms/{id}/resources", post(resize_resources))
         .route("/api/vms/{id}/restore/{snap_id}", post(restore_snapshot))
+        .route("/api/vms/{id}/share-token", post(generate_share_token).delete(revoke_share_token))
+        .route("/api/vms/{id}/auth-token", post(generate_vm_auth_token))
         .route("/api/vms/{id}/events", get(list_vm_events))
         .route("/api/account/username", post(change_username))
         .route("/api/account/audit", get(list_audit))
@@ -645,6 +667,7 @@ async fn patch_vm(
     let p = VmPatch {
         name: body.name,
         exposed_port: body.exposed_port,
+        is_public: None,
     };
     match ops.update_vm(&id, &account_id.0, p).await {
         Ok(updated) => Json(VmResponse::from(updated)).into_response(),
@@ -680,5 +703,38 @@ async fn resize_resources(
             }
             _ => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
         },
+    }
+}
+
+async fn generate_share_token(
+    State(ops): State<AppState>,
+    account_id: AccountId,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    match ops.generate_share_token(&id, &account_id.0).await {
+        Ok(token) => Json(serde_json::json!({ "token": token })).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+async fn revoke_share_token(
+    State(ops): State<AppState>,
+    account_id: AccountId,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    match ops.revoke_share_token(&id, &account_id.0).await {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+async fn generate_vm_auth_token(
+    State(ops): State<AppState>,
+    account_id: AccountId,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    match ops.generate_vm_auth_token(&id, &account_id.0).await {
+        Ok(token) => Json(serde_json::json!({ "token": token })).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     }
 }

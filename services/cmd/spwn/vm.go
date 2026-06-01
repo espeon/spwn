@@ -29,6 +29,7 @@ func vmCmd() *cobra.Command {
 		vmRenameCmd(),
 		vmCloneCmd(),
 		vmHistoryCmd(),
+		vmShareCmd(),
 	)
 	return cmd
 }
@@ -396,5 +397,98 @@ func vmCloneCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().BoolVar(&includeMemory, "with-memory", false, "include memory state (source must be running; clone starts paused)")
+	return cmd
+}
+
+func vmShareCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "share <vm>",
+		Short: "manage VM access control",
+	}
+	var public bool
+	var generate bool
+	var revoke bool
+	cmd.Flags().BoolVar(&public, "public", false, "make VM public")
+	cmd.Flags().BoolVar(&public, "private", false, "make VM private")
+	cmd.Flags().BoolVar(&generate, "generate", false, "generate a share link")
+	cmd.Flags().BoolVar(&revoke, "revoke", false, "revoke share link")
+	cmd.RunE = func(cmd *cobra.Command, args []string) error {
+		if len(args) < 1 {
+			return fmt.Errorf("usage: spwn vm share <vm>")
+		}
+		c, err := client.NewAuthedClient()
+		if err != nil {
+			return err
+		}
+		vm, err := resolveVM(c, args[0])
+		if err != nil {
+			return err
+		}
+		jsonFlag, _ := cmd.Root().PersistentFlags().GetBool("json")
+
+		if cmd.Flags().Changed("public") {
+			updated, err := c.SetVmPublic(vm.ID, true)
+			if err != nil {
+				return err
+			}
+			if jsonFlag {
+				return json.NewEncoder(os.Stdout).Encode(updated)
+			}
+			printOK(fmt.Sprintf("%s is now public", styleVal.Render(updated.Name)))
+			printHint(fmt.Sprintf("access at: https://%s", updated.Subdomain+".spwn.town"))
+			return nil
+		}
+		if cmd.Flags().Changed("private") {
+			updated, err := c.SetVmPublic(vm.ID, false)
+			if err != nil {
+				return err
+			}
+			if jsonFlag {
+				return json.NewEncoder(os.Stdout).Encode(updated)
+			}
+			printOK(fmt.Sprintf("%s is now private", styleVal.Render(updated.Name)))
+			return nil
+		}
+		if generate {
+			resp, err := c.GenerateShareToken(vm.ID)
+			if err != nil {
+				return err
+			}
+			if jsonFlag {
+				return json.NewEncoder(os.Stdout).Encode(resp)
+			}
+			printOK("share link generated")
+			printHint(fmt.Sprintf("https://%s/?token=%s", vm.Subdomain+".spwn.town", resp.Token))
+			return nil
+		}
+		if revoke {
+			err := c.RevokeShareToken(vm.ID)
+			if err != nil {
+				return err
+			}
+			if jsonFlag {
+				return json.NewEncoder(os.Stdout).Encode(map[string]string{"status": "revoked"})
+			}
+			printOK("share link revoked")
+			return nil
+		}
+
+		// Default: show current access status
+		if jsonFlag {
+			return json.NewEncoder(os.Stdout).Encode(map[string]any{
+				"is_public":   vm.IsPublic,
+				"share_token": vm.ShareToken,
+			})
+		}
+		if vm.IsPublic {
+			printOK(fmt.Sprintf("%s is public", styleVal.Render(vm.Name)))
+		} else {
+			printOK(fmt.Sprintf("%s is private", styleVal.Render(vm.Name)))
+		}
+		if vm.ShareToken != "" {
+			printHint(fmt.Sprintf("share link: https://%s/?token=%s", vm.Subdomain+".spwn.town", vm.ShareToken))
+		}
+		return nil
+	}
 	return cmd
 }
