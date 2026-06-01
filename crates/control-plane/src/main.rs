@@ -5,7 +5,7 @@ use crate::caddy_router::CaddyRouter;
 use agent_proto::agent::control_plane_server::ControlPlaneServer;
 use anyhow::Context;
 use axum::response::sse::{Event, KeepAlive, Sse};
-use axum::{extract::MatchedPath, middleware, response::Html, Extension, routing::get};
+use axum::{extract::MatchedPath, http::StatusCode, middleware, response::Html, Extension, routing::get};
 use router_sync::CaddyClient;
 use tokio_stream::{StreamExt, wrappers::BroadcastStream};
 use tower_http::services::{ServeDir, ServeFile};
@@ -143,6 +143,7 @@ async fn main() -> anyhow::Result<()> {
         running_cache: std::sync::Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new())),
     };
 
+    let base_domain_for_caddy = base_domain.clone();
     let ops = Arc::new(ops::ControlPlaneOps {
         pool: pool.clone(),
         caddy: caddy.clone(),
@@ -201,6 +202,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/events", get(vm_events_sse))
         .route("/metrics", get(metrics::prometheus_handler))
         .route("/api/vms/{id}/metrics", get(metrics::vm_metrics_handler))
+        .route("/internal/caddy/ask", get(caddy_ask))
         .layer(middleware::from_fn_with_state(
             (),
             |axum::extract::State(()): axum::extract::State<()>,
@@ -235,6 +237,7 @@ async fn main() -> anyhow::Result<()> {
         )
         .layer(cors)
         .layer(Extension(pool.clone()))
+        .layer(Extension(base_domain_for_caddy))
         .layer(Extension(event_tx));
 
     let http_listener = tokio::net::TcpListener::bind(&listen_addr).await?;
@@ -287,6 +290,27 @@ async fn vm_events_sse(
         Err(_) => None,
     });
     Sse::new(stream).keep_alive(KeepAlive::default())
+}
+
+/// GET /internal/caddy/ask?domain=<fqdn> — Caddy on-demand TLS verification.
+/// Returns 200 if the subdomain belongs to a VM, 404 otherwise.
+async fn caddy_ask(
+    axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
+    Extension(pool): Extension<db::PgPool>,
+    Extension(base_domain): Extension<String>,
+) -> StatusCode {
+    let Some(domain) = params.get("domain") else {
+        return StatusCode::BAD_REQUEST;
+    };
+    let suffix = format!(".{base_domain}");
+    let subdomain = match domain.strip_suffix(&suffix) {
+        Some(s) => s,
+        None => return StatusCode::NOT_FOUND,
+    };
+    match db::get_vm_by_subdomain(&pool, subdomain).await {
+        Ok(Some(_)) => StatusCode::OK,
+        _ => StatusCode::NOT_FOUND,
+    }
 }
 
 async fn rebuild_caddy_routes(pool: &db::PgPool, caddy: &CaddyRouter, base_domain: &str) {

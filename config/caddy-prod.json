@@ -4,10 +4,32 @@
   },
   "apps": {
     "tls": {
+      "certificates": {
+        "automate": ["{env.DOMAIN}", "*.{env.DOMAIN}", "{env.API_DOMAIN}"]
+      },
       "automation": {
+        "on_demand": {
+          "ask": "http://control-plane:3019/internal/caddy/ask"
+        },
         "policies": [
           {
             "subjects": ["{env.DOMAIN}", "*.{env.DOMAIN}", "{env.API_DOMAIN}"],
+            "issuers": [
+              {
+                "module": "acme",
+                "email": "{env.ACME_EMAIL}",
+                "challenges": {
+                  "dns": {
+                    "provider": {
+                      "name": "cloudflare",
+                      "api_token": "{env.CF_API_TOKEN}"
+                    }
+                  }
+                }
+              }
+            ]
+          },
+          {
             "issuers": [
               {
                 "module": "acme",
